@@ -188,9 +188,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(item)
         }
         if !folders.isEmpty { menu.addItem(.separator()) }
-        let open = NSMenuItem(title: "Open Folder…", action: #selector(openFolder(_:)), keyEquivalent: "")
-        open.target = self
-        menu.addItem(open)
+        let add = NSMenuItem(title: "Add Folder…", action: #selector(openFolder(_:)), keyEquivalent: "")
+        add.target = self
+        add.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
+        menu.addItem(add)
+        // Folders other than the open one can be taken off the list (nothing is deleted).
+        let others = folders.filter { $0.standardizedFileURL.path != current }
+        if !others.isEmpty {
+            let remove = NSMenuItem(title: "Remove from List", action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            for url in others {
+                let item = NSMenuItem(title: url.lastPathComponent, action: #selector(forgetFolder(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = url
+                sub.addItem(item)
+            }
+            remove.submenu = sub
+            menu.addItem(remove)
+        }
+    }
+
+    @objc func forgetFolder(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        var paths = UserDefaults.standard.stringArray(forKey: "recentFolders") ?? []
+        paths.removeAll { $0 == url.standardizedFileURL.path }
+        UserDefaults.standard.set(paths, forKey: "recentFolders")
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
