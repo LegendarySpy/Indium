@@ -134,14 +134,6 @@ final class TableRender {
         measureRows()
     }
 
-    /// The attributed text of a cell, for matching fonts in the editor.
-    func attributes(row: Int, column: Int) -> [NSAttributedString.Key: Any] {
-        let cell = cells[row][column]
-        if cell.length > 0 { return cell.attributes(at: 0, effectiveRange: nil) }
-        return TableRender.render("x", header: row == 0, alignment: column < spec.alignments.count ? spec.alignments[column] : 0,
-                                  typography: typography, size: round(typography.size * 0.9)).attributes(at: 0, effectiveRange: nil)
-    }
-
     func cellRect(row: Int, column: Int, in rect: NSRect) -> NSRect {
         let x = rect.minX + columnWidths[..<column].reduce(0, +)
         let y = rect.minY + rowHeights[..<row].reduce(0, +)
@@ -202,7 +194,9 @@ final class TableRender {
 
     // MARK: Cell text
 
-    static func render(_ text: String, header: Bool, alignment: Int, typography: Typography, size: CGFloat) -> NSAttributedString {
+    /// `revealMarkers` keeps the Markdown syntax, dimmed, for the cell being edited.
+    static func render(_ text: String, header: Bool, alignment: Int, typography: Typography, size: CGFloat,
+                       revealMarkers: Bool = false) -> NSAttributedString {
         let style = NSMutableParagraphStyle()
         style.alignment = [.natural, .left, .center, .right][min(alignment, 3)]
         style.lineBreakMode = .byWordWrapping
@@ -227,9 +221,11 @@ final class TableRender {
             case .emphasis: bits = 2
             case .strongEmphasis: bits = 3
             case .code: bits = 4
+            case .strike: bits = 8
+            case .highlight: bits = 16
             case let .math(latex, _):
-                maths.append((span.range, latex))
-                bits = 0
+                if !revealMarkers { maths.append((span.range, latex)) }
+                bits = revealMarkers ? 4 : 0
             default: bits = 0
             }
             for i in span.content.location..<NSMaxRange(span.content) where i < traits.count { traits[i] |= bits }
@@ -254,13 +250,27 @@ final class TableRender {
                 i = NSMaxRange(math.0)
                 continue
             }
-            if hidden.contains(i) { i += 1; continue }
+            if hidden.contains(i) {
+                if revealMarkers {
+                    out.append(NSAttributedString(string: ns.substring(with: NSRange(location: i, length: 1)), attributes: [
+                        .font: font(bold: false, italic: false, code: false), .foregroundColor: Palette.syntax,
+                    ]))
+                }
+                i += 1
+                continue
+            }
             let t = traits[i]
             var j = i + 1
             while j < ns.length, traits[j] == t, !hidden.contains(j), !maths.contains(where: { $0.0.location == j }) { j += 1 }
-            out.append(NSAttributedString(string: ns.substring(with: NSRange(location: i, length: j - i)), attributes: [
+            var attributes: [NSAttributedString.Key: Any] = [
                 .font: font(bold: t & 1 != 0, italic: t & 2 != 0, code: t & 4 != 0), .foregroundColor: color,
-            ]))
+            ]
+            if t & 8 != 0 {
+                attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+                attributes[.foregroundColor] = Palette.secondaryText
+            }
+            if t & 16 != 0 { attributes[.backgroundColor] = Palette.highlight }
+            out.append(NSAttributedString(string: ns.substring(with: NSRange(location: i, length: j - i)), attributes: attributes))
             i = j
         }
         out.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: out.length))

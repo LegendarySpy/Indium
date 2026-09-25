@@ -17,6 +17,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate {
     private(set) var render: TableRender
     private var fields: [[CellField]] = []
     private var focus = (row: 0, column: 0)
+    private var storageObserver: NSObjectProtocol?
     private var dragColumn: Int?
     private var dragStartX: CGFloat = 0
     private var dragStartOriginX: CGFloat = 0
@@ -92,7 +93,8 @@ final class TableEditorView: NSView, NSTextFieldDelegate {
         fields = (0..<rowCount).map { r in
             (0..<columns).map { c in
                 let field = CellField()
-                field.stringValue = text(row: r, column: c)
+                field.source = text(row: r, column: c)
+                field.style = { [weak self] text, reveal in self?.styled(text, row: r, column: c, reveal: reveal) ?? NSAttributedString(string: text) }
                 field.delegate = self
                 field.row = r
                 field.column = c
@@ -116,15 +118,28 @@ final class TableEditorView: NSView, NSTextFieldDelegate {
                     continue
                 }
                 field.isHidden = false
-                let attrs = render.attributes(row: r, column: c)
+                let attrs = styled("x", row: r, column: c, reveal: false).attributes(at: 0, effectiveRange: nil)
                 field.font = attrs[.font] as? NSFont
                 field.textColor = Palette.text
                 field.alignment = (attrs[.paragraphStyle] as? NSParagraphStyle)?.alignment ?? .natural
+                if field.currentEditor() == nil { field.showRendered() } else { field.restyleEditor() }
                 let box = render.cellRect(row: r, column: c, in: rect)
                     .insetBy(dx: TableRender.padX - 2, dy: TableRender.padY - 2)
                 field.frame = box
             }
         }
+    }
+
+    /// Cell text styled like the rendered table; `reveal` keeps the Markdown markers.
+    private func styled(_ text: String, row: Int, column: Int, reveal: Bool) -> NSAttributedString {
+        TableRender.render(text, header: row == 0, alignment: column < alignments.count ? alignments[column] : 0,
+                           typography: render.typography, size: round(render.typography.size * 0.9), revealMarkers: reveal)
+    }
+
+    /// The text view editing the focused cell, if any. Formatting commands act on it
+    /// so they never reach the note around the table.
+    var cellEditor: NSTextView? {
+        fields.joined().first { $0.currentEditor() != nil }?.currentEditor() as? NSTextView
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -158,12 +173,34 @@ final class TableEditorView: NSView, NSTextFieldDelegate {
         guard let field = obj.object as? CellField else { return }
         focus = (field.row, field.column)
         needsDisplay = true
+        // Undo in the cell changes its text without a change notification; catch it here.
+        storageObserver.map(NotificationCenter.default.removeObserver)
+        if let storage = (field.currentEditor() as? NSTextView)?.textStorage {
+            storageObserver = NotificationCenter.default.addObserver(forName: NSTextStorage.didProcessEditingNotification, object: storage, queue: nil) { [weak self, weak field] _ in
+                DispatchQueue.main.async {
+                    guard let self, let field, field.currentEditor() != nil, field.stringValue != field.source else { return }
+                    self.cellChanged(field)
+                }
+            }
+        }
     }
 
     func controlTextDidChange(_ obj: Notification) {
         guard let field = obj.object as? CellField else { return }
-        setText(field.stringValue, row: field.row, column: field.column)
+        cellChanged(field)
+    }
+
+    private func cellChanged(_ field: CellField) {
+        field.source = field.stringValue
+        setText(field.source, row: field.row, column: field.column)
+        field.restyleEditor()
         onChange?(markdown)
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        storageObserver.map(NotificationCenter.default.removeObserver)
+        storageObserver = nil
+        (obj.object as? CellField)?.showRendered()
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
@@ -358,6 +395,31 @@ final class TableEditorView: NSView, NSTextFieldDelegate {
 final class CellField: NSTextField {
     var row = 0
     var column = 0
+    /// The cell's Markdown. Shown rendered, with its markers only while being edited.
+    var source = ""
+    var style: ((String, Bool) -> NSAttributedString)?
+
+    func showRendered() {
+        attributedStringValue = style?(source, false) ?? NSAttributedString(string: source)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        stringValue = source
+        guard super.becomeFirstResponder() else { return false }
+        restyleEditor()
+        return true
+    }
+
+    /// Restyles the text being edited in place, so bold looks bold as it's typed.
+    func restyleEditor() {
+        guard let editor = currentEditor() as? NSTextView, let storage = editor.textStorage,
+              let styled = style?(editor.string, true), styled.length == storage.length else { return }
+        storage.beginEditing()
+        styled.enumerateAttributes(in: NSRange(location: 0, length: styled.length)) { attrs, range, _ in
+            storage.setAttributes(attrs, range: range)
+        }
+        storage.endEditing()
+    }
 
     convenience init() {
         self.init(frame: .zero)

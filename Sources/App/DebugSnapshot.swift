@@ -99,12 +99,44 @@ enum DebugSnapshot {
             }
             if d.bool(forKey: "IndiumTableEdit"),
                let block = target.editor.styler.blocks.first(where: { if case .table = $0.kind { return true }; return false }) {
-                target.editor.beginTableEditing(at: block.range.location, row: 2, column: 1)
+                let cell = (d.string(forKey: "IndiumTableCell") ?? "2,1").split(separator: ",").compactMap { Int($0) }
+                target.editor.beginTableEditing(at: block.range.location, row: cell.first ?? 2, column: cell.last ?? 1)
                 if d.bool(forKey: "IndiumTableAddRow") { target.editor.tableEditor?.addRow() }
                 if let side = d.string(forKey: "IndiumPlaceTable") {
                     target.editor.placeEditedTable(float: side == "full" ? nil : side == "right")
                 }
                 print("TABLE MD:\n" + ((target.editor.text as NSString).substring(with: target.editor.styler.blocks.first(where: { if case .table = $0.kind { return true }; return false })!.range)))
+            }
+            // `-IndiumFormat bold,undo,strike,done`: each command walks the responder chain from
+            // the focused view, as a menu item or ⌘-key would. `-IndiumTableCellSelect` selects in the cell.
+            if let steps = d.string(forKey: "IndiumFormat") {
+                if d.object(forKey: "IndiumTableCellSelect") != nil {
+                    target.editor.tableEditor?.cellEditor?.setSelectedRange(NSRange(location: d.integer(forKey: "IndiumTableCellSelect"),
+                                                                                    length: d.integer(forKey: "IndiumTableCellSelectLength")))
+                }
+                typealias W = DocumentWindowController
+                let actions: [String: Selector] = ["bold": #selector(W.toggleBold(_:)), "italic": #selector(W.toggleItalic(_:)),
+                    "strike": #selector(W.toggleStrikethrough(_:)), "highlight": #selector(W.toggleHighlight(_:)),
+                    "code": #selector(W.toggleInlineCode(_:)), "link": #selector(W.insertLink(_:)), "undo": Selector(("undo:"))]
+                for step in steps.split(separator: ",").map(String.init) {
+                    if let action = actions[step] {
+                        var responder = window.firstResponder
+                        while let r = responder, !r.responds(to: action) { responder = r.nextResponder }
+                        let handler: AnyObject? = responder ?? window.delegate
+                        _ = handler?.perform(action, with: nil)
+                        print("STEP \(step) handled by:", handler.map { String(describing: type(of: $0)) } ?? "nobody")
+                    } else if step == "pipe" {
+                        target.editor.tableEditor?.cellEditor?.insertText("a|b", replacementRange: target.editor.tableEditor?.cellEditor?.selectedRange() ?? NSRange())
+                    } else if step == "done" {
+                        target.editor.endTableEditing(caretAfter: true)
+                    }
+                    let editor = target.editor.tableEditor?.cellEditor
+                    print("STEP \(step) cell:", editor?.string.debugDescription ?? "-", "sel:", editor.map { NSStringFromRange($0.selectedRange()) } ?? "-")
+                }
+                DispatchQueue.main.async {
+                    target.editor.saveNow()
+                    print("NOTE:\n" + target.editor.text)
+                }
             }
             if d.bool(forKey: "IndiumSlashAccept") {
                 _ = target.editor.handleSlashKey(#selector(NSResponder.insertTab(_:)))

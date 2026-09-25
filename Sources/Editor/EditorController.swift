@@ -734,25 +734,47 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     // MARK: Formatting commands
 
+    /// Where inline formatting applies: the note, or the table cell being edited.
+    /// nil while a table is open without a cell in focus, so nothing lands outside it.
+    private var formatTarget: NSTextView? {
+        tableEditor == nil ? textView : tableEditor?.cellEditor
+    }
+
+    /// `replace`, but in whichever text `formatTarget` picked. Cell edits flow back to
+    /// the table through the cell's own change notification and undo.
+    private func replaceFormatted(_ range: NSRange, with string: String, in target: NSTextView, select: NSRange, actionName: String) {
+        guard target !== textView else {
+            replace(range, with: string, select: select, actionName: actionName)
+            return
+        }
+        guard target.shouldChangeText(in: range, replacementString: string) else { return }
+        target.replaceCharacters(in: range, with: string)
+        target.didChangeText()
+        target.undoManager?.setActionName(actionName)
+        target.setSelectedRange(select)
+    }
+
     func toggleWrap(_ marker: String, name: String) {
-        let r = textView.selectedRange()
+        guard let target = formatTarget else { NSSound.beep(); return }
+        let r = target.selectedRange()
         let m = (marker as NSString).length
-        let text = ns
+        let text = target.string as NSString
         if r.location >= m, NSMaxRange(r) + m <= text.length,
            text.substring(with: NSRange(location: r.location - m, length: m)) == marker,
            text.substring(with: NSRange(location: NSMaxRange(r), length: m)) == marker {
             let inner = text.substring(with: r)
-            replace(NSRange(location: r.location - m, length: r.length + 2 * m), with: inner,
-                    select: NSRange(location: r.location - m, length: r.length), actionName: name)
+            replaceFormatted(NSRange(location: r.location - m, length: r.length + 2 * m), with: inner, in: target,
+                             select: NSRange(location: r.location - m, length: r.length), actionName: name)
             return
         }
         let selected = text.substring(with: r)
         if r.length >= 2 * m, selected.hasPrefix(marker), selected.hasSuffix(marker) {
             let inner = (selected as NSString).substring(with: NSRange(location: m, length: r.length - 2 * m))
-            replace(r, with: inner, select: NSRange(location: r.location, length: r.length - 2 * m), actionName: name)
+            replaceFormatted(r, with: inner, in: target, select: NSRange(location: r.location, length: r.length - 2 * m), actionName: name)
             return
         }
-        replace(r, with: marker + selected + marker, select: NSRange(location: r.location + m, length: r.length), actionName: name)
+        replaceFormatted(r, with: marker + selected + marker, in: target,
+                         select: NSRange(location: r.location + m, length: r.length), actionName: name)
     }
 
     func setHeading(_ level: Int) {
@@ -774,23 +796,24 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func insertLink() {
-        let r = textView.selectedRange()
-        let selected = ns.substring(with: r)
+        guard let target = formatTarget else { NSSound.beep(); return }
+        let r = target.selectedRange()
+        let selected = (target.string as NSString).substring(with: r)
         var url = ""
         if let s = NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines),
            s.range(of: #"^https?://\S+$"#, options: .regularExpression) != nil {
             url = s
         }
         if selected.range(of: #"^https?://\S+$"#, options: .regularExpression) != nil {
-            replace(r, with: "[](\(selected))", select: NSRange(location: r.location + 1, length: 0), actionName: "Link")
+            replaceFormatted(r, with: "[](\(selected))", in: target, select: NSRange(location: r.location + 1, length: 0), actionName: "Link")
         } else if url.isEmpty {
             let insert = "[\(selected)]()"
             let caret = r.location + (insert as NSString).length - 1
-            replace(r, with: insert, select: NSRange(location: caret, length: 0), actionName: "Link")
+            replaceFormatted(r, with: insert, in: target, select: NSRange(location: caret, length: 0), actionName: "Link")
         } else {
             let insert = "[\(selected)](\(url))"
             let caret = selected.isEmpty ? r.location + 1 : r.location + (insert as NSString).length
-            replace(r, with: insert, select: NSRange(location: caret, length: 0), actionName: "Link")
+            replaceFormatted(r, with: insert, in: target, select: NSRange(location: caret, length: 0), actionName: "Link")
         }
     }
 
