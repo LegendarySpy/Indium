@@ -152,7 +152,7 @@ final class EditorTextView: NSTextView {
 
     /// Soft suggestion drawn after the caret (slash commands).
     var ghost: String? { didSet { if ghost != oldValue { needsDisplay = true } } }
-    /// A computed answer: drawn as a result (accent color on a soft pill), not a hint.
+    /// A computed answer (drawn like any other suggestion: soft gray after the caret).
     var ghostIsAnswer = false
 
     override func draw(_ dirtyRect: NSRect) {
@@ -172,19 +172,7 @@ final class EditorTextView: NSTextView {
         let font = (storage.attribute(.font, at: caret - 1, effectiveRange: nil) as? NSFont) ?? NSFont.systemFont(ofSize: 15)
         let origin = textContainerOrigin
         let point = NSPoint(x: origin.x + box.maxX + 1, y: origin.y + frag.minY + baseline - font.ascender)
-        guard ghostIsAnswer else {
-            (ghost as NSString).draw(at: point, withAttributes: [.font: font, .foregroundColor: Palette.tertiaryText])
-            return
-        }
-        let leading = ghost.prefix { $0 == " " }
-        let value = String(ghost.dropFirst(leading.count))
-        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.controlAccentColor]
-        let start = NSPoint(x: point.x + (String(leading) as NSString).size(withAttributes: attrs).width, y: point.y)
-        let size = (value as NSString).size(withAttributes: attrs)
-        let pill = NSRect(x: start.x - 4, y: start.y - 1, width: size.width + 8, height: size.height + 2)
-        NSColor.controlAccentColor.withAlphaComponent(0.12).setFill()
-        NSBezierPath(roundedRect: pill, xRadius: 5, yRadius: 5).fill()
-        (value as NSString).draw(at: start, withAttributes: attrs)
+        (ghost as NSString).draw(at: point, withAttributes: [.font: font, .foregroundColor: Palette.tertiaryText])
     }
 
     override func moveUp(_ sender: Any?) {
