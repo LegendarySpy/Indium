@@ -130,10 +130,8 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         }
         let areas = blockRects(in: charRange, origin: origin).filter { $0.decoration.placement != .below }
             .map { $0.area.insetBy(dx: 0, dy: -4) }
-        guard !areas.isEmpty else {
-            super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
-            return
-        }
+        // Every band goes through the same shaping, whether or not this part of the page
+        // has a block in it; otherwise band widths change as different parts redraw.
         // Cut the block areas out of each band rather than dropping whole bands: after
         // Select All a single band can span many lines and several equations.
         var kept: [NSRect] = (0..<rectCount).map { rectArray[$0] }
