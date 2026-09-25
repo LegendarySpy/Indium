@@ -158,15 +158,6 @@ final class TableRender {
         return (row, column)
     }
 
-    /// Source offset (relative to the block) at the end of a cell's text.
-    func sourceOffset(row: Int, column: Int) -> Int? {
-        guard row < spec.rows.count else { return nil }
-        let cells = spec.rows[row]
-        guard !cells.isEmpty else { return nil }
-        let cell = cells[min(column, cells.count - 1)]
-        return cell.offset + (cell.text as NSString).length
-    }
-
     func draw(in rect: NSRect) {
         drawChrome(in: rect)
         for (r, row) in cells.enumerated() {

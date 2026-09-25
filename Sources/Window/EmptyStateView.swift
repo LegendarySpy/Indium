@@ -5,7 +5,6 @@ final class EmptyStateView: NSView {
     private let heading = NSTextField(labelWithString: "")
     private let message = NSTextField(labelWithString: "")
     private let button = NSButton(title: "Open Folder…", target: nil, action: #selector(AppDelegate.openFolder(_:)))
-    private let hint = NSTextField(labelWithString: "")
     private let actions = NSStackView()
 
     override init(frame: NSRect) {
@@ -15,13 +14,11 @@ final class EmptyStateView: NSView {
         message.font = NSFont.systemFont(ofSize: 13)
         message.textColor = Palette.secondaryText
         message.alignment = .center
-        hint.font = NSFont.systemFont(ofSize: 12)
-        hint.textColor = Palette.tertiaryText
         button.bezelStyle = .glass
         button.controlSize = .large
 
         actions.spacing = 10
-        let stack = NSStackView(views: [heading, message, button, actions, hint])
+        let stack = NSStackView(views: [heading, message, button, actions])
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 10
@@ -44,7 +41,6 @@ final class EmptyStateView: NSView {
         message.stringValue = "Open a folder of Markdown files to begin.\nAn existing Obsidian vault works as is."
         button.isHidden = false
         setActions([("Temporary Note", "⇧⌘N", #selector(AppDelegate.newTemporaryNote(_:)))])
-        hint.isHidden = true
     }
 
     func showNoNote() {
@@ -53,7 +49,6 @@ final class EmptyStateView: NSView {
         button.isHidden = true
         setActions([("New Note", "⌘N", #selector(DocumentWindowController.newNote(_:))),
                     ("Open Note", "⌘O", #selector(DocumentWindowController.openQuickly(_:)))])
-        hint.isHidden = true
     }
 
     /// Real buttons rather than a line of shortcut hints.
