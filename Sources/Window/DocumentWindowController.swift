@@ -597,7 +597,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             let tag = [#selector(setBody(_:)), #selector(setHeading1(_:)), #selector(setHeading2(_:)), #selector(setHeading3(_:))]
                 .firstIndex(of: item.action!) ?? -2
             item.state = tag == level ? .on : .off
-            return hasNote
+            return hasNote && editor.tableEditor == nil
+        case #selector(insertDisplayMath(_:)), #selector(insertImage(_:)):
+            // Block insertions have no place in a table cell.
+            return hasNote && editor.tableEditor == nil
         case #selector(newNote(_:)):
             return workspace != nil
         case #selector(saveNote(_:)):

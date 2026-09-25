@@ -40,7 +40,9 @@ struct TableSpec: Hashable {
     static func markdown(header: [String], body: [[String]], alignments: [Int], dashes: [Int]?) -> String {
         let columns = max(header.count, alignments.count, body.map(\.count).max() ?? 0, 1)
         func cells(_ row: [String]) -> [String] {
-            (0..<columns).map { c in c < row.count ? row[c].replacingOccurrences(of: "|", with: "\\|").replacingOccurrences(of: "\n", with: " ") : "" }
+            // Escape bare pipes so they can't split the row; already escaped ones stay as they are.
+            (0..<columns).map { c in c < row.count ? row[c].replacingOccurrences(of: #"(?<!\\)\|"#, with: #"\\|"#, options: .regularExpression)
+                .replacingOccurrences(of: "\n", with: " ") : "" }
         }
         let head = cells(header)
         let rows = body.map(cells)
