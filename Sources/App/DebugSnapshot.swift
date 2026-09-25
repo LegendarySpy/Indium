@@ -122,6 +122,16 @@ enum DebugSnapshot {
                 print("RENAMED url:", target.note?.url?.path ?? "nil")
             }
             if d.bool(forKey: "IndiumZoom") { window.zoom(nil) }
+            for (i, path) in (d.string(forKey: "IndiumSwitchFolders") ?? "").split(separator: ",").enumerated() {
+                let item = NSMenuItem()
+                item.representedObject = URL(fileURLWithPath: String(path), isDirectory: true)
+                AppDelegate.shared.switchFolder(item)
+                print("SWITCH \(i):", AppDelegate.shared.workspace?.name ?? "-", "note:", target.note?.title ?? "none")
+            }
+            if d.bool(forKey: "IndiumFolderMenu") {
+                let m = NSMenu(); AppDelegate.shared.fillFolderMenu(m)
+                print("MENU:", m.items.map { ($0.state == .on ? "✓" : "") + $0.title })
+            }
             if d.bool(forKey: "IndiumReturn") {
                 target.editor.textView.insertNewline(nil)
                 print("RETURN text:", target.editor.text.debugDescription, "caret:", target.editor.textView.selectedRange().location)

@@ -55,6 +55,8 @@ enum MainMenu {
         return m
     }
 
+    static let switchFolderMenu = NSUserInterfaceItemIdentifier("SwitchFolder")
+
     private static func fileMenu() -> NSMenu {
         let m = NSMenu(title: "File")
         add(m, "New Note", #selector(W.newNote(_:)), "n")
@@ -62,6 +64,10 @@ enum MainMenu {
         m.addItem(.separator())
         add(m, "Open Note…", #selector(W.openQuickly(_:)), "o")
         add(m, "Open Folder…", #selector(AppDelegate.openFolder(_:)), "o", [.command, .shift])
+        let folders = NSMenu(title: "Switch Folder")
+        folders.identifier = switchFolderMenu
+        folders.delegate = NSApp.delegate as? NSMenuDelegate
+        add(m, "Switch Folder", nil).submenu = folders
         m.addItem(.separator())
         add(m, "Close", #selector(NSWindow.performClose(_:)), "w")
         add(m, "Save", #selector(W.saveNote(_:)), "s")
