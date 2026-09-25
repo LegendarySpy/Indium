@@ -8,6 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private(set) var workspace: Workspace?
     private var mainController: DocumentWindowController?
     private var temporaryControllers: [DocumentWindowController] = []
+    /// Windows for single files opened from outside the folder.
+    private var fileControllers: [DocumentWindowController] = []
     private var settingsWindow: NSWindow?
     /// Sparkle: checks the appcast in the background and offers updates natively.
     private lazy var updater = SPUStandardUpdaterController(startingUpdater: Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String != "",
@@ -25,7 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
            FileManager.default.fileExists(atPath: path) {
             setWorkspace(URL(fileURLWithPath: path, isDirectory: true), reopenLastNote: true)
         }
-        mainWindowController().showWindow(nil)
+        // Opening a file from Finder launches straight into that file's own window.
+        if fileControllers.isEmpty { mainWindowController().showWindow(nil) }
         #if DEBUG
         DebugSnapshot.runIfRequested(mainWindowController())
         #endif
@@ -42,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         mainController?.editor.saveNow()
+        fileControllers.forEach { $0.editor.saveNow() }
         let unsaved = temporaryControllers.filter { !$0.editor.isEmpty }
         guard !unsaved.isEmpty else { return .terminateNow }
         let alert = NSAlert()
@@ -68,18 +72,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls {
-            let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-            if isDir {
-                setWorkspace(url, reopenLastNote: false)
-            } else if let ws = workspace, ws.contains(url) {
-                openInMainWindow(url)
-            } else {
-                setWorkspace(url.deletingLastPathComponent(), reopenLastNote: false)
-                openInMainWindow(url)
+        urls.forEach(openDocument)
+    }
+
+    /// A folder becomes the vault; a note inside it opens in the main window; any other
+    /// file opens in a window of its own, leaving the folder as it was.
+    func openDocument(_ url: URL) {
+        let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+        if isDir {
+            setWorkspace(url, reopenLastNote: false)
+            mainWindowController().showWindow(nil)
+        } else if let ws = workspace, ws.contains(url) {
+            openInMainWindow(url)
+        } else if let open = fileControllers.first(where: { $0.note?.url?.standardizedFileURL == url.standardizedFileURL }) {
+            open.showWindow(nil)
+        } else {
+            let c = DocumentWindowController(kind: .file)
+            do { try c.openFile(url) } catch {
+                NSAlert(error: error).runModal()
+                return
             }
+            fileControllers.append(c)
+            c.showWindow(nil)
+            NSDocumentController.shared.noteNewRecentDocumentURL(url)
         }
-        mainWindowController().showWindow(nil)
     }
 
     /// First launch: a notes folder in Documents holding a short welcome note, opened
@@ -127,8 +143,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         c.open(url)
     }
 
-    func temporaryWindowClosed(_ controller: DocumentWindowController) {
+    func windowClosed(_ controller: DocumentWindowController) {
         temporaryControllers.removeAll { $0 === controller }
+        fileControllers.removeAll { $0 === controller }
     }
 
     private func setWorkspace(_ url: URL, reopenLastNote: Bool) {
