@@ -68,7 +68,9 @@ final class AppSettings: ObservableObject {
     static let shared = AppSettings()
     static let textSizes: ClosedRange<Double> = 14...22
 
-    private let defaults = UserDefaults.standard
+    /// The Quick Look preview reads the app's preferences (it can't write them).
+    private let defaults = Bundle.main.bundleIdentifier == "dev.garon.Indium"
+        ? UserDefaults.standard : UserDefaults(suiteName: "dev.garon.Indium") ?? .standard
 
     @Published var appearance: AppearanceSetting { didSet { save(appearance.rawValue, "appearance"); applyAppearance() } }
     @Published var font: FontChoice { didSet { save(font.rawValue, "font") } }

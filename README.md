@@ -34,6 +34,7 @@ So Indium shows one screen at a time. There are no tabs, split views, or sidebar
 - **Slash commands.** Type `/` for tables, headings, equations, and more.
 - **Temporary notes.** A scratch note that's never saved unless you keep it.
 - **Live updates.** If another app or an AI agent edits a note, you see it as it happens.
+- **Quick Look.** Press Space on a note in Finder to see it rendered.
 - **PDF export.** Clean pages in light or dark.
 
 ## Roadmap
