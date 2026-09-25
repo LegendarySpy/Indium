@@ -55,6 +55,10 @@ targets:
         ENABLE_HARDENED_RUNTIME: YES
         COMBINE_HIDPI_IMAGES: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        # Test builds keep their own settings, so they never touch the installed app's.
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: dev.garon.Indium.debug
   IndiumQuickLook:
     type: app-extension
     platform: macOS
@@ -99,3 +103,6 @@ targets:
         CODE_SIGN_IDENTITY: "-"
         CODE_SIGN_STYLE: Manual
         ENABLE_HARDENED_RUNTIME: YES
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: dev.garon.Indium.debug.QuickLook
