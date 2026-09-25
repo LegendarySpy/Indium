@@ -128,17 +128,33 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
             super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
             return
         }
-        // Slightly generous so the hidden line breaks just below a block are covered too.
         let areas = blockRects(in: charRange, origin: origin).filter { $0.decoration.placement != .below }
-            .map { $0.area.insetBy(dx: 0, dy: -12) }
+            .map { $0.area.insetBy(dx: 0, dy: -4) }
         guard !areas.isEmpty else {
             super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
             return
         }
-        var kept: [NSRect] = []
-        for i in 0..<rectCount {
-            let r = rectArray[i]
-            if !areas.contains(where: { r.midY >= $0.minY && r.midY <= $0.maxY }) { kept.append(r) }
+        // Cut the block areas out of each band rather than dropping whole bands: after
+        // Select All a single band can span many lines and several equations.
+        var kept: [NSRect] = (0..<rectCount).map { rectArray[$0] }
+        for area in areas {
+            kept = kept.flatMap { r -> [NSRect] in
+                guard r.maxY > area.minY, r.minY < area.maxY else { return [r] }
+                var parts: [NSRect] = []
+                if area.minY - r.minY > 0.5 { parts.append(NSRect(x: r.minX, y: r.minY, width: r.width, height: area.minY - r.minY)) }
+                if r.maxY - area.maxY > 0.5 { parts.append(NSRect(x: r.minX, y: area.maxY, width: r.width, height: r.maxY - area.maxY)) }
+                return parts
+            }
+        }
+        // Slivers are a block's collapsed source lines (a table's rows), not text.
+        kept.removeAll { $0.height < 3 }
+        // Whole-line bands stop at the text column instead of running into the margins.
+        if let container = textContainers.first {
+            let col = column(for: container, origin: origin)
+            kept = kept.map { r in
+                let minX = max(r.minX, col.x - 6), maxX = min(r.maxX, col.x + col.width + 6)
+                return NSRect(x: minX, y: r.minY, width: max(maxX - minX, 0), height: r.height)
+            }
         }
         guard !kept.isEmpty else { return }
         kept.withUnsafeBufferPointer {

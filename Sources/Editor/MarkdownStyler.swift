@@ -243,7 +243,13 @@ final class MarkdownStyler {
         if config.printing { return false }
         for s in selection {
             let a = s.location, b = NSMaxRange(s)
-            if (a >= r.location && a <= NSMaxRange(r)) || (b >= r.location && b <= NSMaxRange(r)) { return true }
+            if s.length == 0 {
+                if a >= r.location && a <= NSMaxRange(r) { return true }
+            } else if a >= r.location && b <= NSMaxRange(r) {
+                // A selection inside the block is editing it; one that merely starts or
+                // ends there (Select All, a drag across) shouldn't flip it to source.
+                return true
+            }
         }
         return false
     }
