@@ -2,9 +2,10 @@ import AppKit
 import UniformTypeIdentifiers
 
 /// A window showing one page. The vault window switches between notes in place;
-/// temporary windows hold a single memory-only page.
+/// temporary windows hold a single memory-only page, and file windows hold one
+/// Markdown file from outside the folder, opened on its own.
 final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
-    enum Kind { case vault, temporary }
+    enum Kind { case vault, temporary, file }
 
     let kind: Kind
     let editor = EditorController()
@@ -22,6 +23,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private var observers: [Any] = []
     private var noteCache: [URL: Note] = [:]
     private var noteOrder: [URL] = []
+    /// File windows watch the file's folder for edits from other apps.
+    private var fileWatcher: FileWatcher?
 
     var workspace: Workspace? { AppDelegate.shared.workspace }
     var note: Note? { editor.note }
@@ -55,6 +58,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         buildLayout()
         wireEditor()
 
+        if kind == .file { editor.workspace = nil }
         if kind == .temporary {
             titleBar.isTemporary = true
             editor.load(Note(temporary: ()))
@@ -162,6 +166,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         editor.onOpenNote = { [weak self] url in self?.open(url) }
         editor.onNoteMissing = { [weak self] in
             guard let self else { return }
+            if self.kind == .file {
+                self.close()
+                return
+            }
             self.editor.load(nil)
             self.refreshEmptyState()
         }
@@ -232,6 +240,20 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     func windowDidFailToExitFullScreen(_ window: NSWindow) { hostTitleBar(inFullScreen: true) }
     func windowDidExitFullScreen(_ notification: Notification) { titleBar.alignWithTrafficLights() }
 
+    // MARK: Single files
+
+    /// Shows a file from outside the folder in this (file) window.
+    func openFile(_ url: URL) throws {
+        let note = try Note(url: url.standardizedFileURL)
+        editor.load(note)
+        refreshEmptyState()
+        updateTitle()
+        window?.makeFirstResponder(editor.textView)
+        fileWatcher = FileWatcher(url: url.deletingLastPathComponent()) { [weak self] _ in
+            self?.editor.checkForExternalChanges()
+        }
+    }
+
     // MARK: Workspace
 
     func workspaceDidChange() {
@@ -265,7 +287,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         emptyState.isHidden = hasNote
         editor.scrollView.isHidden = !hasNote
         titleBar.formattingEnabled = hasNote
-        titleBar.titleIsRenamable = hasNote
+        titleBar.titleIsRenamable = hasNote && kind != .file
         if !hasNote {
             if workspace == nil { emptyState.showNoFolder() } else { emptyState.showNoNote() }
             titleBar.title = workspace?.name ?? ""
@@ -273,8 +295,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             window?.representedURL = nil
         }
         titleBar.iconAvailable = hasNote && kind == .vault && workspace != nil
-        titleBar.filesButton.isHidden = workspace == nil || kind == .temporary
-        titleBar.searchButton.isHidden = workspace == nil || kind == .temporary
+        titleBar.filesButton.isHidden = workspace == nil || kind != .vault
+        titleBar.searchButton.isHidden = workspace == nil || kind != .vault
     }
 
     private func updateTitle() {
@@ -292,7 +314,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// Opens a note in this window, keeping undo history for recently used notes.
     func open(_ url: URL, select query: String? = nil) {
         guard kind == .vault else {
-            AppDelegate.shared.openInMainWindow(url)
+            AppDelegate.shared.openDocument(url)
             return
         }
         let key = url.standardizedFileURL
@@ -566,7 +588,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             return workspace != nil && kind == .vault
         case #selector(openQuickly(_:)), #selector(searchNotes(_:)):
             return workspace != nil
-        case #selector(renameNote(_:)), #selector(revealInFinder(_:)), #selector(trashNote(_:)):
+        case #selector(renameNote(_:)), #selector(trashNote(_:)):
+            return hasNote && note?.isTemporary == false && kind != .file
+        case #selector(revealInFinder(_:)):
             return hasNote && note?.isTemporary == false
         case #selector(setBody(_:)), #selector(setHeading1(_:)), #selector(setHeading2(_:)), #selector(setHeading3(_:)):
             let level = hasNote ? editor.currentHeadingLevel() : -1
@@ -596,7 +620,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     func windowWillClose(_ notification: Notification) {
         editor.saveNow()
-        if kind == .temporary { AppDelegate.shared.temporaryWindowClosed(self) }
+        if kind != .vault { AppDelegate.shared.windowClosed(self) }
     }
 
     func windowDidResignKey(_ notification: Notification) {
