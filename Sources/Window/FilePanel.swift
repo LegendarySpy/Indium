@@ -20,7 +20,8 @@ final class FilePanelView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
 
     private let outline = PanelOutlineView()
     private let scroll = NSScrollView()
-    private let titleLabel = NSTextField(labelWithString: "")
+    /// The folder's name; click it to switch folders.
+    private let titleLabel = NSButton(title: "", target: nil, action: nil)
     private var expanded = Set<URL>()
     private var renamingURL: URL?
 
@@ -39,9 +40,17 @@ final class FilePanelView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
             inner.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
 
+        titleLabel.isBordered = false
         titleLabel.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-        titleLabel.textColor = .secondaryLabelColor
+        titleLabel.contentTintColor = .secondaryLabelColor
+        titleLabel.image = NSImage(systemSymbolName: "chevron.up.chevron.down", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+        titleLabel.imagePosition = .imageTrailing
+        titleLabel.imageHugsTitle = true
         titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.target = self
+        titleLabel.action = #selector(showFolders)
+        titleLabel.toolTip = "Switch folder"
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         inner.addSubview(titleLabel)
 
@@ -112,7 +121,7 @@ final class FilePanelView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
     }
 
     func reload() {
-        titleLabel.stringValue = workspace?.name ?? ""
+        titleLabel.title = workspace?.name ?? ""
         outline.reloadData()
         for url in expanded.sorted(by: { $0.path.count < $1.path.count }) {
             if let node = node(for: url) { outline.expandItem(node) }
@@ -239,6 +248,12 @@ final class FilePanelView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegat
         let row = outline.clickedRow >= 0 ? outline.clickedRow : outline.selectedRow
         guard row >= 0, let node = outline.item(atRow: row) as? FileNode else { return nil }
         return node.isFolder ? node.url : node.url.deletingLastPathComponent()
+    }
+
+    @objc private func showFolders() {
+        let menu = NSMenu()
+        AppDelegate.shared.fillFolderMenu(menu)
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: titleLabel.bounds.height + 4), in: titleLabel)
     }
 
     @objc private func newNoteClicked() {

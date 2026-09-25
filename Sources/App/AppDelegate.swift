@@ -2,7 +2,7 @@ import AppKit
 import Sparkle
 import SwiftUI
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     static var shared: AppDelegate { NSApp.delegate as! AppDelegate }
 
     private(set) var workspace: Workspace?
@@ -135,15 +135,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainController?.editor.saveNow()
         let changed = workspace?.root.standardizedFileURL != url.standardizedFileURL
         guard changed else { return }
+        let d = UserDefaults.standard
+        // Each folder remembers its own last note, so switching back picks up where you were.
+        var lastNotes = d.dictionary(forKey: "lastNoteByFolder") as? [String: String] ?? [:]
+        if let old = workspace?.root.path, let note = d.string(forKey: "lastNote") { lastNotes[old] = note }
+        d.set(lastNotes, forKey: "lastNoteByFolder")
         workspace = Workspace(root: url)
-        UserDefaults.standard.set(url.path, forKey: "vaultPath")
-        if !reopenLastNote { UserDefaults.standard.removeObject(forKey: "lastNote") }
+        d.set(url.path, forKey: "vaultPath")
+        if !reopenLastNote {
+            if let note = lastNotes[url.standardizedFileURL.path] { d.set(note, forKey: "lastNote") }
+            else { d.removeObject(forKey: "lastNote") }
+        }
+        rememberFolder(url)
         NSDocumentController.shared.noteNewRecentDocumentURL(url)
         mainController?.workspaceDidChange()
         if let ws = workspace {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { NoteIcons.shared.backfill(ws) }
         }
         for c in temporaryControllers { c.editor.workspace = workspace }
+    }
+
+    // MARK: Folders
+
+    /// Folders opened before, most recent first (only ones that still exist).
+    var recentFolders: [URL] {
+        (UserDefaults.standard.stringArray(forKey: "recentFolders") ?? [])
+            .filter { FileManager.default.fileExists(atPath: $0) }
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+    }
+
+    private func rememberFolder(_ url: URL) {
+        var paths = UserDefaults.standard.stringArray(forKey: "recentFolders") ?? []
+        paths.removeAll { $0 == url.standardizedFileURL.path }
+        paths.insert(url.standardizedFileURL.path, at: 0)
+        UserDefaults.standard.set(Array(paths.prefix(8)), forKey: "recentFolders")
+    }
+
+    /// Recent folders (the current one checked), then Open Folder…. Used by the File
+    /// menu and the folder name in the files popover.
+    func fillFolderMenu(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let current = workspace?.root.standardizedFileURL.path
+        var folders = recentFolders
+        if let ws = workspace, !folders.contains(where: { $0.standardizedFileURL.path == current }) { folders.insert(ws.root, at: 0) }
+        for url in folders {
+            let item = NSMenuItem(title: url.lastPathComponent, action: #selector(switchFolder(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = url
+            item.toolTip = (url.path as NSString).abbreviatingWithTildeInPath
+            item.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
+            item.state = url.standardizedFileURL.path == current ? .on : .off
+            menu.addItem(item)
+        }
+        if !folders.isEmpty { menu.addItem(.separator()) }
+        let open = NSMenuItem(title: "Open Folder…", action: #selector(openFolder(_:)), keyEquivalent: "")
+        open.target = self
+        menu.addItem(open)
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu.identifier == MainMenu.switchFolderMenu { fillFolderMenu(menu) }
+    }
+
+    @objc func switchFolder(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        guard url.standardizedFileURL != workspace?.root.standardizedFileURL else { return }
+        setWorkspace(url, reopenLastNote: false)
+        let c = mainWindowController()
+        c.showWindow(nil)
+        if let ws = workspace, let rel = UserDefaults.standard.string(forKey: "lastNote"),
+           FileManager.default.fileExists(atPath: ws.root.appendingPathComponent(rel).path) {
+            c.open(ws.root.appendingPathComponent(rel))
+        } else {
+            c.openQuickly(nil)
+        }
     }
 
     // MARK: Actions
