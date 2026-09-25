@@ -754,9 +754,21 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         target.setSelectedRange(select)
     }
 
+    /// The selection without spaces or line breaks at either end. A triple click takes the
+    /// line's newline too, and Markdown markers have to hug the text to count.
+    private func trimmedSelection(in target: NSTextView) -> NSRange {
+        let r = target.selectedRange()
+        let text = target.string as NSString
+        let ws = CharacterSet.whitespacesAndNewlines
+        var start = r.location, end = NSMaxRange(r)
+        while start < end, let u = UnicodeScalar(text.character(at: start)), ws.contains(u) { start += 1 }
+        while end > start, let u = UnicodeScalar(text.character(at: end - 1)), ws.contains(u) { end -= 1 }
+        return start < end ? NSRange(location: start, length: end - start) : r
+    }
+
     func toggleWrap(_ marker: String, name: String) {
         guard let target = formatTarget else { NSSound.beep(); return }
-        let r = target.selectedRange()
+        let r = trimmedSelection(in: target)
         let m = (marker as NSString).length
         let text = target.string as NSString
         if r.location >= m, NSMaxRange(r) + m <= text.length,
@@ -797,7 +809,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func insertLink() {
         guard let target = formatTarget else { NSSound.beep(); return }
-        let r = target.selectedRange()
+        let r = trimmedSelection(in: target)
         let selected = (target.string as NSString).substring(with: r)
         var url = ""
         if let s = NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines),
