@@ -1,4 +1,5 @@
 <div align="center">
+  <img src="./assets/readme/icon.png" width="128" alt="Indium icon" />
   <h1>Indium</h1>
   <p>A lean, open source Markdown editor for the Mac.<br />One note at a time, just for writing.</p>
   <p>
@@ -41,7 +42,6 @@ So Indium shows one screen at a time. There are no tabs, split views, or sidebar
 
 A soft list of what I'd like to add, in no particular order:
 
-- An app icon
 - Backlinks for `[[wiki links]]`, shown quietly at the bottom of a note
 - More export options, like HTML and Word
 - Callouts and footnotes, the way Obsidian writes them
