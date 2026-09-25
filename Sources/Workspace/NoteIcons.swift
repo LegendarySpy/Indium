@@ -126,10 +126,23 @@ final class NoteIcons {
     /// Fills in icons for notes that don't have one, a few at a time.
     func backfill(_ workspace: Workspace) {
         guard AppSettings.shared.suggestIcons, Self.isAvailable else { return }
-        let missing = workspace.notes.filter { icon(for: $0, in: workspace) == nil }.prefix(40)
-        for url in missing {
-            guard let text = try? Note.read(url) else { continue }
-            suggest(for: url, text: text, in: workspace)
+        if workspace.isScanning {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.backfill(workspace) }
+            return
+        }
+        let missing = Array(workspace.notes.filter { icon(for: $0, in: workspace) == nil }.prefix(40))
+        // Off the main thread, and only notes already on this Mac: reading one that
+        // iCloud hasn't downloaded would fetch it just to pick an icon.
+        DispatchQueue.global(qos: .utility).async {
+            var texts: [(URL, String)] = []
+            for url in missing {
+                let status = (try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey]))?.ubiquitousItemDownloadingStatus
+                if let status, status != .current { continue }
+                if let text = try? Note.read(url) { texts.append((url, text)) }
+            }
+            DispatchQueue.main.async {
+                for (url, text) in texts { self.suggest(for: url, text: text, in: workspace) }
+            }
         }
     }
 

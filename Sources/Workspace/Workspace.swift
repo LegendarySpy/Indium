@@ -38,13 +38,28 @@ final class Workspace {
 
     var name: String { root.lastPathComponent }
 
+    /// True until the first scan lands.
+    private(set) var isScanning = true
+
     init(root: URL) {
         self.root = root.standardizedFileURL
-        let scan = Workspace.scan(self.root)
-        tree = scan.tree
-        notes = scan.notes
-        filesByName = scan.byName
+        tree = FileNode(url: self.root, isFolder: true)
         watcher = FileWatcher(url: self.root) { [weak self] paths in self?.filesChanged(paths) }
+        // Listing a folder in iCloud Drive can wait on iCloud for seconds (folders and
+        // files may not be downloaded yet), so the first scan never runs on the main
+        // thread; windows fill in when it lands.
+        let root = self.root
+        DispatchQueue.global(qos: .userInitiated).async {
+            let scan = Workspace.scan(root)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.tree = scan.tree
+                self.notes = scan.notes
+                self.filesByName = scan.byName
+                self.isScanning = false
+                NotificationCenter.default.post(name: Workspace.didChange, object: self, userInfo: ["paths": [String](), "initial": true])
+            }
+        }
     }
 
     // MARK: Scanning

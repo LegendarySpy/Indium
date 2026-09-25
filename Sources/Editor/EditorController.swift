@@ -70,8 +70,10 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         observers.append(NotificationCenter.default.addObserver(forName: Workspace.didMoveItem, object: nil, queue: .main) { [weak self] n in
             self?.itemMoved(from: n.userInfo?["from"] as? URL, to: n.userInfo?["to"] as? URL)
         })
-        observers.append(NotificationCenter.default.addObserver(forName: Workspace.didChange, object: nil, queue: .main) { [weak self] _ in
+        observers.append(NotificationCenter.default.addObserver(forName: Workspace.didChange, object: nil, queue: .main) { [weak self] n in
             self?.checkForExternalChanges()
+            // Links and images resolve against the folder's files, known once it's scanned.
+            if n.userInfo?["initial"] as? Bool == true { self?.restyleAll() }
         })
         observers.append(NotificationCenter.default.addObserver(forName: Workspace.filesTouched, object: nil, queue: .main) { [weak self] _ in
             self?.checkForExternalChanges()

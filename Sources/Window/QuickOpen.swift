@@ -42,6 +42,11 @@ final class QuickOpenView: NSView, NSTextFieldDelegate, NSTableViewDataSource, N
     override init(frame: NSRect) {
         super.init(frame: frame)
         installArrowCursorArea()
+        // Opened right after a folder: the list fills in once its scan lands.
+        NotificationCenter.default.addObserver(forName: Workspace.didChange, object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.window != nil, !self.isHidden else { return }
+            self.update()
+        }
         panel = Glass.make(cornerRadius: 24, content: content)
         panel.translatesAutoresizingMaskIntoConstraints = false
         panel.shadow = {
