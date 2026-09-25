@@ -79,6 +79,7 @@ final class AppSettings: ObservableObject {
     @Published var syntax: SyntaxVisibility { didSet { save(syntax.rawValue, "syntax") } }
     @Published var spellcheck: Bool { didSet { save(spellcheck, "spellcheck") } }
     @Published var suggestIcons: Bool { didSet { save(suggestIcons, "suggestIcons") } }
+    @Published var showPageLines: Bool { didSet { save(showPageLines, "showPageLines") } }
 
     private init() {
         appearance = AppearanceSetting(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
@@ -89,6 +90,7 @@ final class AppSettings: ObservableObject {
         syntax = SyntaxVisibility(rawValue: defaults.string(forKey: "syntax") ?? "") ?? .whileEditing
         spellcheck = defaults.object(forKey: "spellcheck") as? Bool ?? true
         suggestIcons = defaults.object(forKey: "suggestIcons") as? Bool ?? true
+        showPageLines = defaults.bool(forKey: "showPageLines")
     }
 
     private func save(_ value: Any, _ key: String) {

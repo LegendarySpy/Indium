@@ -41,11 +41,30 @@ struct PDFOptions {
 }
 
 enum PDFExporter {
-    static func makePDF(text: String, title: String, resolver: ImageResolving?, options: PDFOptions = .saved) -> Data {
-        let settings = AppSettings.shared
+    private static let margin: CGFloat = 64
+
+    /// A note styled for paper and flowed into page-sized containers.
+    private struct Pages {
+        let storage: NSTextStorage
+        let layout: MarkdownLayoutManager
+        let containers: [NSTextContainer]
+        let scale: CGFloat
+        let gutter: CGFloat
+    }
+
+    /// Where each page after the first begins, as character offsets, so the editor can
+    /// show the page lines of the PDF you'd export right now.
+    static func pageStarts(text: String, resolver: ImageResolving?, options: PDFOptions = .saved) -> [Int] {
+        let pages = paginate(text: text, resolver: resolver, options: options)
+        return pages.containers.dropFirst().compactMap { container in
+            let glyphs = pages.layout.glyphRange(for: container)
+            return glyphs.length > 0 ? pages.layout.characterIndexForGlyph(at: glyphs.location) : nil
+        }
+    }
+
+    private static func paginate(text: String, resolver: ImageResolving?, options: PDFOptions) -> Pages {
         let paper = options.paperSize
-        let margin: CGFloat = 64
-        let column = settings.lineWidth.points
+        let column = AppSettings.shared.lineWidth.points
         let scale = (paper.width - margin * 2) / column
         var config = StyleConfig.current
         config.columnWidth = column
@@ -65,21 +84,13 @@ enum PDFExporter {
 
         let styler = MarkdownStyler(config: config)
         styler.imageResolver = resolver
-
-        let data = NSMutableData()
-        var mediaBox = CGRect(origin: .zero, size: paper)
-        guard let consumer = CGDataConsumer(data: data as CFMutableData),
-              let ctx = CGContext(consumer: consumer, mediaBox: &mediaBox, [
-                  kCGPDFContextTitle as String: title,
-                  kCGPDFContextCreator as String: "Indium",
-              ] as CFDictionary) else { return Data() }
+        var containers: [NSTextContainer] = []
 
         NSAppearance(named: options.isDark ? .darkAqua : .aqua)!.performAsCurrentDrawingAppearance {
             styler.styleAll(storage, selection: [])
 
-            // Flow text through page-sized containers until it is all placed,
-            // keeping headings with the paragraph that follows them.
-            var containers: [NSTextContainer] = []
+            // Flow text through page-sized containers until it is all placed, starting a
+            // new page at each written page break and keeping headings with what follows.
             var index = 0
             var adjustments = 0
             while true {
@@ -93,15 +104,33 @@ enum PDFExporter {
                 layout.ensureLayout(for: container)
                 let glyphs = layout.glyphRange(for: container)
                 let done = NSMaxRange(glyphs) >= layout.numberOfGlyphs
-                if !done, glyphs.length > 0, adjustments < 200,
-                   keepHeadingWithNext(layout: layout, storage: storage, styler: styler, container: container, glyphs: glyphs) {
+                if glyphs.length > 0, adjustments < 200,
+                   breakPage(layout: layout, storage: storage, styler: styler, container: container, glyphs: glyphs)
+                    || (!done && keepHeadingWithNext(layout: layout, storage: storage, styler: styler, container: container, glyphs: glyphs)) {
                     adjustments += 1
                     continue
                 }
                 index += 1
                 if done || containers.count >= 2000 { break }
             }
+        }
+        return Pages(storage: storage, layout: layout, containers: containers, scale: scale, gutter: gutter)
+    }
 
+    static func makePDF(text: String, title: String, resolver: ImageResolving?, options: PDFOptions = .saved) -> Data {
+        let paper = options.paperSize
+        let pages = paginate(text: text, resolver: resolver, options: options)
+        let (storage, layout, containers, scale, gutter) = (pages.storage, pages.layout, pages.containers, pages.scale, pages.gutter)
+
+        let data = NSMutableData()
+        var mediaBox = CGRect(origin: .zero, size: paper)
+        guard let consumer = CGDataConsumer(data: data as CFMutableData),
+              let ctx = CGContext(consumer: consumer, mediaBox: &mediaBox, [
+                  kCGPDFContextTitle as String: title,
+                  kCGPDFContextCreator as String: "Indium",
+              ] as CFDictionary) else { return Data() }
+
+        NSAppearance(named: options.isDark ? .darkAqua : .aqua)!.performAsCurrentDrawingAppearance {
             let graphics = NSGraphicsContext(cgContext: ctx, flipped: true)
             let previous = NSGraphicsContext.current
             NSGraphicsContext.current = graphics
@@ -148,13 +177,48 @@ enum PDFExporter {
         return data as Data
     }
 
+    /// If a written page break has text after it on this page, pads the break's line so
+    /// that text starts the next page. A break at the top of a page already has one.
+    private static func breakPage(layout: NSLayoutManager, storage: NSTextStorage, styler: MarkdownStyler,
+                                  container: NSTextContainer, glyphs: NSRange) -> Bool {
+        let chars = layout.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        for block in styler.blocks where block.kind == .columnMarker(.pageBreak) {
+            let line = (storage.string as NSString).lineRange(for: NSRange(location: block.range.location, length: 0))
+            guard line.location >= chars.location else { continue }
+            guard NSMaxRange(line) < NSMaxRange(chars) else { break }
+            var lineGlyphs = NSRange()
+            let frag = layout.lineFragmentRect(forGlyphAt: layout.glyphIndexForCharacter(at: line.location), effectiveRange: &lineGlyphs)
+            guard lineGlyphs.location > glyphs.location, frag.minY > 0 else { continue }
+            guard let style = (storage.attribute(.paragraphStyle, at: line.location, effectiveRange: nil) as? NSParagraphStyle)?
+                .mutableCopy() as? NSMutableParagraphStyle else { continue }
+            style.paragraphSpacing += container.size.height - frag.maxY
+            storage.addAttribute(.paragraphStyle, value: style, range: line)
+            return true
+        }
+        return false
+    }
+
     /// If a page ends on a heading, pads the line before it so the heading starts the next page.
+    /// Blank lines and layout markers after the heading don't count as something following it.
     private static func keepHeadingWithNext(layout: NSLayoutManager, storage: NSTextStorage, styler: MarkdownStyler,
                                             container: NSTextContainer, glyphs: NSRange) -> Bool {
+        let string = storage.string as NSString
         var lineGlyphs = NSRange()
-        let frag = layout.lineFragmentRect(forGlyphAt: NSMaxRange(glyphs) - 1, effectiveRange: &lineGlyphs)
+        var frag = layout.lineFragmentRect(forGlyphAt: NSMaxRange(glyphs) - 1, effectiveRange: &lineGlyphs)
+        while lineGlyphs.location > glyphs.location {
+            let line = string.lineRange(for: NSRange(location: layout.characterIndexForGlyph(at: lineGlyphs.location), length: 0))
+            let blank = string.substring(with: line).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            // Hidden source that draws nothing, like a column marker; equations and images draw a block.
+            var drawsBlock = false
+            storage.enumerateAttribute(.mdBlock, in: line) { value, _, stop in if value != nil { drawsBlock = true; stop.pointee = true } }
+            let hidden = storage.attribute(.mdHidden, at: line.location, effectiveRange: nil) != nil && !drawsBlock
+            guard blank || hidden else { break }
+            frag = layout.lineFragmentRect(forGlyphAt: lineGlyphs.location - 1, effectiveRange: &lineGlyphs)
+        }
+        // A heading that wraps ends the page on its last line; move it from its first.
+        let charIndex = string.lineRange(for: NSRange(location: layout.characterIndexForGlyph(at: lineGlyphs.location), length: 0)).location
+        frag = layout.lineFragmentRect(forGlyphAt: layout.glyphIndexForCharacter(at: charIndex), effectiveRange: &lineGlyphs)
         guard lineGlyphs.location > glyphs.location, frag.minY > 0 else { return false }
-        let charIndex = layout.characterIndexForGlyph(at: lineGlyphs.location)
         guard let block = styler.blockIndex(containing: charIndex).map({ styler.blocks[$0] }),
               case .heading = block.kind, block.range.location == charIndex, charIndex > 0 else { return false }
         let previous = (storage.string as NSString).paragraphRange(for: NSRange(location: charIndex - 1, length: 0))
