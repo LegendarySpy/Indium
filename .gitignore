@@ -1,0 +1,9 @@
+.DS_Store
+build/
+Releases/
+Indium.xcodeproj/
+*.xcuserstate
+xcuserdata/
+Design/
+.build/
+.swiftpm/

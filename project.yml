@@ -1,0 +1,56 @@
+name: Indium
+options:
+  bundleIdPrefix: dev.garon
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+packages:
+  SwiftMath:
+    path: Vendor/SwiftMath
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.7.0
+targets:
+  Indium:
+    type: application
+    platform: macOS
+    sources:
+      - Sources
+    dependencies:
+      - package: SwiftMath
+      - package: Sparkle
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: Indium
+        CFBundleName: Indium
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSApplicationCategoryType: public.app-category.productivity
+        LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
+        NSHumanReadableCopyright: "Plain Markdown, beautifully."
+        NSPrincipalClass: NSApplication
+        SUFeedURL: "https://github.com/LegendarySpy/Indium/releases/latest/download/appcast.xml"
+        SUPublicEDKey: "$(SPARKLE_PUBLIC_KEY)"
+        SUEnableAutomaticChecks: true
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Folder
+            CFBundleTypeRole: Editor
+            LSItemContentTypes: [public.folder]
+            LSHandlerRank: Alternate
+          - CFBundleTypeName: Markdown Document
+            CFBundleTypeRole: Editor
+            LSItemContentTypes: [net.daringfireball.markdown]
+            LSHandlerRank: Alternate
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.garon.Indium
+        MARKETING_VERSION: "1.0"
+        SPARKLE_PUBLIC_KEY: "bCELnyqQ9JzOEVWoVEk5KGMvmFY/g8zUSKFRSlOf87Y="
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        ENABLE_HARDENED_RUNTIME: YES
+        COMBINE_HIDPI_IMAGES: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
