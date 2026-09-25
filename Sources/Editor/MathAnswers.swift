@@ -13,8 +13,8 @@ enum MathAnswer {
 
     /// The answer for the text before the caret on its line, if it ends in `=`.
     static func suggest(lineBeforeCaret line: String, inMath: Bool) -> Result? {
+        // Only right after the "=": typing on (even a space) means no thanks.
         var head = line
-        while head.last == " " { head.removeLast() }
         guard head.hasSuffix("="), !head.hasSuffix("==") else { return nil }
         head.removeLast()
         // A second "=" earlier ("a = b + c =") limits the expression to the last part.
