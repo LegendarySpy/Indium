@@ -25,6 +25,7 @@ struct SlashCommand {
         .init(name: "equation", insertion: .text("$$\n\n$$\n", select: NSRange(location: 3, length: 0), block: true)),
         .init(name: "math", insertion: .text("$$", select: NSRange(location: 1, length: 0), block: false)),
         .init(name: "divider", insertion: .text("---\n", select: NSRange(location: 4, length: 0), block: true)),
+        .init(name: "page break", insertion: .text("<!-- pagebreak -->\n", select: NSRange(location: 19, length: 0), block: true)),
         .init(name: "columns", insertion: .text("<!-- columns -->\n\n<!-- column -->\n\n<!-- /columns -->\n", select: NSRange(location: 17, length: 0), block: true)),
         .init(name: "image", insertion: .image),
         .init(name: "date", insertion: .text(Self.today, select: NSRange(location: (Self.today as NSString).length, length: 0), block: false)),

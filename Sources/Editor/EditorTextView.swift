@@ -155,10 +155,32 @@ final class EditorTextView: NSTextView {
     /// A computed answer (drawn like any other suggestion: soft gray after the caret).
     var ghostIsAnswer = false
 
+    /// Where each exported page after the first begins (character offsets), shown as
+    /// dashed lines when Show Page Lines is on.
+    var pageStarts: [Int] = [] { didSet { if pageStarts != oldValue { needsDisplay = true } } }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         (layoutManager as? MarkdownLayoutManager)?.drawFloats(in: dirtyRect, origin: textContainerOrigin)
+        drawPageLines(in: dirtyRect)
         drawGhost()
+    }
+
+    private func drawPageLines(in dirtyRect: NSRect) {
+        guard !pageStarts.isEmpty, let layoutManager, let storage = textStorage else { return }
+        let origin = textContainerOrigin
+        let text = storage.string as NSString
+        for (i, start) in pageStarts.enumerated() where start < storage.length {
+            // A page break written just above already marks this spot.
+            var before = start - 1
+            while before > 0, let u = UnicodeScalar(text.character(at: before)), CharacterSet.whitespacesAndNewlines.contains(u) { before -= 1 }
+            if before >= 0, storage.attribute(.mdPageBreak, at: before, effectiveRange: nil) != nil { continue }
+            let glyph = layoutManager.glyphIndexForCharacter(at: start)
+            let y = origin.y + layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minY
+            guard y > dirtyRect.minY - 12, y < dirtyRect.maxY + 12 else { continue }
+            MarkdownLayoutManager.drawPageLine(y: y, from: insetX, to: insetX + effectiveColumn + gutter * 2,
+                                               label: "Page \(i + 2)", centered: false, color: Palette.separator)
+        }
     }
 
     private func drawGhost() {

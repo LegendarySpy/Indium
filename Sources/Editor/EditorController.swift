@@ -187,6 +187,23 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         if restyle { restyleAll() }
     }
 
+    private var pageLinesWork: DispatchWorkItem?
+
+    /// Lays the note out as a PDF shortly after changes settle, to show where pages start.
+    func updatePageLines(delay: TimeInterval = 0.6) {
+        pageLinesWork?.cancel()
+        guard AppSettings.shared.showPageLines, note != nil, storage.length < 400_000 else {
+            textView.pageStarts = []
+            return
+        }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.textView.pageStarts = PDFExporter.pageStarts(text: self.storage.string, resolver: self)
+        }
+        pageLinesWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
     func columnDidChange(_ column: CGFloat) {
         guard styler.config.columnWidth != column else { return }
         styler.config.columnWidth = column
@@ -249,6 +266,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         updateFloats()
         positionImageControls()
         refreshTableEditor()
+        updatePageLines()
     }
 
     // MARK: Table editing
@@ -407,6 +425,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         onTitleChange?()
         updateFloats()
         completeLayoutSoon()
+        textView.pageStarts = []
+        updatePageLines(delay: 0.1)
     }
 
     private func setText(_ text: String) {
@@ -547,6 +567,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         isLoading = false
         lastSelection = [caret]
         styler.styleAll(storage, selection: [caret])
+        updatePageLines()
         updateFloats()
         if topChar < storage.length {
             let glyph = layoutManager.glyphIndexForCharacter(at: topChar)
@@ -569,6 +590,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         isLoading = false
         lastSelection = [clamped]
         styler.styleAll(storage, selection: [clamped])
+        updatePageLines()
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: offset))
         hasUnsavedEdits = false
     }
@@ -633,6 +655,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         onTyping?()
         updateFloats()
         completeLayoutSoon(delay: 0.4)
+        updatePageLines()
         if note?.isTemporary == false { scheduleSave() }
     }
 

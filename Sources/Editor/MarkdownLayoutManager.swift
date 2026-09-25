@@ -175,6 +175,7 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         let chars = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
         drawBullets(in: chars, storage: storage, origin: origin)
         drawRules(in: chars, storage: storage, origin: origin)
+        drawPageBreaks(in: chars, storage: storage, origin: origin)
         drawInlineMath(in: chars, storage: storage, origin: origin)
         drawBlocks(in: chars, storage: storage, origin: origin)
     }
@@ -313,6 +314,43 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
             Palette.quoteBar.setFill()
             NSRect(x: col.x + (col.width - w) / 2, y: round(y), width: w, height: 1).fill()
         }
+    }
+
+    private func drawPageBreaks(in chars: NSRange, storage: NSTextStorage, origin: NSPoint) {
+        storage.enumerateAttribute(.mdPageBreak, in: chars) { value, range, _ in
+            guard value != nil else { return }
+            let g = glyphIndexForCharacter(at: range.location)
+            guard let container = textContainer(forGlyphAt: g, effectiveRange: nil) else { return }
+            let frag = lineFragmentRect(forGlyphAt: g, effectiveRange: nil)
+            let col = contentColumn(glyph: g, container: container, origin: origin)
+            Self.drawPageLine(y: origin.y + frag.midY, from: col.x, to: col.x + col.width,
+                              label: "Page Break", centered: true, color: Palette.quoteBar)
+        }
+    }
+
+    /// A dashed line marking where a page starts, with a small label: centered for a
+    /// break written into the note, at the right end for the page lines preview.
+    static func drawPageLine(y: CGFloat, from minX: CGFloat, to maxX: CGFloat, label: String, centered: Bool, color: NSColor) {
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10, weight: .medium),
+            .foregroundColor: Palette.tertiaryText,
+        ]
+        let size = (label as NSString).size(withAttributes: attrs)
+        let labelX = centered ? round((minX + maxX - size.width) / 2) : maxX - size.width
+        let gap: CGFloat = 8
+        let line = NSBezierPath()
+        let y = round(y) + 0.5
+        line.move(to: NSPoint(x: minX, y: y))
+        line.line(to: NSPoint(x: labelX - gap, y: y))
+        if centered {
+            line.move(to: NSPoint(x: labelX + size.width + gap, y: y))
+            line.line(to: NSPoint(x: maxX, y: y))
+        }
+        line.lineWidth = 1
+        line.setLineDash([4, 3], count: 2, phase: 0)
+        color.setStroke()
+        line.stroke()
+        (label as NSString).draw(at: NSPoint(x: labelX, y: round(y - size.height / 2)), withAttributes: attrs)
     }
 
     private func drawInlineMath(in chars: NSRange, storage: NSTextStorage, origin: NSPoint) {

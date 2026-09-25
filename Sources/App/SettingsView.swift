@@ -41,6 +41,14 @@ struct SettingsView: View {
             Toggle("Check spelling while typing", isOn: $settings.spellcheck)
 
             Section {
+                Toggle("Show page lines", isOn: $settings.showPageLines)
+            } footer: {
+                Text("Dashed lines show where each page of an exported PDF starts. Type /page break to start a new page yourself.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
                 Toggle("Suggest note icons", isOn: $settings.suggestIcons)
                     .disabled(!NoteIcons.isAvailable)
             } footer: {

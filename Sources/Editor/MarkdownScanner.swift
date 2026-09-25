@@ -73,12 +73,14 @@ struct TableSpec: Hashable {
 /// Portable column layout markers (HTML comments, invisible in other renderers):
 /// `<!-- columns -->`, `<!-- columns 60/40 -->`, `<!-- column -->`, `<!-- /columns -->`.
 /// `<!-- float right -->` / `<!-- float left -->` directly above a table or image lets
-/// the text that follows wrap beside it.
+/// the text that follows wrap beside it. `<!-- pagebreak -->` starts a new page in a PDF
+/// (Obsidian's `<div style="page-break-after: always;"></div>` works too).
 enum ColumnMarker: Hashable {
     case start(ratios: [Int])
     case split
     case end
     case float(right: Bool)
+    case pageBreak
 }
 
 enum BlockKind: Hashable {
@@ -304,8 +306,11 @@ enum MarkdownScanner {
 
     static func columnMarker(_ line: String) -> ColumnMarker? {
         let t = line.trimmingCharacters(in: .whitespaces)
+        let lower = t.lowercased()
+        if lower.hasPrefix("<div"), lower.hasSuffix("</div>"), lower.contains("page-break-") { return .pageBreak }
         guard t.hasPrefix("<!--"), t.hasSuffix("-->") else { return nil }
         let inner = t.dropFirst(4).dropLast(3).trimmingCharacters(in: .whitespaces).lowercased()
+        if inner == "pagebreak" || inner == "page break" { return .pageBreak }
         if inner == "/columns" { return .end }
         if inner == "float right" { return .float(right: true) }
         if inner == "float left" { return .float(right: false) }

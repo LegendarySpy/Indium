@@ -15,6 +15,8 @@ extension NSAttributedString.Key {
     static let mdInlineBox = NSAttributedString.Key("indium.inlineBox")
     /// Horizontal rule.
     static let mdRule = NSAttributedString.Key("indium.rule")
+    /// A page break written into the note, drawn as a labeled dashed line.
+    static let mdPageBreak = NSAttributedString.Key("indium.pageBreak")
 }
 
 final class InlineMath: NSObject {
@@ -332,7 +334,7 @@ final class MarkdownStyler {
             switch m {
             case let .start(ratios): open = (i, ratios, [])
             case .split: open?.splits.append(i)
-            case .float: break
+            case .float, .pageBreak: break
             case .end:
                 if let o = open {
                     let n = o.splits.count + 1
@@ -439,6 +441,14 @@ final class MarkdownStyler {
         guard let first = lineRanges.first else { return }
 
         switch block.kind {
+        case .columnMarker(.pageBreak) where currentCell == nil && !config.printing:
+            if hides(active: touches(first)) {
+                s.addAttributes([.mdHidden: true, .mdPageBreak: true,
+                                 .paragraphStyle: paragraph(fixedHeight: round(typo.size * 2.2))], range: r)
+            } else {
+                s.addAttribute(.foregroundColor, value: Palette.syntax, range: first)
+            }
+
         case .columnMarker:
             // Layout markers are arranged from the page, never typed over: they only
             // show when the writer asked to always see Markdown.
@@ -453,6 +463,10 @@ final class MarkdownStyler {
         case .blank where followsFloat:
             collapse(r, in: s)
 
+        case .blank where config.printing:
+            // On paper a blank line only needs to separate blocks, not add a full line.
+            s.addAttribute(.paragraphStyle, value: paragraph(fixedHeight: round(typo.size * 0.5)), range: r)
+
         case .blank:
             s.addAttribute(.paragraphStyle, value: paragraph(after: 0, lineSpacing: round(typo.lineSpacing * 0.5)), range: r)
 
@@ -463,7 +477,7 @@ final class MarkdownStyler {
             let font = typo.heading(level)
             let marker = NSRange(location: first.location, length: min(markerLength, first.length))
             let markerWidth = currentCell == nil ? min(width(of: text.substring(with: marker), font: font), gutter) : 0
-            let before: CGFloat = [1.5, 1.25, 1.0, 0.8, 0.7, 0.7][level - 1] * typo.size
+            let before: CGFloat = [1.5, 1.25, 1.0, 0.8, 0.7, 0.7][level - 1] * typo.size * (config.printing ? 0.75 : 1)
             s.addAttributes([.font: font,
                              .paragraphStyle: paragraph(first: -markerWidth, before: before, after: round(typo.size * 0.35),
                                                         lineSpacing: round(font.pointSize * 0.22))], range: r)
@@ -593,7 +607,7 @@ final class MarkdownStyler {
         let content = NSRange(location: block.range.location, length: max(0, NSMaxRange(lines.last!) - block.range.location))
         let active = touches(content)
         let column = contentWidth
-        let pad = round(typo.size * 0.55)
+        let pad = round(typo.size * (config.printing ? 0.35 : 0.55))
 
         guard let render else {
             let font = typo.code
