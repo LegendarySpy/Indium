@@ -880,12 +880,25 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     // MARK: Lists
 
+    private static let headingPrefix = try! NSRegularExpression(pattern: "^#{1,6}[ \t]+")
+
     func handleNewline() -> Bool {
         let sel = textView.selectedRange()
         guard sel.length == 0 else { return false }
         let line = lineRange(at: sel.location).content
         let text = ns.substring(with: line) as NSString
         let full = NSRange(location: 0, length: text.length)
+        // Return at the visible start of a heading, list item or quote (the caret sits
+        // just after its hidden prefix) moves the whole line down instead of splitting
+        // "## " off from its text.
+        let prefix = [Self.headingPrefix, MarkdownScanner.Regex.list, MarkdownScanner.Regex.quote].lazy
+            .compactMap { $0.firstMatch(in: text as String, range: full)?.range.length }.first
+        if let prefix, sel.location > line.location, sel.location <= line.location + prefix,
+           !text.substring(from: prefix).trimmingCharacters(in: .whitespaces).isEmpty {
+            textView.insertText("\n", replacementRange: NSRange(location: line.location, length: 0))
+            textView.setSelectedRange(NSRange(location: sel.location + 1, length: 0))
+            return true
+        }
         if let m = MarkdownScanner.Regex.list.firstMatch(in: text as String, range: full) {
             let prefixLength = m.range.length
             guard sel.location >= line.location + prefixLength else { return false }

@@ -122,6 +122,10 @@ enum DebugSnapshot {
                 print("RENAMED url:", target.note?.url?.path ?? "nil")
             }
             if d.bool(forKey: "IndiumZoom") { window.zoom(nil) }
+            if d.bool(forKey: "IndiumReturn") {
+                target.editor.textView.insertNewline(nil)
+                print("RETURN text:", target.editor.text.debugDescription, "caret:", target.editor.textView.selectedRange().location)
+            }
             if let find = d.string(forKey: "IndiumExternalFind"), let url = target.note?.url {
                 // Plays another app editing the open note on disk.
                 let replace = d.string(forKey: "IndiumExternalReplace") ?? ""
