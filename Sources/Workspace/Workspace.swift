@@ -49,9 +49,9 @@ final class Workspace {
         // files may not be downloaded yet), so the first scan never runs on the main
         // thread; windows fill in when it lands.
         let root = self.root
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let scan = Workspace.scan(root)
-            DispatchQueue.main.async { [weak self] in
+            DispatchQueue.main.async {
                 guard let self else { return }
                 self.tree = scan.tree
                 self.notes = scan.notes

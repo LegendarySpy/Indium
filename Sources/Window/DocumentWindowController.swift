@@ -201,10 +201,23 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         fadeMask.frame = scroll.bounds
         topFade.frame = CGRect(x: 0, y: 0, width: max(0, scroll.bounds.width - strip), height: scroll.bounds.height)
         scrollerStrip.frame = CGRect(x: scroll.bounds.width - strip, y: 0, width: strip, height: scroll.bounds.height)
-        let clearUntil: CGFloat = 0
-        let solidFrom = 30 / h
-        topFade.locations = [NSNumber(value: Double(clearUntil)), NSNumber(value: Double((clearUntil + solidFrom) / 2)),
-                             NSNumber(value: Double(solidFrom))]
+        // An eased ramp over a longer reach: nearly clear at the edge, then picking up
+        // gradually, so text softens away under the title bar instead of reading as a
+        // straight fade line (most visible over selections and tinted blocks).
+        let reach: CGFloat = 46
+        let steps = 10
+        var colors: [CGColor] = []
+        var locations: [NSNumber] = []
+        for i in 0...steps {
+            let t = CGFloat(i) / CGFloat(steps)
+            let eased = pow(t * t * (3 - 2 * t), 1.6)
+            colors.append(NSColor.black.withAlphaComponent(eased).cgColor)
+            locations.append(NSNumber(value: Double(t * reach / h)))
+        }
+        colors.append(NSColor.black.cgColor)
+        locations.append(1)
+        topFade.colors = colors
+        topFade.locations = locations
         CATransaction.commit()
     }
 
@@ -501,8 +514,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func setHeading2(_ sender: Any?) { editor.setHeading(2) }
     @objc func setHeading3(_ sender: Any?) { editor.setHeading(3) }
 
-    @objc func placeBesidePrevious(_ sender: Any?) { editor.placeBesidePrevious() }
-    @objc func makeFullWidth(_ sender: Any?) { editor.makeFullWidth() }
 
     @objc func insertImage(_ sender: Any?) {
         guard let window else { return }
@@ -565,8 +576,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             return hasNote
         case #selector(newNote(_:)):
             return workspace != nil
-        case #selector(makeFullWidth(_:)):
-            return hasNote && editor.caretIsInColumns
         case #selector(saveNote(_:)):
             item.title = note?.isTemporary == true ? "Save to Vault…" : "Save"
             return hasNote

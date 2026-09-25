@@ -32,10 +32,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private var changingImageSelection = false
     private var resolvingConflict = false
     private let imageControls = ImageControlsView()
-    let blockHandle = BlockHandleView(frame: .zero)
     let selectionBar = SelectionBarView(frame: .zero)
-    var hoveredFrame: GroupFrame?
-    var draggingBlock = false
     var textVersion = 0
     var cachedLayout: (version: Int, model: LayoutModel)?
     var slash: SlashState?
@@ -458,7 +455,6 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             old.scrollOffset = scrollView.contentView.bounds.origin.y
         }
         clearImageSelection()
-        hideBlockHandle()
         endTableEditing()
         note = newNote
         setText(newNote?.savedText ?? "")
@@ -700,7 +696,6 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func textDidChange(_ notification: Notification) {
         guard !isLoading else { return }
         hasUnsavedEdits = true
-        hideBlockHandle()
         selectionBar.dismiss()
         onTyping?()
         updateFloats()

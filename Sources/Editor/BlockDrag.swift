@@ -1,153 +1,13 @@
 import AppKit
 
-/// Hover grip and drag-to-arrange for blocks, including placing blocks side by side.
+/// Arranging blocks from a selection: floats, columns, and full width.
 extension EditorController {
-    struct GroupFrame {
-        let group: LayoutGroup
-        let rect: NSRect
-        let inColumn: Bool
-    }
-
     var layoutModel: LayoutModel {
         if let cached = cachedLayout, cached.version == textVersion { return cached.model }
         let starts = Set(styler.regions.map(\.start))
         let model = LayoutModel.build(text: storage.string as NSString, blocks: styler.blocks, validRegionStarts: starts)
         cachedLayout = (textVersion, model)
         return model
-    }
-
-    /// Frames (text view coordinates) of the blocks currently on screen.
-    func visibleGroupFrames() -> [GroupFrame] {
-        guard let container = textView.textContainer else { return [] }
-        let origin = textView.textContainerOrigin
-        let visible = textView.visibleRect.insetBy(dx: 0, dy: -200)
-        let glyphsOnScreen = layoutManager.glyphRange(forBoundingRect: visible.offsetBy(dx: -origin.x, dy: -origin.y), in: container)
-        let charsOnScreen = layoutManager.characterRange(forGlyphRange: glyphsOnScreen, actualGlyphRange: nil)
-        var frames: [GroupFrame] = []
-        for (group, region) in layoutModel.groups where NSIntersectionRange(group.range, charsOnScreen).length > 0 || group.range.length == 0 {
-            let glyphs = layoutManager.glyphRange(forCharacterRange: group.range, actualCharacterRange: nil)
-            guard glyphs.length > 0 else { continue }
-            var rect = NSRect.null
-            layoutManager.enumerateLineFragments(forGlyphRange: glyphs) { frag, used, _, _, _ in
-                rect = rect.union(NSRect(x: frag.minX, y: used.minY, width: frag.width, height: max(used.height, 1)))
-            }
-            guard !rect.isNull else { continue }
-            let col = layoutManager.contentColumn(glyph: glyphs.location, container: container, origin: origin)
-            frames.append(GroupFrame(group: group, rect: NSRect(x: col.x, y: rect.minY + origin.y, width: col.width, height: rect.height),
-                                     inColumn: region != nil))
-        }
-        return frames
-    }
-
-    // MARK: Hover
-
-    func hideBlockHandle() {
-        guard !draggingBlock else { return }
-        blockHandle.isHidden = true
-        hoveredFrame = nil
-    }
-
-    // MARK: Dragging
-
-    func beginBlockDrag(with event: NSEvent) {
-        guard let source = hoveredFrame, let window = textView.window else { return }
-        draggingBlock = true
-        defer { draggingBlock = false }
-        blockHandle.isHidden = true
-
-        // A lifted snapshot of the block follows the pointer.
-        let snapshotRect = source.rect.insetBy(dx: -6, dy: -4)
-        let ghost = NSImageView(frame: snapshotRect)
-        if let rep = textView.bitmapImageRepForCachingDisplay(in: snapshotRect) {
-            textView.cacheDisplay(in: snapshotRect, to: rep)
-            let image = NSImage(size: snapshotRect.size)
-            image.addRepresentation(rep)
-            ghost.image = image
-        }
-        ghost.wantsLayer = true
-        ghost.layer?.cornerRadius = 10
-        ghost.layer?.backgroundColor = Palette.background.cgColor
-        ghost.alphaValue = 0.88
-        ghost.shadow = {
-            let s = NSShadow()
-            s.shadowBlurRadius = 18
-            s.shadowOffset = NSSize(width: 0, height: -6)
-            s.shadowColor = NSColor.black.withAlphaComponent(0.2)
-            return s
-        }()
-        let indicator = DropIndicatorView()
-        indicator.isHidden = true
-        textView.addSubview(indicator)
-        textView.addSubview(ghost)
-
-        let start = textView.convert(event.locationInWindow, from: nil)
-        let offset = NSPoint(x: start.x - snapshotRect.minX, y: start.y - snapshotRect.minY)
-        var target: DropTarget?
-        NSCursor.closedHand.push()
-        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
-            if next.type == .leftMouseUp { break }
-            textView.autoscroll(with: next)
-            let p = textView.convert(next.locationInWindow, from: nil)
-            ghost.setFrameOrigin(NSPoint(x: p.x - offset.x, y: p.y - offset.y))
-            target = dropTarget(at: p, dragging: source.group)
-            showIndicator(indicator, for: target)
-        }
-        NSCursor.pop()
-        ghost.removeFromSuperview()
-        indicator.removeFromSuperview()
-        if let target { moveBlock(source.group, to: target) }
-    }
-
-    private func dropTarget(at p: NSPoint, dragging: LayoutGroup) -> DropTarget? {
-        let frames = visibleGroupFrames()
-        let candidates = frames.filter { f in
-            p.y >= f.rect.minY - 14 && p.y <= f.rect.maxY + 14 && (!f.inColumn || (p.x >= f.rect.minX - 16 && p.x <= f.rect.maxX + 16))
-        }
-        let frame = candidates.min { abs($0.rect.midY - p.y) < abs($1.rect.midY - p.y) }
-            ?? frames.min { abs($0.rect.midY - p.y) < abs($1.rect.midY - p.y) }
-        guard let frame, frame.group !== dragging else { return nil }
-        let edge = min(frame.rect.width * 0.22, 130)
-        if p.x < frame.rect.minX + edge { return .beside(frame.group, leading: true) }
-        if p.x > frame.rect.maxX - edge { return .beside(frame.group, leading: false) }
-        return p.y < frame.rect.midY ? .before(frame.group) : .after(frame.group)
-    }
-
-    private func showIndicator(_ indicator: DropIndicatorView, for target: DropTarget?) {
-        guard let target, let frame = visibleGroupFrames().first(where: { $0.group === target.group }) else {
-            indicator.isHidden = true
-            return
-        }
-        let r = frame.rect
-        let wasHidden = indicator.isHidden
-        var newFrame = indicator.frame
-        switch target {
-        case .before:
-            indicator.style = .line
-            newFrame = NSRect(x: r.minX - 8, y: r.minY - 12, width: r.width + 16, height: 10)
-        case .after:
-            indicator.style = .line
-            newFrame = NSRect(x: r.minX - 8, y: r.maxY + 2, width: r.width + 16, height: 10)
-        case let .beside(_, leading):
-            indicator.style = .area
-            let w = r.width * 0.48
-            newFrame = NSRect(x: leading ? r.minX - 6 : r.maxX - w + 6, y: r.minY - 6, width: w, height: max(r.height + 12, 44))
-        }
-        if wasHidden || newFrame.size != indicator.frame.size {
-            indicator.frame = newFrame
-        } else if newFrame != indicator.frame {
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.12
-                indicator.animator().frame = newFrame
-            }
-        }
-        indicator.isHidden = false
-        indicator.needsDisplay = true
-    }
-
-    func moveBlock(_ group: LayoutGroup, to target: DropTarget) {
-        guard let edit = layoutModel.move(group, to: target) else { return }
-        replace(edit.range, with: edit.text,
-                select: NSRange(location: edit.range.location + edit.movedOffset, length: 0), actionName: "Move Block")
     }
 
     // MARK: Selection bar
@@ -162,7 +22,7 @@ extension EditorController {
     func updateSelectionBar() {
         let sel = textView.selectedRange()
         let groups = selectedGroups()
-        guard textView.isEditable, sel.length > 0, !textView.isTrackingMouse, !draggingBlock,
+        guard textView.isEditable, sel.length > 0, !textView.isTrackingMouse,
               let first = groups.first, let container = textView.textContainer, selectionIsBlockSized(sel, groups: groups) else {
             selectionBar.dismiss()
             return
@@ -372,32 +232,6 @@ extension EditorController {
 
     private func caretGroup() -> LayoutGroup? {
         layoutModel.group(containing: textView.selectedRange().location)
-    }
-
-    /// Places the block at the caret beside the block before it.
-    func placeBesidePrevious() {
-        let model = layoutModel
-        guard let group = caretGroup(), let i = model.itemIndex(of: group), i > 0 else { NSSound.beep(); return }
-        let anchor: LayoutGroup?
-        switch model.items[i] {
-        case .region:
-            // Inside columns already: join the column to the left, or the previous block in this one.
-            let all = model.groups.map(\.group)
-            anchor = all.firstIndex { $0 === group }.flatMap { $0 > 0 ? all[$0 - 1] : nil }
-        case .group:
-            switch model.items[i - 1] {
-            case let .group(g): anchor = g
-            case let .region(r): anchor = r.columns.last?.groups.last
-            }
-        }
-        guard let anchor else { NSSound.beep(); return }
-        moveBlock(group, to: .beside(anchor, leading: false))
-    }
-
-    /// Returns the columns containing the caret to a single full-width flow.
-    func makeFullWidth() {
-        guard let group = caretGroup(), let edit = layoutModel.unwrapRegion(containing: group) else { NSSound.beep(); return }
-        replace(edit.range, with: edit.text, select: NSRange(location: edit.range.location, length: 0), actionName: "Full Width")
     }
 
     var caretIsInColumns: Bool {

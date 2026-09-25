@@ -153,8 +153,6 @@ enum MainMenu {
         add(m, "Inline Equation", #selector(W.insertInlineMath(_:)), "m", [.command, .control])
         add(m, "Display Equation", #selector(W.insertDisplayMath(_:)), "m", [.command, .control, .shift])
         m.addItem(.separator())
-        add(m, "Place Beside Previous Block", #selector(W.placeBesidePrevious(_:)), "]", [.command, .control])
-        add(m, "Make Full Width", #selector(W.makeFullWidth(_:)), "[", [.command, .control])
         return m
     }
 
