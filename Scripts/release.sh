@@ -26,13 +26,14 @@ xcodebuild -project Indium.xcodeproj -scheme Indium -configuration Release -deri
   MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD" build
 
 if [[ -n "$IDENTITY" ]]; then
-  # Inside out: Sparkle's helpers, the framework, then the app.
+  # Inside out: Sparkle's helpers, the framework, the Quick Look extension, then the app.
   sign() { codesign --force --timestamp --options runtime --sign "$IDENTITY" "$@"; }
   S="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
   sign "$S/XPCServices/Installer.xpc"
   sign --preserve-metadata=entitlements "$S/XPCServices/Downloader.xpc"
   sign "$S/Autoupdate" "$S/Updater.app"
   sign "$APP/Contents/Frameworks/Sparkle.framework"
+  sign --entitlements QuickLook/QuickLook.entitlements "$APP/Contents/PlugIns/IndiumQuickLook.appex"
   sign "$APP"
   codesign --verify --deep --strict "$APP"
 fi

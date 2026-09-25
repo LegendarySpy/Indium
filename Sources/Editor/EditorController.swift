@@ -218,81 +218,14 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// an exclusion beside it makes the text that follows wrap around it.
     func updateFloats() {
         guard let container = textView.textContainer else { return }
-        var floats: [(location: Int, decoration: BlockDecoration, right: Bool)] = []
-        storage.enumerateAttribute(.mdBlock, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
-            if let d = value as? BlockDecoration, case let .float(right) = d.placement { floats.append((range.location, d, right)) }
-        }
-        if floats.isEmpty {
-            if !container.exclusionPaths.isEmpty { container.exclusionPaths = [] }
-            if !layoutManager.floatFrames.isEmpty {
-                layoutManager.floatFrames = [:]
-                textView.needsDisplay = true
-            }
+        let hadFloats = !layoutManager.floatFrames.isEmpty
+        guard let bottom = layoutManager.placeFloats(in: container, styler: styler) else {
+            if hadFloats { textView.needsDisplay = true }
             return
         }
-        let gutter = layoutManager.gutter
-        let width = container.size.width
-        let gap = round(styler.config.typography.size * 1.6)
-        // An exclusion only moves text after its own block, so a couple of passes settle.
-        for _ in 0..<3 {
-            var frames: [Int: NSRect] = [:]
-            var rects: [NSRect] = []
-            for f in floats {
-                let g = layoutManager.glyphIndexForCharacter(at: f.location)
-                layoutManager.ensureLayout(forGlyphRange: NSRange(location: 0, length: min(g + 1, layoutManager.numberOfGlyphs)))
-                let top = layoutManager.lineFragmentRect(forGlyphAt: g, effectiveRange: nil).minY
-                let size: NSSize
-                switch f.decoration.content {
-                case let .table(t): size = NSSize(width: t.width, height: t.height)
-                case let .image(_, s, _, _): size = s
-                case let .math(r, scale): size = NSSize(width: r.width * scale, height: r.height * scale)
-                }
-                let x = f.right ? width - gutter - size.width : gutter
-                // The table's top lines up with the first text beside it (a heading's
-                // spacing above would otherwise leave the table hanging higher).
-                let y = max(top + f.decoration.padding, firstTextTop(after: f.location) ?? 0)
-                frames[f.location] = NSRect(x: x, y: y, width: size.width, height: size.height)
-                // Ends at the block's bottom edge, so the next line isn't squeezed by padding.
-                let height = y - top + size.height + 2
-                rects.append(f.right
-                    ? NSRect(x: x - gap, y: top, width: width - x + gap, height: height)
-                    : NSRect(x: 0, y: top, width: x + size.width + gap, height: height))
-            }
-            layoutManager.floatFrames = frames
-            let current = container.exclusionPaths.map(\.bounds)
-            if current == rects { break }
-            container.exclusionPaths = rects.map { NSBezierPath(rect: $0) }
-            // Lines already laid out beside the old area must not survive the change
-            // (after a window zoom they otherwise keep stale, overlapping positions).
-            layoutManager.invalidateLayout(forCharacterRange: NSRange(location: 0, length: storage.length), actualCharacterRange: nil)
-            layoutManager.invalidateDisplay(forCharacterRange: NSRange(location: 0, length: storage.length))
-        }
         // A float near the end still needs page below it.
-        let bottom = layoutManager.floatFrames.values.map(\.maxY).max() ?? 0
         textView.minSize = NSSize(width: 0, height: bottom + textView.textContainerInset.height * 2 + 40)
         textView.needsDisplay = true
-    }
-
-    /// Top of the first visible text after the block at `location` (container coordinates).
-    private func firstTextTop(after location: Int) -> CGFloat? {
-        guard let i = styler.blockIndex(containing: location) else { return nil }
-        let ns = storage.string as NSString
-        var c = NSMaxRange(styler.blocks[i].range)
-        let limit = min(ns.length, c + 600)
-        while c < limit {
-            let hidden = storage.attribute(.mdHidden, at: c, effectiveRange: nil) != nil
-            let ch = ns.character(at: c)
-            if !hidden, ch != 0x0A, ch != 0x20, ch != 0x09 { break }
-            c += 1
-        }
-        guard c < limit else { return nil }
-        let glyph = layoutManager.glyphIndexForCharacter(at: c)
-        layoutManager.ensureLayout(forGlyphRange: NSRange(location: 0, length: glyph + 1))
-        let frag = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
-        let baseline = layoutManager.location(forGlyphAt: glyph).y
-        let font = storage.attribute(.font, at: c, effectiveRange: nil) as? NSFont ?? styler.config.typography.body
-        // Cap height, not ascender: the grid's top edge meets the tops of the letters.
-        return frag.minY + baseline - font.capHeight - 3
     }
 
     private var fullLayoutWork: DispatchWorkItem?
