@@ -213,7 +213,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 switch $0.kind { case .image, .math, .table: true; default: false }
             }
         guard needsRestyle else { return }
-        restyleTimer = Timer.scheduledTimer(withTimeInterval: textView.inLiveResize ? 0.12 : 0, repeats: false) { [weak self] _ in
+        restyleTimer = Timer.scheduledTimer(withTimeInterval: textView.inLiveResize || textView.isAnimatingFrame ? 0.12 : 0, repeats: false) { [weak self] _ in
             self?.restyleAll()
         }
     }

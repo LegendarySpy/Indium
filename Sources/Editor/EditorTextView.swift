@@ -11,6 +11,9 @@ final class EditorTextView: NSTextView {
     var topPadding: CGFloat = 92 { didSet { updateGeometry() } }
     private(set) var effectiveColumn: CGFloat = 700
     private(set) var isTrackingMouse = false
+    /// The view is being resized by an animation (the sidebar sliding in): treat it
+    /// like a live resize and restyle once it settles.
+    var isAnimatingFrame = false
     private var insetX: CGFloat = 0
 
     override var textContainerOrigin: NSPoint {
