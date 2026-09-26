@@ -37,6 +37,15 @@ enum DebugSnapshot {
 
     static func runIfRequested(_ controller: DocumentWindowController) {
         let d = UserDefaults.standard
+        if let steps = d.string(forKey: "IndiumSidebarSteps") {
+            if let size = d.string(forKey: "IndiumSize")?.split(separator: "x").compactMap({ Double($0) }), size.count == 2 {
+                controller.window?.setContentSize(NSSize(width: size[0], height: size[1]))
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                controller.debugSidebar(steps: steps.split(separator: ",").map(String.init), out: d.string(forKey: "IndiumSnapshot"))
+            }
+            return
+        }
         if let out = d.string(forKey: "IndiumPickerShot") {
             let picker = IconPickerController()
             picker.current = "atom"

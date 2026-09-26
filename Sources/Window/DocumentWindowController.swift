@@ -16,8 +16,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private let fadeMask = CALayer()
     private let scrollerStrip = CALayer()
     private let findHost = FindBarHost()
-    private weak var filePanel: FilePanelView?
-    private var filePopover: NSPopover?
+    private var sidebar: SidebarView?
+    private var sidebarGlass: NSView?
+    private var sidebarVisible = false
+    /// Where the page starts: past the sidebar when it's open and there's room.
+    private var pageLeading: [NSLayoutConstraint] = []
     private var quickOpen: QuickOpenView?
     private var monitors: [Any] = []
     private var observers: [Any] = []
@@ -67,6 +70,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         } else {
             titleBar.isTemporary = false
             refreshEmptyState()
+            if kind == .vault, UserDefaults.standard.bool(forKey: Self.sidebarKey) {
+                setSidebarVisible(true, remember: false)
+            }
         }
     }
 
@@ -91,14 +97,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
         }
-        NSLayoutConstraint.activate([
+        pageLeading = [
+            scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            emptyState.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+        ]
+        NSLayoutConstraint.activate(pageLeading + [
             // The page begins below the title bar, so nothing of it sits under the controls.
             scroll.topAnchor.constraint(equalTo: root.topAnchor, constant: TitleBarView.height),
-            scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             emptyState.topAnchor.constraint(equalTo: root.topAnchor),
-            emptyState.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             emptyState.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             emptyState.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             findHost.topAnchor.constraint(equalTo: root.topAnchor, constant: TitleBarView.height + 6),
@@ -140,12 +148,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             self.window?.makeFirstResponder(self.editor.textView)
         }
 
-        observers.append(NotificationCenter.default.addObserver(forName: Workspace.didChange, object: nil, queue: .main) { [weak self] _ in
-            self?.filePanel?.reload()
+        observers.append(NotificationCenter.default.addObserver(forName: Workspace.didChange, object: nil, queue: .main) { [weak self] n in
+            guard let self, (n.object as? Workspace) === self.workspace else { return }
+            self.sidebar?.sync()
         })
         observers.append(NotificationCenter.default.addObserver(forName: NoteIcons.didChange, object: nil, queue: .main) { [weak self] n in
             guard let self else { return }
-            self.filePanel?.reload()
+            if let url = n.object as? URL { self.sidebar?.refreshIcon(for: url) }
             if let url = n.object as? URL, url.standardizedFileURL == self.note?.url?.standardizedFileURL {
                 self.titleBar.setIcon(NoteIcons.shared.icon(for: url, in: self.workspace))
             }
@@ -179,6 +188,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         super.showWindow(sender)
         titleBar.alignWithTrafficLights()
         layoutTopFade()
+        if sidebarVisible { applyPageInset(pageInset()) }
     }
 
     /// Windowed, the controls live in the system title bar so they get its clicks. In
@@ -232,6 +242,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     func windowDidResize(_ notification: Notification) {
         titleBar.alignWithTrafficLights()
         layoutTopFade()
+        if sidebarVisible, pageLeading.first?.constant != pageInset() { applyPageInset(pageInset()) }
     }
     func windowDidEnterFullScreen(_ notification: Notification) { titleBar.alignWithTrafficLights() }
     func windowWillEnterFullScreen(_ notification: Notification) { hostTitleBar(inFullScreen: true) }
@@ -260,10 +271,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         editor.workspace = workspace
         noteCache.removeAll()
         noteOrder.removeAll()
-        filePanel?.workspace = workspace
+        sidebar?.workspace = workspace
         if kind == .vault {
             editor.load(nil)
             refreshEmptyState()
+            if workspace == nil {
+                setSidebarVisible(false, remember: false)
+            } else if UserDefaults.standard.bool(forKey: Self.sidebarKey), !sidebarVisible {
+                setSidebarVisible(true, remember: false)
+            }
         }
     }
 
@@ -305,7 +321,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         titleBar.setIcon(note.url.flatMap { NoteIcons.shared.icon(for: $0, in: workspace) })
         window?.title = note.title
         window?.representedURL = note.url
-        filePanel?.currentURL = note.url
+        sidebar?.currentURL = note.url
         if kind == .vault, let url = note.url, let ws = workspace {
             UserDefaults.standard.set(ws.relativePath(url), forKey: "lastNote")
         }
@@ -333,19 +349,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         noteOrder.append(key)
         if noteOrder.count > 24 { noteCache.removeValue(forKey: noteOrder.removeFirst()) }
 
-        if editor.note !== note {
-            // Cross-fade the page rather than cutting between notes.
-            if editor.note != nil, let layer = root.layer ?? { root.wantsLayer = true; return root.layer }() {
-                let fade = CATransition()
-                fade.type = .fade
-                fade.duration = 0.16
-                layer.add(fade, forKey: "noteSwitch")
-            }
-            editor.load(note)
-        }
+        // Switching notes is instant: no transition between pages.
+        if editor.note !== note { editor.load(note) }
         refreshEmptyState()
         updateTitle()
-        hideFiles()
         window?.makeFirstResponder(editor.textView)
         if let query, !query.isEmpty {
             let r = (editor.text as NSString).range(of: query, options: [.caseInsensitive, .diacriticInsensitive])
@@ -359,6 +366,36 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     #if DEBUG
     func debugRename(_ name: String) { rename(to: name) }
+
+    func debugSidebar(steps: [String], out: String?) {
+        setSidebarVisible(true, remember: false)
+        root.layoutSubtreeIfNeeded()
+        guard let sidebar else { exit(1) }
+        print("START\n" + sidebar.debugDump())
+        func run(_ i: Int) {
+            guard i < steps.count else {
+                if let out, let view = window?.contentView?.superview, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                    view.cacheDisplay(in: view.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out))
+                }
+                exit(0)
+            }
+            if steps[i] == "wait" {
+                // Long enough for the file watcher's rescan to land.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    print("AFTER WAIT\n" + sidebar.debugDump())
+                    run(i + 1)
+                }
+                return
+            }
+            sidebar.debugStep(steps[i])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                print("STEP \(steps[i])\n" + sidebar.debugDump())
+                run(i + 1)
+            }
+        }
+        run(0)
+    }
     #endif
 
     private func rename(to name: String, quietly: Bool = false) {
@@ -375,50 +412,119 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         updateTitle()
     }
 
-    // MARK: File panel
+    // MARK: Sidebar
+
+    private static let sidebarKey = "showSidebar"
+    private static let sidebarInset: CGFloat = 8
+    /// Narrower than this and the sidebar floats over the page instead of moving it.
+    private static let minPageWidth: CGFloat = 440
 
     @objc func toggleFiles(_ sender: Any?) {
-        if filePopover?.isShown == true { hideFiles() } else { showFiles() }
+        setSidebarVisible(!sidebarVisible, animated: true)
+        // From the keyboard, arrow keys go to the list; a click leaves you in the note.
+        if sidebarVisible, NSApp.currentEvent?.type == .keyDown { sidebar?.focus() }
     }
 
-    /// Files open in a popover anchored to the title bar button: transient like a menu,
-    /// never reshaping the page.
-    private func showFiles() {
-        guard let workspace, kind == .vault else { return }
-        dismissQuickOpen()
-        let panel = FilePanelView(frame: NSRect(x: 0, y: 0, width: 300, height: 480))
-        panel.workspace = workspace
-        panel.currentURL = note?.url
-        let popover = NSPopover()
-        popover.behavior = .transient
-        popover.animates = true
-        let controller = NSViewController()
-        controller.view = panel
-        controller.preferredContentSize = panel.frame.size
-        popover.contentViewController = controller
-        panel.onOpen = { [weak self, weak popover] url in
-            popover?.close()
-            self?.open(url)
+    /// The sidebar docks on the window's left edge and stays while you work. It blurs
+    /// in and out, and the page slides over to make room when the window is wide enough.
+    private func setSidebarVisible(_ visible: Bool, animated: Bool = false, remember: Bool = true) {
+        guard kind == .vault else { return }
+        if visible, workspace == nil { return }
+        if remember { UserDefaults.standard.set(visible, forKey: Self.sidebarKey) }
+        guard visible != sidebarVisible else { return }
+        sidebarVisible = visible
+        titleBar.filesButton.isOn = visible
+        if visible { installSidebar() }
+        guard let glass = sidebarGlass, let sidebar else { return }
+        // Settle its frame first, so only the fade and blur animate.
+        root.layoutSubtreeIfNeeded()
+        if !visible, sidebar.hasFocus, note != nil { window?.makeFirstResponder(editor.textView) }
+
+        let inset = pageInset()
+        guard animated, window?.isVisible == true else {
+            glass.alphaValue = visible ? 1 : 0
+            glass.isHidden = !visible
+            applyPageInset(inset)
+            return
         }
-        panel.onDismiss = { [weak popover] in popover?.close() }
-        panel.onCreateNote = { [weak self, weak popover] folder in
-            popover?.close()
-            self?.createNote(in: folder)
-        }
-        filePanel = panel
-        filePopover = popover
-        titleBar.filesButton.isOn = true
-        titleBar.setChromeVisible(true)
-        NotificationCenter.default.addObserver(forName: NSPopover.didCloseNotification, object: popover, queue: .main) { [weak self] _ in
-            self?.titleBar.filesButton.isOn = false
-            if self?.note != nil { self?.window?.makeFirstResponder(self?.editor.textView) }
-        }
-        popover.show(relativeTo: titleBar.filesButton.bounds, of: titleBar.filesButton, preferredEdge: .maxY)
-        panel.focus()
+        glass.isHidden = false
+        editor.textView.isAnimatingFrame = true
+        blur(sidebar, from: visible ? 14 : 0, to: visible ? 0 : 14, duration: 0.3)
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.3
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.8, 0.2, 1)
+            context.allowsImplicitAnimation = true
+            glass.animator().alphaValue = visible ? 1 : 0
+            for c in pageLeading { c.animator().constant = inset }
+            titleBar.setContentInset(inset, animated: true)
+            root.layoutSubtreeIfNeeded()
+        }, completionHandler: { [weak self] in
+            // Toggled again before this finished: the newer animation cleans up.
+            guard let self, self.sidebarVisible == visible else { return }
+            self.editor.textView.isAnimatingFrame = false
+            if !visible { glass.isHidden = true }
+            sidebar.contentFilters = []
+        })
     }
 
-    private func hideFiles() {
-        filePopover?.close()
+    private func installSidebar() {
+        guard sidebar == nil else { return }
+        let view = SidebarView(frame: NSRect(x: 0, y: 0, width: SidebarView.width, height: 480))
+        view.workspace = workspace
+        view.currentURL = note?.url
+        view.onOpen = { [weak self] url in self?.open(url) }
+        view.onDismiss = { [weak self] in
+            guard let self, self.note != nil else { return }
+            self.window?.makeFirstResponder(self.editor.textView)
+        }
+        view.onCreateNote = { [weak self] folder in self?.createNote(in: folder, renameIn: .sidebar) }
+        let glass = Glass.make(cornerRadius: 16, content: view)
+        glass.translatesAutoresizingMaskIntoConstraints = false
+        glass.alphaValue = 0
+        glass.isHidden = true
+        // Under the title bar's controls when they're on the page (full screen); over the page.
+        if titleBar.superview === root {
+            root.addSubview(glass, positioned: .below, relativeTo: titleBar)
+        } else {
+            root.addSubview(glass)
+        }
+        let inset = Self.sidebarInset
+        NSLayoutConstraint.activate([
+            glass.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: inset),
+            // Below the title bar row, so the window buttons and controls sit clear above it.
+            glass.topAnchor.constraint(equalTo: root.topAnchor, constant: TitleBarView.height + 2),
+            glass.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -inset),
+            glass.widthAnchor.constraint(equalToConstant: SidebarView.width),
+        ])
+        sidebar = view
+        sidebarGlass = glass
+    }
+
+    private func pageInset() -> CGFloat {
+        let reserve = SidebarView.width + Self.sidebarInset
+        guard sidebarVisible, root.bounds.width - reserve >= Self.minPageWidth else { return 0 }
+        return reserve
+    }
+
+    private func applyPageInset(_ inset: CGFloat) {
+        for c in pageLeading { c.constant = inset }
+        titleBar.setContentInset(inset, animated: false)
+    }
+
+    /// Softens a view in or out of focus while it fades.
+    private func blur(_ view: NSView, from: CGFloat, to: CGFloat, duration: CFTimeInterval) {
+        guard let filter = CIFilter(name: "CIGaussianBlur") else { return }
+        view.wantsLayer = true
+        view.layerUsesCoreImageFilters = true
+        filter.name = "blur"
+        filter.setValue(to, forKey: kCIInputRadiusKey)
+        view.contentFilters = [filter]
+        let animation = CABasicAnimation(keyPath: "filters.blur.inputRadius")
+        animation.fromValue = from
+        animation.toValue = to
+        animation.duration = duration
+        animation.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.8, 0.2, 1)
+        view.layer?.add(animation, forKey: "blur")
     }
 
     // MARK: Quick open
@@ -438,7 +544,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             AppDelegate.shared.openFolder(nil)
             return
         }
-        hideFiles()
         if quickOpen == nil {
             let view = QuickOpenView()
             view.translatesAutoresizingMaskIntoConstraints = false
@@ -455,7 +560,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             }
             view.onCreate = { [weak self] name in
                 self?.dismissQuickOpen()
-                self?.createNote(in: nil, name: name, rename: false)
+                self?.createNote(in: nil, name: name, renameIn: .none)
             }
             view.onDismiss = { [weak self] in self?.dismissQuickOpen() }
             quickOpen = view
@@ -483,7 +588,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         createNote(in: folder)
     }
 
-    private func createNote(in folder: URL?, name: String = "Untitled", rename: Bool = true) {
+    enum RenameTarget { case none, titleBar, sidebar }
+
+    private func createNote(in folder: URL?, name: String = "Untitled", renameIn target: RenameTarget = .titleBar) {
         guard let workspace else {
             AppDelegate.shared.openFolder(nil)
             return
@@ -491,7 +598,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         do {
             let url = try workspace.createNote(in: folder ?? note?.url?.deletingLastPathComponent(), name: name)
             open(url)
-            if rename { titleBar.beginRename() }
+            switch target {
+            case .none: break
+            case .titleBar: titleBar.beginRename()
+            case .sidebar: sidebar?.beginRename(url, focusPage: true)
+            }
         } catch {
             if let window { NSAlert(error: error).beginSheetModal(for: window) }
         }
@@ -584,7 +695,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         let hasNote = note != nil
         switch item.action {
         case #selector(toggleFiles(_:)):
-            item.title = filePopover?.isShown == true ? "Hide Files" : "Show Files"
+            item.title = sidebarVisible ? "Hide Sidebar" : "Show Sidebar"
             return workspace != nil && kind == .vault
         case #selector(openQuickly(_:)), #selector(searchNotes(_:)):
             return workspace != nil

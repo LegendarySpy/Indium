@@ -40,6 +40,7 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
     private var titleHover = false { didSet { if titleHover != oldValue { needsDisplay = true } } }
     private var centerConstraints: [NSLayoutConstraint] = []
     private var leadingConstraint: NSLayoutConstraint!
+    private var titleCenter: NSLayoutConstraint!
 
     var title: String = "" {
         didSet { if !renaming { titleField.stringValue = title } }
@@ -62,7 +63,7 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
     }
 
     override init(frame: NSRect) {
-        filesButton = HoverButton(symbol: "sidebar.left", label: "Files (⌃⌘S)", target: nil, action: #selector(DocumentWindowController.toggleFiles(_:)))
+        filesButton = HoverButton(symbol: "sidebar.left", label: "Sidebar (⌃⌘S)", target: nil, action: #selector(DocumentWindowController.toggleFiles(_:)))
         searchButton = HoverButton(symbol: "magnifyingglass", label: "Open Note (⌘O)", target: nil, action: #selector(DocumentWindowController.openQuickly(_:)))
         headingButton = HoverButton(symbol: "textformat.size", label: "Text Style", target: nil, action: nil)
         boldButton = HoverButton(symbol: "bold", label: "Bold (⌘B)", target: nil, action: #selector(DocumentWindowController.toggleBold(_:)))
@@ -101,7 +102,7 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
             self?.titleHover = false
         }
         titleField.onHoverChange = { [weak self] on in self?.titleHover = on }
-        titleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        titleField.setContentCompressionResistancePriority(.init(745), for: .horizontal)
         addSubview(titleField)
         titleIcon = HoverButton(symbol: "doc.text", label: "Change Icon", pointSize: 12, target: self, action: #selector(iconClicked))
         titleIcon.restingTint = Palette.tertiaryText
@@ -114,6 +115,8 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
         isTemporary = false
 
         leadingConstraint = leftStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 80)
+        // Centered over the page when there's room; otherwise it slides aside before truncating.
+        titleCenter = titleField.centerXAnchor.constraint(equalTo: centerXAnchor).withPriority(.init(740))
         centerConstraints = [
             leftStack.centerYAnchor.constraint(equalTo: topAnchor, constant: 19),
             rightStack.centerYAnchor.constraint(equalTo: topAnchor, constant: 19),
@@ -122,10 +125,15 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
         NSLayoutConstraint.activate(centerConstraints + [
             leadingConstraint,
             rightStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            titleField.centerXAnchor.constraint(equalTo: centerXAnchor).withPriority(.defaultHigh),
+            titleCenter,
             titleField.leadingAnchor.constraint(greaterThanOrEqualTo: leftStack.trailingAnchor, constant: 16),
             titleField.trailingAnchor.constraint(lessThanOrEqualTo: rightStack.leadingAnchor, constant: -16),
         ])
+    }
+
+    /// Keeps the title centered over the page when the sidebar takes the window's left side.
+    func setContentInset(_ inset: CGFloat, animated: Bool) {
+        (animated ? titleCenter.animator() : titleCenter).constant = inset / 2
     }
 
     /// Aligns the controls with the window's traffic lights.

@@ -60,6 +60,10 @@ enum MainMenu {
     private static func fileMenu() -> NSMenu {
         let m = NSMenu(title: "File")
         add(m, "New Note", #selector(W.newNote(_:)), "n")
+        // ⌘T works too, like a new tab elsewhere; hidden so the menu shows one shortcut.
+        let newNoteT = add(m, "New Note", #selector(W.newNote(_:)), "t")
+        newNoteT.isHidden = true
+        newNoteT.allowsKeyEquivalentWhenHidden = true
         add(m, "New Temporary Note", #selector(AppDelegate.newTemporaryNote(_:)), "n", [.command, .shift])
         m.addItem(.separator())
         add(m, "Open Note…", #selector(W.openQuickly(_:)), "o")
@@ -158,7 +162,7 @@ enum MainMenu {
 
     private static func viewMenu() -> NSMenu {
         let m = NSMenu(title: "View")
-        add(m, "Show Files", #selector(W.toggleFiles(_:)), "s", [.command, .control])
+        add(m, "Show Sidebar", #selector(W.toggleFiles(_:)), "s", [.command, .control])
         m.addItem(.separator())
         add(m, "Bigger", #selector(AppDelegate.increaseTextSize(_:)), "+")
         add(m, "Smaller", #selector(AppDelegate.decreaseTextSize(_:)), "-")

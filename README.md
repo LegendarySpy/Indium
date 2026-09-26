@@ -18,7 +18,7 @@
 
 Indium is a softer, quieter take on Obsidian. I love Obsidian, but it can feel overwhelming and very full at times, and I wanted something simple that's built for taking notes.
 
-So Indium shows one screen at a time. There are no tabs, split views, or sidebars, just the note you're writing. It's a small native Mac app with full Markdown and LaTeX math, and it opens your Obsidian vault as is. Your notes stay plain `.md` files in a folder, so you can go back and forth whenever you like.
+So Indium shows one note at a time. There are no tabs or split views, just the note you're writing and, when you want it, a sidebar with your files. It's a small native Mac app with full Markdown and LaTeX math, and it opens your Obsidian vault as is. Your notes stay plain `.md` files in a folder, so you can go back and forth whenever you like.
 
 <p align="center">
   <img src="./assets/readme/screenshot.png" width="100%" alt="Indium showing its welcome note, with headings, a list, and a rendered equation" />
