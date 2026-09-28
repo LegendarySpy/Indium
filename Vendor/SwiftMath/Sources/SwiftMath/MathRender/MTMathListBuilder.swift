@@ -290,6 +290,7 @@ public struct MTMathListBuilder {
 
     /// Builds a mathlist from the internal `string`. Returns nil if there is an error.
     public mutating func build() -> MTMathList? {
+        _ = MTMathAtomFactory.indiumSymbols
         // Detect and strip delimiters, updating the string and mode
         let (cleanedString, mode) = detectAndStripDelimiters(from: self.string)
         self.string = cleanedString
@@ -420,7 +421,7 @@ public struct MTMathListBuilder {
                 }
                 // this is a superscript for the previous atom
                 // note: if the next char is the stopChar it will be consumed by the ^ and so it doesn't count as stop
-                prevAtom!.superScript = self.buildInternal(true)
+                prevAtom!.superScript = self.scriptArgument()
                 continue
             } else if char == "_" {
                 assert(!oneCharOnly, "This should have been handled before")
@@ -432,7 +433,7 @@ public struct MTMathListBuilder {
                 }
                 // this is a subscript for the previous atom
                 // note: if the next char is the stopChar it will be consumed by the _ and so it doesn't count as stop
-                prevAtom!.subScript = self.buildInternal(true)
+                prevAtom!.subScript = self.scriptArgument()
                 continue
             } else if char == "{" {
                 // this puts us in a recursive routine, and sets oneCharOnly to false and no stop character
@@ -1023,8 +1024,9 @@ public struct MTMathListBuilder {
             let modOperator = MTMathAtomFactory.atom(forLatexSymbol: "mod")!
             innerList.add(modOperator)
 
-            // Add medium space between "mod" and argument (6mu)
-            let space = MTMathSpace(space: 6.0)
+            // 6mu between "mod" and the argument, as in TeX; Indium's operator spacing
+            // already puts a thin 3mu after an operator.
+            let space = MTMathSpace(space: 3.0)
             innerList.add(space)
 
             // Parse the argument from braces
@@ -1042,6 +1044,8 @@ public struct MTMathListBuilder {
             if let negatedUnicode = Self.notCombinations[nextCommand] {
                 self.consumeNextCommand() // Remove base symbol from stream
                 return MTMathAtom(type: .relation, value: negatedUnicode)
+            } else if let negated = self.negatedAtom() {
+                return negated
             } else {
                 let errorMessage = "Unsupported \\not\\\(nextCommand) combination"
                 self.setError(.invalidCommand, message: errorMessage)
@@ -1088,6 +1092,8 @@ public struct MTMathListBuilder {
 
             return inner
         } else {
+            let custom = self.indiumAtom(forCommand: command)
+            if custom.handled { return custom.atom }
             let errorMessage = "Invalid command \\\(command)"
             self.setError(.invalidCommand, message:errorMessage)
             return nil;
@@ -1590,7 +1596,7 @@ public struct MTMathListBuilder {
     }
     
     mutating func readCommand() -> String {
-        let singleChars = "{}$#%_| ,>;!\\"
+        let singleChars = "{}$#%_| ,>;!:&\\"
         if self.hasCharacters {
             let char = self.getNextCharacter()
             if let _ = singleChars.firstIndex(of: char)  {

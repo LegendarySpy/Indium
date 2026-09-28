@@ -40,6 +40,9 @@ class MTAtomTokenizer {
         var elements: [MTBreakableElement] = []
         var index = 0
         var currentStyle = self.style
+        // Indium: the last atom that takes part in spacing (explicit spaces and style
+        // changes don't), so TeX's inter-atom spacing can go between it and the next.
+        var lastSpacingType: MTMathAtomType? = nil
 
         while index < atoms.count {
             let atom = atoms[index]
@@ -59,6 +62,34 @@ class MTAtomTokenizer {
                 atomTokenizer = MTAtomTokenizer(font: font, style: currentStyle, cramped: cramped, maxWidth: maxWidth)
             } else {
                 atomTokenizer = self
+            }
+
+            // Indium: space atoms by TeX's rules (thin after \sin before its argument,
+            // medium around binary operators, thick around relations, none in scripts for
+            // the "non-script" kinds) instead of padding every operator the same.
+            if atom.type != .space {
+                var type = (atom as? MTLargeOperator)?.spacingType ?? atom.type
+                // TeX's rules 5 and 6: a binary operator with no operand on its left (at
+                // the start, or after an operator, relation, opening bracket or comma) or
+                // none on its right is a sign, spaced like a letter: `-x`, `= -1`, `(-a)`.
+                if type == .binaryOperator {
+                    let next = atoms[(index + 1)...].first { $0.type != .space && $0.type != .style }
+                    let before: Set<MTMathAtomType> = [.binaryOperator, .largeOperator, .relation, .open, .punctuation]
+                    let after: Set<MTMathAtomType> = [.relation, .close, .punctuation]
+                    if lastSpacingType.map(before.contains) ?? true || next.map({ after.contains($0.type) }) ?? true {
+                        type = .ordinary
+                    }
+                }
+                // A sized delimiter on its own (\bigl( … \bigr)) spaces like the bracket it is.
+                if let inner = atom as? MTInner, inner.delimiterHeight != nil {
+                    if inner.rightBoundary?.nucleus.isEmpty ?? true { type = .open }
+                    else if inner.leftBoundary?.nucleus.isEmpty ?? true { type = .close }
+                }
+                if let left = lastSpacingType {
+                    let gap = atomTokenizer.widthCalculator.getInterElementSpacing(left: left, right: type)
+                    if gap > 0 { elements.append(interAtomSpace(gap, atom: atom)) }
+                }
+                lastSpacingType = type
             }
 
             // Handle scripts (subscript/superscript) - these must be grouped with their base
@@ -147,8 +178,8 @@ class MTAtomTokenizer {
 
         // Color - extract inner content with color attribute
         case .color, .colorBox, .textcolor:
-            // For now, treat as ordinary (color will be handled in display generation)
-            return tokenizeTextAtom(atom, prevAtom: prevAtom, atomIndex: atomIndex, allAtoms: allAtoms)
+            // Indium: typeset the colored part as a unit and tint it.
+            return tokenizeColored(atom)
 
         default:
             // Treat unknown types as ordinary
@@ -878,7 +909,7 @@ class MTAtomTokenizer {
         //   → makeLargeOp() would create scripts via makeScripts(), causing duplication
         //   → We MUST clear scripts and let tokenizeAtomWithScripts() handle them separately
 
-        let limits = op.limits && style == .display
+        let limits = op.stacksLimits(in: style)
 
         let originalSuperScript = op.superScript
         let originalSubScript = op.subScript
@@ -1115,6 +1146,38 @@ class MTAtomTokenizer {
             color: nil,
             backgroundColor: nil,
             indivisible: false
+        )
+    }
+
+    /// Indium: `\color{red}{x}`, `\textcolor{red}{x}` and `\colorbox{yellow}{x}`.
+    private func tokenizeColored(_ atom: MTMathAtom) -> MTBreakableElement? {
+        let inner: MTMathList?, name: String, background: Bool
+        switch atom {
+        case let c as MTMathColor: (inner, name, background) = (c.innerList, c.colorString, false)
+        case let c as MTMathTextColor: (inner, name, background) = (c.innerList, c.colorString, false)
+        case let c as MTMathColorbox: (inner, name, background) = (c.innerList, c.colorString, true)
+        default: return nil
+        }
+        guard let display = MTTypesetter.createLineForMathList(inner, font: font, style: style, cramped: cramped) else { return nil }
+        if let color = MTColor.indium(named: name) {
+            if background { display.localBackgroundColor = color } else { display.localTextColor = color }
+        }
+        return MTBreakableElement(
+            content: .display(display), width: display.width, height: display.ascent + display.descent,
+            ascent: display.ascent, descent: display.descent, isBreakBefore: true, isBreakAfter: true,
+            penaltyBefore: MTBreakPenalty.good, penaltyAfter: MTBreakPenalty.good, groupId: nil, parentId: nil,
+            originalAtom: atom, indexRange: atom.indexRange, color: nil, backgroundColor: nil, indivisible: true
+        )
+    }
+
+    /// Indium: glue between two atoms. A line may break there, as TeX allows.
+    private func interAtomSpace(_ width: CGFloat, atom: MTMathAtom) -> MTBreakableElement {
+        MTBreakableElement(
+            content: .space(width), width: width, height: 0, ascent: 0, descent: 0,
+            isBreakBefore: true, isBreakAfter: true,
+            penaltyBefore: MTBreakPenalty.good, penaltyAfter: MTBreakPenalty.good,
+            groupId: nil, parentId: nil, originalAtom: atom, indexRange: atom.indexRange,
+            color: nil, backgroundColor: nil, indivisible: false
         )
     }
 

@@ -1124,8 +1124,14 @@ class MTTypesetter {
     func makeLargeOp(_ op:MTLargeOperator!) -> MTDisplay?  {
         // Show limits above/below in display mode
         // For inline mode, we still center limits below for operators like \lim, but with tighter spacing
-        let limits = op.limits && style == .display
+        let limits = op.stacksLimits(in: style)
         var delta = CGFloat(0)
+        if let base = op.baseList {
+            // Indium: a typeset base (\overset, \overbrace, \mathop) instead of a glyph.
+            guard let baseDisplay = self.makeDecoratedBase(op, base: base) else { return nil }
+            baseDisplay.position = currentPosition
+            return self.addLimitsToDisplay(baseDisplay, forOperator: op, delta: 0)
+        }
         if op.nucleus.count == 1 {
             var glyph = self.findGlyphForCharacterAtIndex(op.nucleus.startIndex, inString:op.nucleus)
             if glyph != 0 {
@@ -1177,7 +1183,7 @@ class MTTypesetter {
             return display;
         }
         // Show limits above/below in both display and text (inline) modes
-        if op.limits && style == .display {
+        if op.stacksLimits(in: style) {
             // make limits (above/below positioning)
             var superScript:MTMathListDisplay? = nil, subScript:MTMathListDisplay? = nil
 

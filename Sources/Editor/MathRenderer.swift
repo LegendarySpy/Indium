@@ -79,6 +79,14 @@ enum MathRenderer {
         s = s.replacingOccurrences(of: "\\end{array}", with: "\\end{matrix}")
         s = s.replacingOccurrences(of: #"\\(?:tag\*?|label)\{[^}]*\}"#, with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: #"\\(?:nonumber|notag)\b"#, with: "", options: .regularExpression)
+        // Spellings the typesetter knows under another name.
+        let aliases = [
+            "mathscr": "mathcal", "mbox": "text", "textnormal": "text", "textup": "text", "hbox": "text",
+            "lvert": "vert", "rvert": "vert", "lVert": "Vert", "rVert": "Vert", "mathnormal": "mathit",
+        ]
+        for (from, to) in aliases {
+            s = s.replacingOccurrences(of: #"\\"# + from + #"(?![A-Za-z])"#, with: #"\\"# + to, options: .regularExpression)
+        }
         s = s.replacingOccurrences(of: #"\\\\\[[^\]]*\]"#, with: "\\\\\\\\", options: .regularExpression)
         return s
     }
