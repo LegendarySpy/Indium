@@ -24,7 +24,10 @@ final class TableRender {
     /// Widest a table sizes itself before the writer resizes it.
     let naturalCap: CGFloat
 
-    init(spec: TableSpec, typography: Typography, maxWidth: CGFloat, fractionBase: CGFloat? = nil, naturalCap: CGFloat? = nil) {
+    /// `fixedWidths` holds the columns still while a table is edited, so typing only
+    /// grows rows; `revealing` is the cell being edited, measured with its markers shown.
+    init(spec: TableSpec, typography: Typography, maxWidth: CGFloat, fractionBase: CGFloat? = nil, naturalCap: CGFloat? = nil,
+         fixedWidths: [CGFloat]? = nil, revealing: (row: Int, column: Int)? = nil) {
         self.maxWidth = maxWidth
         self.fractionBase = fractionBase ?? maxWidth
         self.naturalCap = min(naturalCap ?? maxWidth, maxWidth)
@@ -36,8 +39,14 @@ final class TableRender {
             (0..<columns).map { c in
                 let text = c < row.count ? row[c].text : ""
                 return TableRender.render(text, header: r == 0, alignment: c < spec.alignments.count ? spec.alignments[c] : 0,
-                                          typography: typography, size: size)
+                                          typography: typography, size: size,
+                                          revealMarkers: revealing.map { $0.row == r && $0.column == c } ?? false)
             }
+        }
+        if let fixed = fixedWidths, fixed.count == columns, fixed.reduce(0, +) <= maxWidth + 1 {
+            columnWidths = fixed
+            measureRows()
+            return
         }
         layout(maxWidth: maxWidth)
     }

@@ -133,7 +133,27 @@ final class EditorTextView: NSTextView {
 
     override func paste(_ sender: Any?) {
         if editor?.insertImages(from: .general, at: nil) == true { return }
+        if editor?.pasteTable(from: .general) == true { return }
         pasteAsPlainText(sender)
+    }
+
+    override func copy(_ sender: Any?) {
+        let html = editor?.tableHTML(for: selectedRange())
+        super.copy(sender)
+        addHTML(html)
+    }
+
+    override func cut(_ sender: Any?) {
+        let html = editor?.tableHTML(for: selectedRange())
+        super.cut(sender)
+        addHTML(html)
+    }
+
+    /// Copied text holding a table also goes out as HTML, so it pastes as a real table.
+    private func addHTML(_ html: String?) {
+        guard let html else { return }
+        NSPasteboard.general.addTypes([.html], owner: nil)
+        NSPasteboard.general.setString(html, forType: .html)
     }
 
     override func performFindPanelAction(_ sender: Any?) {

@@ -110,7 +110,93 @@ enum DebugSnapshot {
                let block = target.editor.styler.blocks.first(where: { if case .table = $0.kind { return true }; return false }) {
                 let cell = (d.string(forKey: "IndiumTableCell") ?? "2,1").split(separator: ",").compactMap { Int($0) }
                 target.editor.beginTableEditing(at: block.range.location, row: cell.first ?? 2, column: cell.last ?? 1)
-                if d.bool(forKey: "IndiumTableAddRow") { target.editor.tableEditor?.addRow() }
+                if d.bool(forKey: "IndiumTableAddRow") { target.editor.tableEditor?.addRow(below: nil) }
+                // `-IndiumTableType "some text"`: types into the focused cell a key at a time,
+                // printing the grid after each so any shifting shows as changing numbers.
+                if let typed = d.string(forKey: "IndiumTableType") {
+                    for ch in typed {
+                        target.editor.tableEditor?.cellEditor?.insertText(String(ch), replacementRange: target.editor.tableEditor?.cellEditor?.selectedRange() ?? NSRange())
+                        if let e = target.editor.tableEditor {
+                            print("TYPED \(String(ch).debugDescription) widths:", e.render.columnWidths.map { Int($0) }, "rows:", e.render.rowHeights.map { Int($0) }, "x:", Int(e.frame.minX))
+                        }
+                    }
+                }
+                // `-IndiumTableSteps "select:1,0,2,1;copy;pb:a\tb\nc\td;paste;cut;key:moveRight:"`: each step
+                // goes to the focused view through the responder chain, as a key or menu item would.
+                // Each step its own undo group, as each key press would be.
+                let undo = target.editor.textView.undoManager
+                let steps = (d.string(forKey: "IndiumTableSteps") ?? "").split(separator: ";").map(String.init).filter { !$0.isEmpty }
+                if !steps.isEmpty, let undo {
+                    if undo.groupingLevel > 0 { undo.endUndoGrouping() }
+                    undo.groupsByEvent = false
+                }
+                for step in steps {
+                    let isUndo = step == "undo" || step == "redo"
+                    if !isUndo { undo?.beginUndoGrouping() }
+                    defer { if !isUndo { undo?.endUndoGrouping() } }
+                    let e = target.editor.tableEditor
+                    let arg = step.split(separator: ":", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
+                    switch step.split(separator: ":").first.map(String.init) ?? "" {
+                    case "select":
+                        let n = arg.split(separator: ",").compactMap { Int($0) }
+                        e?.select(from: (n[0], n[1]), to: (n[2], n[3]))
+                    case "pb":
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(arg.replacingOccurrences(of: "\\t", with: "\t").replacingOccurrences(of: "\\n", with: "\n"), forType: .string)
+                    case "type":
+                        window.firstResponder?.insertText(arg)
+                    case "key":
+                        window.firstResponder?.doCommand(by: NSSelectorFromString(arg))
+                    case "click", "drag":
+                        // `click:row,column,count,dx` / `drag:r1,c1,r2,c2`: real mouse events through the window.
+                        guard let e else { break }
+                        let n = arg.split(separator: ",").compactMap { Double($0) }
+                        func point(_ r: Double, _ c: Double, dx: Double = 20) -> NSPoint {
+                            let rect = e.render.cellRect(row: Int(r), column: Int(c), in: NSRect(x: 0, y: 0, width: e.render.width, height: e.render.height))
+                            return e.convert(NSPoint(x: rect.minX + TableRender.padX + dx, y: rect.midY), to: nil)
+                        }
+                        func mouse(_ type: NSEvent.EventType, _ p: NSPoint, clicks: Int = 1) -> NSEvent {
+                            NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                               windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: clicks, pressure: 1)!
+                        }
+                        let from = step.hasPrefix("click") ? point(n[0], n[1], dx: n.count > 3 ? n[3] : 20) : point(n[0], n[1])
+                        let to = step.hasPrefix("click") ? from : point(n[2], n[3])
+                        let clicks = step.hasPrefix("click") && n.count > 2 ? Int(n[2]) : 1
+                        if !step.hasPrefix("click") { NSApp.postEvent(mouse(.leftMouseDragged, to), atStart: false) }
+                        NSApp.postEvent(mouse(.leftMouseUp, to, clicks: clicks), atStart: false)
+                        // Straight to the view hit testing picks: a window in the background would
+                        // take the first click as activation only.
+                        let hit = window.contentView?.superview?.hitTest(window.contentView!.superview!.convert(from, from: nil))
+                        print("  hit:", hit.map { String(describing: type(of: $0)) } ?? "nil")
+                        hit?.mouseDown(with: mouse(.leftMouseDown, from, clicks: clicks))
+                    case "done":
+                        target.editor.endTableEditing(caretAfter: true)
+                    case "notesel":
+                        let n = arg.split(separator: ",").compactMap { Int($0) }
+                        window.makeFirstResponder(target.editor.textView)
+                        target.editor.textView.setSelectedRange(NSRange(location: n[0], length: n[1]))
+                    default:
+                        let action = NSSelectorFromString(step + ":")
+                        var responder = window.firstResponder
+                        while let r = responder, !r.responds(to: action) { responder = r.nextResponder }
+                        let um = target.editor.textView.undoManager
+                        print("  \(step) handled by:", responder.map { String(describing: type(of: $0)) } ?? "nobody", "level:", um?.groupingLevel ?? -1, "undoName:", um?.undoActionName ?? "-")
+                        _ = responder?.perform(action, with: nil)
+                    }
+                    // Each step its own event, so undo groups fall as they would with real keys.
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+                    let pb = NSPasteboard.general
+                    print("STEP \(step) responder:", window.firstResponder.map { String(describing: type(of: $0)) } ?? "-",
+                          "focus:", e.map { "\($0.focus)" } ?? "-", "selection:", e?.selection.map { "\($0.anchor)->\($0.head)" } ?? "none",
+                          "cell:", e?.cellEditor.map { "\($0.string.debugDescription) sel \(NSStringFromRange($0.selectedRange()))" } ?? "-")
+                    if let i = target.editor.styler.blocks.firstIndex(where: { if case .table = $0.kind { return true }; return false }) {
+                        print("  NOTE TABLE:", (target.editor.text as NSString).substring(with: target.editor.styler.blocks[i].range).components(separatedBy: "\n").enumerated().filter { $0.offset != 1 }.map { $0.element.replacingOccurrences(of: " ", with: "") }.joined(separator: " "))
+                    }
+                    if step == "copy" || step == "cut" {
+                        print("  PB string:", (pb.string(forType: .string) ?? "nil").debugDescription)
+                        print("  PB html:", pb.string(forType: .html) ?? "nil")
+                    }
+                }
                 if let side = d.string(forKey: "IndiumPlaceTable") {
                     target.editor.placeEditedTable(float: side == "full" ? nil : side == "right")
                 }
