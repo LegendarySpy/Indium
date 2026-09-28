@@ -101,6 +101,10 @@ final class MarkdownStyler {
     var selectedImageLine: Int?
     /// A table being edited in place stays rendered even with the caret nearby.
     var editingTableLocation: Int?
+    /// Its column widths, held while it's edited so typing never moves the grid.
+    var editingTableWidths: [CGFloat]?
+    /// Its cell being typed in, measured with the Markdown markers it shows.
+    var editingTableCell: (row: Int, column: Int)?
 
     private var selection: [NSRange] = []
     private var text: NSString = ""
@@ -670,16 +674,18 @@ final class MarkdownStyler {
             }
             return
         }
+        let editing = editingTableLocation == block.range.location && !config.printing
+        let fixed = editing ? editingTableWidths : nil
+        let reveal = editing ? editingTableCell : nil
         let render = currentFloat != nil
-            ? TableRender(spec: spec, typography: typo, maxWidth: floatMaxWidth, fractionBase: config.columnWidth, naturalCap: floatNaturalWidth)
-            : TableRender(spec: spec, typography: typo, maxWidth: contentWidth)
+            ? TableRender(spec: spec, typography: typo, maxWidth: floatMaxWidth, fractionBase: config.columnWidth, naturalCap: floatNaturalWidth,
+                          fixedWidths: fixed, revealing: reveal)
+            : TableRender(spec: spec, typography: typo, maxWidth: contentWidth, fixedWidths: fixed, revealing: reveal)
         // The blank line before a table already separates it; only a hair more on top,
         // so a label directly above reads as belonging to it.
         let pad: CGFloat = 2
         let padBelow = round(typo.size * 0.5)
-        // While editing, leave room under the grid for the add-row button.
-        let editingRoom: CGFloat = editingTableLocation == block.range.location ? 30 : 0
-        let height = min(render.height + pad + padBelow + editingRoom, config.maxBlockHeight)
+        let height = min(render.height + pad + padBelow, config.maxBlockHeight)
         if let right = currentFloat {
             // Floating: the source takes no room in the flow; the grid is drawn beside
             // the text that follows, which wraps around it.

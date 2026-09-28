@@ -310,23 +310,33 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             styler.editingTableLocation = nil
             return
         }
+        // The columns hold these widths until editing ends, so typing never reshuffles them.
+        styler.editingTableWidths = render.columnWidths
         let floatSide = styler.blockIndex(containing: location).flatMap { styler.floatOfBlock[$0] }
         let editor = TableEditorView(render: render)
         editor.anchoredRight = floatSide == true
+        editor.floating = floatSide != nil
         layoutManager.hiddenFloat = floatSide != nil ? location : nil
         editor.frame.origin = rect.origin
-        editor.onChange = { [weak self] markdown in self?.commitTable(markdown) }
+        editor.onChange = { [weak self] markdown, cell in self?.commitTable(markdown, typingIn: cell) }
         editor.onExit = { [weak self] in self?.endTableEditing(caretAfter: true) }
         editor.onLeave = { [weak self] down in
             guard let self else { return }
             if down { self.endTableEditing(caretAfter: true) } else { self.endTableEditing(caretBefore: true) }
         }
+        editor.onFocusChange = { [weak self] cell in self?.tableFocusChanged(cell) }
+        editor.onDeleteTable = { [weak self] in self?.deleteEditedTable() }
         textView.addSubview(editor)
         tableEditor = editor
 
         let bar = TableToolbarView(frame: .zero)
-        bar.onAddRow = { [weak editor] in editor?.addRow() }
-        bar.onAddColumn = { [weak editor] in editor?.addColumn() }
+        bar.onAddRow = { [weak editor] in
+            guard let editor else { return }
+            editor.addRow(below: nil)
+            editor.focusCell(row: editor.focus.row + 1, column: editor.focus.column)
+        }
+        bar.onAddColumn = { [weak editor] in editor?.addColumn(right: nil) }
+        bar.onCopyTable = { [weak editor] in editor?.copyTable() }
         bar.onAlign = { [weak editor] a in editor?.align(a) }
         bar.onDeleteRow = { [weak editor] in editor?.deleteRow() }
         bar.onDeleteColumn = { [weak editor] in editor?.deleteColumn() }
@@ -351,14 +361,58 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         bar.setFrameOrigin(NSPoint(x: round(tableRight - size.width), y: round(y)))
     }
 
-    private func commitTable(_ markdown: String) {
-        guard let location = styler.editingTableLocation, let i = styler.blockIndex(containing: location),
-              case .table = styler.blocks[i].kind else { return }
+    /// A table's Markdown, without the line break after it.
+    private func tableSource(at location: Int) -> NSRange? {
+        guard let i = styler.blockIndex(containing: location), case .table = styler.blocks[i].kind else { return nil }
         var range = styler.blocks[i].range
-        let ns = storage.string as NSString
         while range.length > 0, [0x0A, 0x0D].contains(ns.character(at: NSMaxRange(range) - 1)) { range.length -= 1 }
-        guard ns.substring(with: range) != markdown else { return }
-        replace(range, with: markdown, actionName: "Edit Table")
+        return range
+    }
+
+    /// The cell last typed in: more typing there joins the same undo step.
+    private var tableTypingCell: TableEditorView.Cell?
+
+    private func commitTable(_ markdown: String, typingIn cell: TableEditorView.Cell?) {
+        guard let location = styler.editingTableLocation, let range = tableSource(at: location) else { return }
+        let old = ns.substring(with: range)
+        guard old != markdown else { return }
+        // Widths the editor holds (or was just dragged to) carry into the new layout.
+        if let widths = tableEditor?.render.columnWidths { styler.editingTableWidths = widths }
+        let continuing = cell != nil && tableTypingCell?.row == cell?.row && tableTypingCell?.column == cell?.column
+        tableTypingCell = cell
+        if !continuing { registerTableUndo(at: range.location, restoring: old) }
+        replaceWithoutUndo(range, with: markdown)
+        refreshTableEditor()
+    }
+
+    /// Undo puts back the whole table as it was, and redo the other way round.
+    private func registerTableUndo(at location: Int, restoring markdown: String) {
+        guard let undo = textView.undoManager else { return }
+        undo.registerUndo(withTarget: self) { controller in
+            guard let range = controller.tableSource(at: location) else { return }
+            controller.registerTableUndo(at: range.location, restoring: controller.ns.substring(with: range))
+            controller.tableTypingCell = nil
+            controller.replaceWithoutUndo(range, with: markdown)
+            controller.refreshTableEditor()
+        }
+        undo.setActionName("Edit Table")
+    }
+
+    private func replaceWithoutUndo(_ range: NSRange, with markdown: String) {
+        textView.undoManager?.disableUndoRegistration()
+        replace(range, with: markdown)
+        textView.undoManager?.enableUndoRegistration()
+    }
+
+    /// The cell being typed in shows its Markdown markers; its row is measured with
+    /// them so the text never runs past the cell.
+    private func tableFocusChanged(_ cell: TableEditorView.Cell?) {
+        guard let location = styler.editingTableLocation,
+              styler.editingTableCell?.row != cell?.row || styler.editingTableCell?.column != cell?.column else { return }
+        styler.editingTableCell = cell
+        tableTypingCell = nil
+        guard location < storage.length else { return }
+        styler.restyleBlock(at: location, in: storage)
         refreshTableEditor()
     }
 
@@ -366,6 +420,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         if tableEditor != nil { updateFloats() }
         guard let editor = tableEditor, let location = styler.editingTableLocation,
               let (render, rect) = tableLayout(at: location) else { return }
+        // A change of shape (a column added or removed) lays out afresh; hold that too.
+        styler.editingTableWidths = render.columnWidths
         editor.update(render: render)
         editor.frame.origin = rect.origin
         positionTableToolbar()
@@ -381,6 +437,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func endTableEditing(caretAfter: Bool = false, caretBefore: Bool = false) {
         guard let location = styler.editingTableLocation else { return }
         styler.editingTableLocation = nil
+        styler.editingTableWidths = nil
+        styler.editingTableCell = nil
         layoutManager.hiddenFloat = nil
         tableEditor?.removeFromSuperview()
         tableToolbar?.removeFromSuperview()
@@ -962,6 +1020,40 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return nil
     }
 
+    // MARK: Tables on the pasteboard
+
+    /// Cells copied from a spreadsheet or web page (tab-separated, two rows or more)
+    /// arrive as a Markdown table on lines of their own.
+    func pasteTable(from pb: NSPasteboard) -> Bool {
+        guard textView.isEditable, let text = pb.string(forType: .string), text.contains("\t"),
+              TableClipboard.markdownTable(text) == nil else { return false }
+        let sel = textView.selectedRange()
+        if let i = styler.blockIndex(containing: sel.location), case .code = styler.blocks[i].kind { return false }
+        // Tab-indented text (code, outlines) isn't a table.
+        let lines = text.components(separatedBy: .newlines).filter { !$0.isEmpty }
+        guard !lines.contains(where: { $0.hasPrefix("\t") }) else { return false }
+        let rows = TableClipboard.parseTSV(text)
+        guard rows.count >= 2, (rows.first?.count ?? 0) >= 2 else { return false }
+        let table = TableSpec.markdown(header: rows[0], body: Array(rows.dropFirst()), alignments: [], dashes: nil)
+        let start = lineRange(at: sel.location), end = lineRange(at: NSMaxRange(sel))
+        let textBefore = sel.location > start.content.location
+        let lineAboveHasText = start.content.location > 0 && lineRange(at: start.content.location - 1).content.length > 0
+        let before = textBefore ? "\n\n" : (lineAboveHasText ? "\n" : "")
+        // The line break already after the caret ends the table's last row.
+        let atEnd = NSMaxRange(end.content) >= ns.length
+        let lineBelowIsBlank = !atEnd && lineRange(at: NSMaxRange(end.full)).content.length == 0
+        let after = NSMaxRange(sel) < NSMaxRange(end.content) ? "\n\n" : atEnd ? "\n" : (lineBelowIsBlank ? "" : "\n")
+        let insert = before + table + after
+        replace(sel, with: insert, select: NSRange(location: sel.location + (insert as NSString).length, length: 0), actionName: "Paste Table")
+        return true
+    }
+
+    /// An HTML version of note text that holds a table, for apps that read tables.
+    func tableHTML(for range: NSRange) -> String? {
+        guard range.length > 0, NSMaxRange(range) <= storage.length else { return nil }
+        return TableClipboard.noteHTML(ns.substring(with: range))
+    }
+
     func pasteboardHasImages(_ pb: NSPasteboard) -> Bool {
         if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
            urls.contains(where: { MarkdownScanner.imageExtensions.contains($0.pathExtension.lowercased()) }) {
@@ -1035,7 +1127,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     // Object-style image selection: clicking an image selects it without revealing its source.
 
     func handleClick(at point: NSPoint, clickCount: Int) -> Bool {
-        if let editor = tableEditor, !editor.frame.contains(point) { endTableEditing() }
+        if let editor = tableEditor, editor.hitTest(point) == nil { endTableEditing() }
         guard let container = textView.textContainer else { return false }
         let origin = textView.textContainerOrigin
         let visible = textView.visibleRect.offsetBy(dx: -origin.x, dy: -origin.y)
