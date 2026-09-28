@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import SwiftMath
 
 /// Development aid: `-IndiumSnapshot /tmp/out.png` renders the main window to a PNG
 /// and quits. Optional: `-IndiumSize 1000x1100`, `-IndiumSelect 120`,
@@ -68,6 +69,22 @@ enum DebugSnapshot {
             }
             exit(0)
         }
+        // `-IndiumMathCorpus /path`: one LaTeX expression per line; prints each that fails to typeset.
+        if let path = d.string(forKey: "IndiumMathCorpus"), let text = try? String(contentsOfFile: path, encoding: .utf8) {
+            var failed = 0
+            let lines = text.components(separatedBy: "\n").filter { !$0.isEmpty }
+            for latex in lines {
+                let source = MathRenderer.normalize(latex)
+                var error: NSError?
+                let list = MTMathListBuilder.build(fromString: "\\textstyle " + source, error: &error)
+                if list == nil || error != nil || MathRenderer.render(latex, size: 17, display: false) == nil {
+                    failed += 1
+                    print("FAIL", latex, "→", error?.localizedDescription ?? "no display")
+                }
+            }
+            print("\(lines.count - failed)/\(lines.count) typeset")
+            exit(0)
+        }
         if d.bool(forKey: "IndiumMathTest") {
             let cases: [(String, Bool)] = [("1 + 2 =", false), ("1 + 2 = ", false), ("Mass is 2 + 3 =", false), ("x =", false),
                 ("35.134\\text{ g} - 34.794\\text{ g} =", true), ("\\frac{0.147\\text{ g Zn}}{65.38\\text{ g/mol}} =", true),
@@ -87,6 +104,10 @@ enum DebugSnapshot {
             AppDelegate.shared.newTemporaryNote(nil)
             if let c = NSApp.windows.compactMap({ $0.windowController as? DocumentWindowController }).first(where: { $0.kind == .temporary }) {
                 target = c
+                // `-IndiumTempFile path`: the note's text verbatim (LaTeX's `\n…` commands survive).
+                if let path = d.string(forKey: "IndiumTempFile"), let text = try? String(contentsOfFile: path, encoding: .utf8) {
+                    c.editor.textView.insertText(text, replacementRange: NSRange(location: 0, length: 0))
+                }
                 if let text = d.string(forKey: "IndiumTempText") {
                     c.editor.textView.insertText(text.replacingOccurrences(of: "\\n", with: "\n"), replacementRange: NSRange(location: 0, length: 0))
                 }

@@ -438,16 +438,51 @@ public class MTLargeOperator: MTMathAtom {
      then the limits (if present) are displayed like a regular subscript/superscript.
      */
     public var limits: Bool = false
-    
+
+    /// Indium: a typeset list in place of the operator's glyph or name. Stacking
+    /// commands build on it: `\overset{a}{=}` is `=` with `a` as its upper limit.
+    public var baseList: MTMathList?
+    /// Indium: limits stay above and below in every style, not just display
+    /// (`\overset`, `\underbrace`, `\xrightarrow` always stack).
+    public var alwaysLimits = false
+    /// Indium: the kind of atom it spaces like (`\overset{!}{=}` is a relation).
+    public var spacingType: MTMathAtomType = .largeOperator
+    /// Indium: drawn around the base list (a brace, an arrow, a box, a cancel stroke).
+    public var decoration: MTDecoration = .none
+
     init(_ op:MTLargeOperator?) {
         super.init(op)
         self.type = .largeOperator
         self.limits = op!.limits
+        self.baseList = MTMathList(op!.baseList)
+        self.alwaysLimits = op!.alwaysLimits
+        self.spacingType = op!.spacingType
+        self.decoration = op!.decoration
     }
     
     init(value: String, limits: Bool) {
         super.init(type: .largeOperator, value: value)
         self.limits = limits
+    }
+
+    /// Indium: `base` with limits that always stack above and below.
+    init(base: MTMathList?, spacingType: MTMathAtomType) {
+        super.init(type: .largeOperator, value: "")
+        self.baseList = base ?? MTMathList()
+        self.limits = true
+        self.alwaysLimits = true
+        self.spacingType = spacingType
+    }
+
+    /// Stacked limits in this style?
+    func stacksLimits(in style: MTLineStyle) -> Bool {
+        limits && (alwaysLimits || style == .display)
+    }
+
+    override public var finalized: MTMathAtom {
+        let op = super.finalized as! MTLargeOperator
+        op.baseList = op.baseList?.finalized
+        return op
     }
 }
 

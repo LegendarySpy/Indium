@@ -41,37 +41,10 @@ class MTElementWidthCalculator {
 
     // MARK: - Operator Width Measurement
 
-    /// Measure width of operator with appropriate spacing
+    /// Measure width of an operator. Indium: the space around it comes from TeX's
+    /// inter-atom spacing, added between atoms by the tokenizer.
     func measureOperator(_ op: String, type: MTMathAtomType) -> CGFloat {
-        let baseWidth = measureText(op)
-        let spacing = getOperatorSpacing(type)
-        return baseWidth + spacing
-    }
-
-    /// Get spacing for an operator (both sides)
-    private func getOperatorSpacing(_ type: MTMathAtomType) -> CGFloat {
-        guard let mathTable = font.mathTable else { return 0 }
-        let muUnit = mathTable.muUnit
-
-        switch type {
-        case .binaryOperator:
-            // Binary operators: 4mu on each side = 8mu total
-            return 2 * muUnit * 4
-
-        case .relation:
-            // Relations: 5mu on each side = 10mu total
-            return 2 * muUnit * 5
-
-        case .largeOperator:
-            // Large operators in inline mode: 1mu on each side
-            if style == .display || style == .text {
-                return 0  // In display mode, handled by MTLargeOpLimitsDisplay
-            }
-            return 2 * muUnit * 1
-
-        default:
-            return 0
-        }
+        return measureText(op)
     }
 
     // MARK: - Display Width Measurement

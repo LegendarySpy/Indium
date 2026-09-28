@@ -388,15 +388,16 @@ enum MarkdownScanner {
         }
         func abs(_ r: NSRange) -> NSRange { NSRange(location: r.location + base, length: r.length) }
 
-        // Escapes: the escaped character loses its syntactic meaning.
-        for m in Regex.escape.matches(in: line as String, range: full) {
-            consume(m.range)
-            spans.append(Span(kind: .escape, range: abs(m.range), markers: [abs(NSRange(location: m.range.location, length: 1))],
-                              content: abs(NSRange(location: m.range.location + 1, length: 1))))
+        /// A backslash right before `i` (itself not escaped) makes that character literal.
+        func escaped(_ i: Int) -> Bool {
+            var n = 0, j = i - 1
+            while j >= 0, line.character(at: j) == 0x5C { n += 1; j -= 1 }
+            return n % 2 == 1
         }
 
-        // Code spans take precedence over everything else.
-        for m in Regex.codeSpan.matches(in: line as String, range: full) where free(m.range) {
+        // Code spans and math take precedence over everything else, escapes included:
+        // a backslash inside them belongs to the code or the LaTeX (`\,`, `\{`).
+        for m in Regex.codeSpan.matches(in: line as String, range: full) where free(m.range) && !escaped(m.range.location) {
             let tick = m.range(at: 1).length
             consume(m.range)
             spans.append(Span(kind: .code, range: abs(m.range),
@@ -415,6 +416,13 @@ enum MarkdownScanner {
                                             abs(NSRange(location: NSMaxRange(m.range) - d, length: d))],
                                   content: abs(m.range(at: 1))))
             }
+        }
+
+        // Escapes elsewhere: the escaped character loses its syntactic meaning.
+        for m in Regex.escape.matches(in: line as String, range: full) where free(m.range) {
+            consume(m.range)
+            spans.append(Span(kind: .escape, range: abs(m.range), markers: [abs(NSRange(location: m.range.location, length: 1))],
+                              content: abs(NSRange(location: m.range.location + 1, length: 1))))
         }
 
         // Wiki links and embeds.
