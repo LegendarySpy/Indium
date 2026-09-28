@@ -241,13 +241,13 @@ final class MarkdownStyler {
 
     // MARK: Helpers
 
-    private func touches(_ r: NSRange) -> Bool {
+    private func touches(_ r: NSRange, caretOnly: Bool = false) -> Bool {
         if config.printing { return false }
         for s in selection {
             let a = s.location, b = NSMaxRange(s)
             if s.length == 0 {
                 if a >= r.location && a <= NSMaxRange(r) { return true }
-            } else if a >= r.location && b <= NSMaxRange(r) {
+            } else if !caretOnly && a >= r.location && b <= NSMaxRange(r) {
                 // A selection inside the block is editing it; one that merely starts or
                 // ends there (Select All, a drag across) shouldn't flip it to source.
                 return true
@@ -772,7 +772,13 @@ final class MarkdownStyler {
         var deferred: [(NSRange, [NSAttributedString.Key: Any])] = []
 
         for span in spans {
-            let active = touches(span.range)
+            // Selecting text to format it leaves the markers hidden; only a caret reveals them.
+            let caretOnly: Bool
+            switch span.kind {
+            case .math, .link, .wiki: caretOnly = false
+            default: caretOnly = true
+            }
+            let active = touches(span.range, caretOnly: caretOnly)
             let hide = hides(active: active)
             func styleMarkers() {
                 for m in span.markers where m.length > 0 {

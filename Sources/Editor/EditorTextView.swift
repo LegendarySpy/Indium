@@ -11,6 +11,7 @@ final class EditorTextView: NSTextView {
     var topPadding: CGFloat = 92 { didSet { updateGeometry() } }
     private(set) var effectiveColumn: CGFloat = 700
     private(set) var isTrackingMouse = false
+    private var clickAnchor: (character: Int, offset: NSSize)?
     /// The view is being resized by an animation (the sidebar sliding in): treat it
     /// like a live resize and restyle once it settles.
     var isAnimatingFrame = false
@@ -94,10 +95,38 @@ final class EditorTextView: NSTextView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if let editor, editor.handleClick(at: point, clickCount: event.clickCount) { return }
+        var event = event
+        if event.clickCount == 1 {
+            clickAnchor = anchor(at: point)
+        } else if let moved = clickAnchor.flatMap(location(of:)), moved != point,
+                  let retargeted = NSEvent.mouseEvent(
+                    with: event.type, location: convert(moved, to: nil), modifierFlags: event.modifierFlags,
+                    timestamp: event.timestamp, windowNumber: event.windowNumber, context: nil,
+                    eventNumber: event.eventNumber, clickCount: event.clickCount, pressure: event.pressure) {
+            // The first click may have shown or hidden markers; keep aiming at the same text.
+            event = retargeted
+        }
         isTrackingMouse = true
         super.mouseDown(with: event)
         isTrackingMouse = false
         editor?.mouseTrackingEnded()
+    }
+
+    private func anchor(at point: NSPoint) -> (character: Int, offset: NSSize)? {
+        guard let layoutManager, let textContainer, let storage = textStorage, storage.length > 0 else { return nil }
+        let inContainer = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
+        let glyph = layoutManager.glyphIndex(for: inContainer, in: textContainer)
+        let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer)
+        return (layoutManager.characterIndexForGlyph(at: glyph),
+                NSSize(width: inContainer.x - rect.minX, height: inContainer.y - rect.minY))
+    }
+
+    private func location(of anchor: (character: Int, offset: NSSize)) -> NSPoint? {
+        guard let layoutManager, let textContainer, let storage = textStorage, anchor.character < storage.length else { return nil }
+        let glyph = layoutManager.glyphIndexForCharacter(at: anchor.character)
+        let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer)
+        return NSPoint(x: rect.minX + anchor.offset.width + textContainerOrigin.x,
+                       y: rect.minY + anchor.offset.height + textContainerOrigin.y)
     }
 
     // MARK: Pasteboard
