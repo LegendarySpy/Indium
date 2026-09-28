@@ -78,6 +78,8 @@ extension EditorController {
         var s = 0, e = 0, ce = 0
         text.getLineStart(&s, end: &e, contentsEnd: &ce, for: NSRange(location: sel.location, length: 0))
         let before = text.substring(with: NSRange(location: s, length: sel.location - s))
+        let after = text.substring(with: NSRange(location: sel.location, length: ce - sel.location))
+        guard after.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
         guard let match = before.range(of: #"(?:^|\s)/([A-Za-z0-9]+(?: [A-Za-z0-9]*)?)?$"#, options: .regularExpression) else { return nil }
         let slashOffset = (before[match] as Substring).firstIndex(of: "/").map { before.distance(from: before.startIndex, to: $0) } ?? 0
         let slashLocation = s + (String(before.prefix(slashOffset)) as NSString).length
