@@ -57,6 +57,48 @@ enum MathRenderer {
         return result
     }
 
+    /// For LaTeX that's still being typed: closes what's left open (`\frac{a}{`,
+    /// `\left(`, `\begin{pmatrix}`) and drops a dangling `^`, `_` or half-typed command,
+    /// so the preview keeps up instead of vanishing on every keystroke.
+    static func renderWhileTyping(_ latex: String, size: CGFloat, display: Bool) -> MathRender? {
+        if let r = render(latex, size: size, display: display) { return r }
+        var s = latex
+        for _ in 0..<8 {
+            if let r = render(closeOpenGroups(s), size: size, display: display) { return r }
+            // Still broken: give up the last token (a command, or one character) and try again.
+            let trimmed = s.replacingOccurrences(of: #"(?:\\[A-Za-z]*|[\^_&\\])\s*$"#, with: "", options: .regularExpression)
+            if trimmed != s { s = trimmed } else if !s.isEmpty { s.removeLast() } else { return nil }
+        }
+        return nil
+    }
+
+    private static func closeOpenGroups(_ latex: String) -> String {
+        var s = latex
+        var braces = 0
+        var i = s.startIndex
+        while i < s.endIndex {
+            let c = s[i]
+            if c == "\\" {
+                i = s.index(after: i)
+                if i < s.endIndex { i = s.index(after: i) }
+                continue
+            }
+            if c == "{" { braces += 1 } else if c == "}" { braces = max(0, braces - 1) }
+            i = s.index(after: i)
+        }
+        s += String(repeating: "}", count: braces)
+        let lefts = s.components(separatedBy: "\\left").count - s.components(separatedBy: "\\right").count
+        if lefts > 0 { s += String(repeating: "\\right.", count: lefts) }
+        let begin = try! NSRegularExpression(pattern: #"\\(begin|end)\{([A-Za-z*]+)\}"#)
+        var open: [String] = []
+        for m in begin.matches(in: s, range: NSRange(location: 0, length: (s as NSString).length)) {
+            let env = (s as NSString).substring(with: m.range(at: 2))
+            if (s as NSString).substring(with: m.range(at: 1)) == "begin" { open.append(env) } else if open.last == env { open.removeLast() }
+        }
+        for env in open.reversed() { s += "\\end{\(env)}" }
+        return s
+    }
+
     /// Maps common MathJax / Obsidian environments onto what the typesetter knows,
     /// without touching the source stored in the file.
     static func normalize(_ latex: String) -> String {

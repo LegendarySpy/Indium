@@ -150,7 +150,10 @@ final class MarkdownStyler {
     }
 
     /// Called from `textStorage(_:didProcessEditing:...)` after characters changed.
-    func didEdit(_ storage: NSTextStorage, editedRange: NSRange, delta: Int, selection: [NSRange]) {
+    /// Returns the text it restyled: attributes changed there, outside the edited
+    /// paragraph, aren't laid out again unless the caller asks.
+    @discardableResult
+    func didEdit(_ storage: NSTextStorage, editedRange: NSRange, delta: Int, selection: [NSRange]) -> NSRange? {
         self.selection = selection
         text = storage.string as NSString
         let old = blocks
@@ -161,7 +164,7 @@ final class MarkdownStyler {
         if markerSignature != oldSignature {
             // The column structure changed: every block's cell membership may have too.
             for i in blocks.indices { style(at: i, in: storage) }
-            return
+            return NSRange(location: 0, length: storage.length)
         }
 
         // Old blocks that sit wholly outside the edit, keyed by their position in new coordinates.
@@ -174,12 +177,15 @@ final class MarkdownStyler {
                 unchanged.insert(BlockKey(NSRange(location: b.range.location + delta, length: b.range.length), b.kind))
             }
         }
+        var restyled: NSRange?
         for (i, b) in new.enumerated() {
             let touchesEdit = NSMaxRange(b.range) >= editedRange.location && b.range.location <= NSMaxRange(editedRange)
             if touchesEdit || !unchanged.contains(BlockKey(b.range, b.kind)) {
                 style(at: i, in: storage)
+                restyled = restyled.map { NSUnionRange($0, b.range) } ?? b.range
             }
         }
+        return restyled
     }
 
     /// Re-renders the blocks whose reveal state depends on the selection.
@@ -607,15 +613,17 @@ final class MarkdownStyler {
     }
 
     private func styleMath(latex: String, block: MDBlock, lines: [NSRange], in s: NSTextStorage) {
-        let render = MathRenderer.render(latex, size: round(typo.size * 1.2), display: true)
         let content = NSRange(location: block.range.location, length: max(0, NSMaxRange(lines.last!) - block.range.location))
         let active = touches(content)
+        let size = round(typo.size * 1.2)
+        // Half-typed LaTeX still previews while it's being written.
+        let render = active ? MathRenderer.renderWhileTyping(latex, size: size, display: true) : MathRenderer.render(latex, size: size, display: true)
         let column = contentWidth
         let pad = round(typo.size * (config.printing ? 0.35 : 0.55))
 
         guard let render else {
             let font = typo.code
-            s.addAttributes([.font: font, .foregroundColor: latex.isEmpty ? Palette.secondaryText : Palette.error,
+            s.addAttributes([.font: font, .foregroundColor: latex.isEmpty || active ? Palette.secondaryText : Palette.error,
                              .paragraphStyle: paragraph(after: 0, lineSpacing: round(font.pointSize * 0.4))], range: block.range)
             return
         }
@@ -823,7 +831,8 @@ final class MarkdownStyler {
                     deferred.append((span.range, [.mdInlineMath: InlineMath(render: render, tightAfter: tight), .foregroundColor: color]))
                 } else {
                     let parsed = MathRenderer.render(latex, size: size, display: display) != nil
-                    deferred.append((span.content, [.foregroundColor: parsed ? color : Palette.error]))
+                    // Mid-edit LaTeX is often briefly incomplete; only settled math shows as an error.
+                    deferred.append((span.content, [.foregroundColor: parsed || active ? color : Palette.error]))
                     for m in span.markers { deferred.append((m, [.foregroundColor: Palette.syntax])) }
                 }
             case let .link(url):

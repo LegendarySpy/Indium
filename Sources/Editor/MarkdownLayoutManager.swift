@@ -85,6 +85,30 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         return NSRect(x: glyphPosition.x, y: glyphPosition.y - math.render.ascent, width: math.advance, height: math.render.height)
     }
 
+    /// A line holding a tall equation (a fraction, a sum with limits) grows to fit it,
+    /// so nothing pokes into the line above or gets cut off when redrawn.
+    func layoutManager(_ layoutManager: NSLayoutManager, shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<NSRect>,
+                       lineFragmentUsedRect: UnsafeMutablePointer<NSRect>, baselineOffset: UnsafeMutablePointer<CGFloat>,
+                       in textContainer: NSTextContainer, forGlyphRange glyphRange: NSRange) -> Bool {
+        guard let storage = textStorage else { return false }
+        let chars = characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
+        var ascent: CGFloat = 0, descent: CGFloat = 0
+        storage.enumerateAttribute(.mdInlineMath, in: chars) { value, _, _ in
+            guard let math = value as? InlineMath else { return }
+            ascent = max(ascent, math.render.ascent)
+            descent = max(descent, math.render.descent)
+        }
+        guard ascent > 0 || descent > 0 else { return false }
+        let pad: CGFloat = 2
+        let above = max(0, ascent + pad - baselineOffset.pointee)
+        let below = max(0, descent + pad - (lineFragmentUsedRect.pointee.height - baselineOffset.pointee))
+        guard above > 0 || below > 0 else { return false }
+        baselineOffset.pointee += above
+        lineFragmentRect.pointee.size.height += above + below
+        lineFragmentUsedRect.pointee.size.height += above + below
+        return true
+    }
+
     // MARK: Geometry helpers
 
     private func column(for container: NSTextContainer, origin: NSPoint) -> (x: CGFloat, width: CGFloat) {
