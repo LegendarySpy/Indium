@@ -42,6 +42,17 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// A computed answer offered after an `=` at the caret.
     var answer: (location: Int, result: MathAnswer.Result)?
     var answerDismissedAt: Int?
+    /// Blanks a math shortcut left to fill in, in the order Tab visits them.
+    var mathStops: [NSRange] = [] { didSet { if mathStops != oldValue { textView.needsDisplay = true } } }
+    /// The bracket at the caret and its partner, highlighted in math source.
+    var mathBracketMarks: [NSRect] = []
+    /// The text the pending blanks belong to; leaving it forgets them.
+    var mathStopBounds: NSRange?
+    var applyingMathEdit = false
+    /// Where a `$` typed on an empty line was just closed for you: `$‸$`.
+    var pairedDollarAt: Int?
+    private var relayout: NSRange?
+    var mathPreview: MathPreviewView?
     private var captionPopover: NSPopover?
     private var observers: [Any] = []
     private var cancellables = Set<AnyCancellable>()
@@ -227,6 +238,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             guard let self else { return }
             self.refreshTableEditor()
             self.positionImageControls()
+            self.updateMathPreview()
             self.completeLayoutSoon()
         }
     }
@@ -303,6 +315,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func beginTableEditing(at location: Int, row: Int, column: Int) {
         endTableEditing()
+        mathPreview?.hide()
         styler.editingTableLocation = location
         styler.restyleBlock(at: location, in: storage)
         updateFloats()
@@ -465,6 +478,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         clearImageSelection()
         endTableEditing()
+        clearMathStops()
+        mathPreview?.hide()
         note = newNote
         setText(newNote?.savedText ?? "")
         hasUnsavedEdits = false
@@ -695,9 +710,23 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                      range editedRange: NSRange, changeInLength delta: Int) {
         guard editedMask.contains(.editedCharacters) else { return }
         textVersion += 1
+        shiftMathStops(editedRange: editedRange, delta: delta)
         guard !isLoading else { return }
         let caret = NSRange(location: NSMaxRange(editedRange), length: 0)
-        styler.didEdit(textStorage, editedRange: editedRange, delta: delta, selection: [caret])
+        if let restyled = styler.didEdit(textStorage, editedRange: editedRange, delta: delta, selection: [caret]) {
+            relayout = relayout.map { NSUnionRange($0, restyled) } ?? restyled
+        }
+    }
+
+    /// Blocks the styler changed while an edit was processed (a display equation's
+    /// preview below its closing `$$`), laid out again once the edit is done.
+    private func relayoutRestyled() {
+        guard let range = relayout else { return }
+        relayout = nil
+        let clamped = NSIntersectionRange(range, NSRange(location: 0, length: storage.length))
+        guard clamped.length > 0 else { return }
+        layoutManager.invalidateLayout(forCharacterRange: clamped, actualCharacterRange: nil)
+        layoutManager.invalidateDisplay(forCharacterRange: clamped)
     }
 
     // MARK: NSTextViewDelegate
@@ -706,7 +735,20 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         note?.undoManager
     }
 
+    /// LaTeX and code aren't words: `\frac` shouldn't come up misspelled.
+    func textView(_ textView: NSTextView, shouldSetSpellingState value: Int, range affectedCharRange: NSRange) -> Int {
+        guard value != 0 else { return value }
+        if let i = styler.blockIndex(containing: affectedCharRange.location) {
+            switch styler.blocks[i].kind {
+            case .code, .math, .frontmatter: return 0
+            default: break
+            }
+        }
+        return mathSpan(at: affectedCharRange.location) == nil ? value : 0
+    }
+
     func textDidChange(_ notification: Notification) {
+        relayoutRestyled()
         guard !isLoading else { return }
         hasUnsavedEdits = true
         selectionBar.dismiss()
@@ -714,6 +756,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         updateFloats()
         completeLayoutSoon(delay: 0.4)
         updatePageLines()
+        updateMathPreview()
         if note?.isTemporary == false { scheduleSave() }
     }
 
@@ -728,6 +771,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         updateSelectionBar()
         updateSlashSuggestion()
         updateAnswerSuggestion()
+        mathSelectionChanged()
+        updateMathPreview()
     }
 
     private func applySelectionStyling() {
@@ -750,6 +795,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func mouseTrackingEnded() {
         applySelectionStyling()
         updateSelectionBar()
+        mathSelectionChanged()
+        updateMathPreview()
     }
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {

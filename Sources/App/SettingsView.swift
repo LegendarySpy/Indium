@@ -41,6 +41,14 @@ struct SettingsView: View {
             Toggle("Check spelling while typing", isOn: $settings.spellcheck)
 
             Section {
+                Toggle("Math shortcuts", isOn: $settings.mathShortcuts)
+            } footer: {
+                Text("Write LaTeX faster, like Obsidian's LaTeX Suite. Type mk for an equation, x/ for a fraction, sr to square, @a for α. Tab moves to the next blank, then out of the equation.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
                 Toggle("Show page lines", isOn: $settings.showPageLines)
             } footer: {
                 Text("Dashed lines show where each page of an exported PDF starts. Type /page break to start a new page yourself.")

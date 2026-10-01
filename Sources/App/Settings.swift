@@ -80,6 +80,7 @@ final class AppSettings: ObservableObject {
     @Published var spellcheck: Bool { didSet { save(spellcheck, "spellcheck") } }
     @Published var suggestIcons: Bool { didSet { save(suggestIcons, "suggestIcons") } }
     @Published var showPageLines: Bool { didSet { save(showPageLines, "showPageLines") } }
+    @Published var mathShortcuts: Bool { didSet { save(mathShortcuts, "mathShortcuts") } }
 
     private init() {
         appearance = AppearanceSetting(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
@@ -91,6 +92,7 @@ final class AppSettings: ObservableObject {
         spellcheck = defaults.object(forKey: "spellcheck") as? Bool ?? true
         suggestIcons = defaults.object(forKey: "suggestIcons") as? Bool ?? true
         showPageLines = defaults.bool(forKey: "showPageLines")
+        mathShortcuts = defaults.object(forKey: "mathShortcuts") as? Bool ?? true
     }
 
     private func save(_ value: Any, _ key: String) {

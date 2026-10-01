@@ -29,6 +29,7 @@ So Indium shows one note at a time. There are no tabs or split views, just the n
 - **Plain files.** Every note is a Markdown file on disk. No database, no lock-in.
 - **Syntax that steps aside.** Markdown tidies itself up once your cursor leaves a line.
 - **Real math.** `$inline$` and `$$display$$` equations like Obsidian, typeset natively in the editor and in PDFs.
+- **Math shortcuts.** Type `mk` for an equation, `x/` for a fraction, `sr` to square, `@a` for α. Tab moves to the next blank, like Obsidian's LaTeX Suite.
 - **Quick answers.** End a line with `=` and the answer shows up. Tab keeps it.
 - **Tables you can click.** Edit cells directly, add rows and columns, drag to resize.
 - **Text beside tables and images.** Let writing wrap around a table, or put two blocks side by side.

@@ -215,6 +215,7 @@ final class EditorTextView: NSTextView {
         super.draw(dirtyRect)
         (layoutManager as? MarkdownLayoutManager)?.drawFloats(in: dirtyRect, origin: textContainerOrigin)
         drawPageLines(in: dirtyRect)
+        editor?.drawMathMarks()
         drawGhost()
     }
 
@@ -259,14 +260,29 @@ final class EditorTextView: NSTextView {
         super.moveDown(sender)
     }
 
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        // A key typed at the caret (not text put in by a command or an input method).
+        if let s = string as? String, !hasMarkedText(),
+           replacementRange.location == NSNotFound || replacementRange == selectedRange(),
+           editor?.handleMathInput(s) == true { return }
+        super.insertText(string, replacementRange: replacementRange)
+    }
+
+    /// Inserts at the selection as typing does, without the math shortcuts.
+    func insertTypedText(_ s: String) {
+        super.insertText(s, replacementRange: selectedRange())
+    }
+
     override func insertNewline(_ sender: Any?) {
         if editor?.handleSlashKey(#selector(insertNewline(_:))) == true { return }
+        if editor?.handleMathNewline() == true { return }
         if editor?.handleNewline() == true { return }
         super.insertNewline(sender)
     }
 
     override func insertTab(_ sender: Any?) {
         if editor?.handleSlashKey(#selector(insertTab(_:))) == true { return }
+        if editor?.handleMathTab() == true { return }
         if editor?.indentListItem(outdent: false) == true { return }
         super.insertTab(sender)
     }
@@ -278,6 +294,7 @@ final class EditorTextView: NSTextView {
 
     override func deleteBackward(_ sender: Any?) {
         if editor?.deleteSelectedImage() == true { return }
+        if editor?.handleMathBackspace() == true { return }
         super.deleteBackward(sender)
     }
 
@@ -289,6 +306,7 @@ final class EditorTextView: NSTextView {
     override func cancelOperation(_ sender: Any?) {
         if editor?.handleSlashKey(#selector(cancelOperation(_:))) == true { return }
         if editor?.deselectImage() == true { return }
+        editor?.clearMathStops()
         super.cancelOperation(sender)
     }
 

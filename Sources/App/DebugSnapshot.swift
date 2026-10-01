@@ -254,6 +254,87 @@ enum DebugSnapshot {
                     print("NOTE:\n" + target.editor.text)
                 }
             }
+            // `-IndiumMathCases /path`: one case per line, `before<TAB>keys<TAB>expected`. `‸` marks the
+            // caret and `«…»` a selection; in keys, ⇥ is Tab, ⏎ Return, ⌫ Backspace and ↶ Undo.
+            if let path = d.string(forKey: "IndiumMathCases"), let cases = try? String(contentsOfFile: path, encoding: .utf8) {
+                let editor = target.editor
+                let tv = editor.textView
+                window.makeFirstResponder(tv)
+                let undo = tv.undoManager
+                // `-IndiumMathRealKeys YES`: keys go in as NSEvents, one run-loop turn each, so
+                // undo groups by event exactly as it does for someone typing.
+                let realKeys = d.bool(forKey: "IndiumMathRealKeys")
+                func spin() { RunLoop.current.run(until: Date().addingTimeInterval(0.03)) }
+                func send(_ chars: String) {
+                    let codes: [String: UInt16] = ["\t": 48, "\r": 36, "\u{7f}": 51]
+                    for type in [NSEvent.EventType.keyDown, .keyUp] {
+                        if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                    windowNumber: window.windowNumber, context: nil, characters: chars,
+                                                    charactersIgnoringModifiers: chars, isARepeat: false, keyCode: codes[chars] ?? 0) {
+                            window.sendEvent(e)
+                        }
+                    }
+                    spin()
+                }
+                if let undo, undo.groupingLevel > 0, !realKeys { undo.endUndoGrouping() }
+                if !realKeys { undo?.groupsByEvent = false }
+                var failed = 0, total = 0
+                func unmark(_ s: String) -> (String, NSRange) {
+                    let ns = s.replacingOccurrences(of: "↵", with: "\n") as NSString
+                    let caret = ns.range(of: "‸")
+                    if caret.location != NSNotFound { return (ns.replacingCharacters(in: caret, with: ""), NSRange(location: caret.location, length: 0)) }
+                    let a = ns.range(of: "«"), b = ns.range(of: "»")
+                    let plain = ns.replacingOccurrences(of: "«", with: "").replacingOccurrences(of: "»", with: "")
+                    return (plain, a.location == NSNotFound ? NSRange(location: (plain as NSString).length, length: 0)
+                                                               : NSRange(location: a.location, length: b.location - a.location - 1))
+                }
+                for line in cases.components(separatedBy: "\n") where !line.isEmpty && !line.hasPrefix("#") {
+                    let parts = line.components(separatedBy: "\t")
+                    guard parts.count == 3 else { continue }
+                    total += 1
+                    let (start, sel) = unmark(parts[0])
+                    editor.endTableEditing()
+                    editor.clearMathStops()
+                    if realKeys {
+                        editor.replace(NSRange(location: 0, length: editor.storage.length), with: start)
+                        tv.setSelectedRange(sel)
+                        spin()
+                        for key in parts[1] {
+                            switch key {
+                            case "⇥": send("\t")
+                            case "⏎": send("\r")
+                            case "⌫": send("\u{7f}")
+                            case "↶": undo?.undo(); spin()
+                            default: send(String(key))
+                            }
+                        }
+                    } else {
+                    undo?.beginUndoGrouping()
+                    editor.replace(NSRange(location: 0, length: editor.storage.length), with: start)
+                    tv.setSelectedRange(sel)
+                    undo?.endUndoGrouping()
+                    for key in parts[1] {
+                        let isUndo = key == "↶"
+                        if !isUndo { undo?.beginUndoGrouping() }
+                        switch key {
+                        case "⇥": tv.insertTab(nil)
+                        case "⏎": tv.insertNewline(nil)
+                        case "⌫": tv.deleteBackward(nil)
+                        case "↶": undo?.undo()
+                        default: tv.insertText(String(key), replacementRange: NSRange(location: NSNotFound, length: 0))
+                        }
+                        if !isUndo { undo?.endUndoGrouping() }
+                    }
+                    }
+                    let r = tv.selectedRange()
+                    let result = (editor.text as NSString).replacingCharacters(in: r, with: r.length == 0 ? "‸" : "«" + (editor.text as NSString).substring(with: r) + "»")
+                        .replacingOccurrences(of: "\n", with: "↵")
+                    let ok = result == parts[2]
+                    if !ok { failed += 1 }
+                    print(ok ? "PASS" : "FAIL", parts[0], "·", parts[1], "→", result, ok ? "" : "(expected \(parts[2]))")
+                }
+                print("MATH CASES: \(total - failed)/\(total) passed")
+            }
             if d.bool(forKey: "IndiumSlashAccept") {
                 _ = target.editor.handleSlashKey(#selector(NSResponder.insertTab(_:)))
                 print("SLASH RESULT:", target.editor.text.debugDescription)

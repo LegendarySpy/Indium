@@ -74,6 +74,8 @@ extension EditorController {
             default: break
             }
         }
+        // A slash in an equation is division.
+        guard mathSpan(at: sel.location) == nil else { return nil }
         let text = storage.string as NSString
         var s = 0, e = 0, ce = 0
         text.getLineStart(&s, end: &e, contentsEnd: &ce, for: NSRange(location: sel.location, length: 0))
