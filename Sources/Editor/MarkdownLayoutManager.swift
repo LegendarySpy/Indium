@@ -518,7 +518,7 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
             let col = contentColumn(glyph: g, container: container, origin: origin)
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: 11, weight: .regular),
-                .foregroundColor: caption.isError ? Palette.error : Palette.tertiaryText,
+                .foregroundColor: caption.isError ? Palette.error : Palette.secondaryText,
             ]
             let text = NSMutableAttributedString(string: caption.text, attributes: attrs)
             if let action = caption.action {

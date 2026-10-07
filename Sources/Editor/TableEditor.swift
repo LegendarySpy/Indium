@@ -206,6 +206,9 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
                 let box = render.cellRect(row: r, column: c, in: rect)
                     .insetBy(dx: TableRender.padX - 2, dy: TableRender.padY - 2)
                 field.frame = box
+                // A computed cell says what it's calculated from, as in the rendered table.
+                let tip = render.mark(row: r, column: c)?.tip
+                if field.toolTip != tip { field.toolTip = tip }
             }
         }
     }
@@ -229,6 +232,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         Palette.background.setFill()
         tableRect.union(coverRect ?? tableRect).fill()
         render.drawChrome(in: tableRect)
+        render.drawMarks(in: tableRect)
         // Highlights on edge cells follow the table's rounded corners.
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }

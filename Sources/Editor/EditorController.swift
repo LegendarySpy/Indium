@@ -65,6 +65,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         configureTextView()
         styler.imageResolver = self
         styler.tableFormulaCaption = TableFormulaUI.caption
+        styler.tableFormulaMarks = TableFormulaUI.marks
         applySettings(restyle: false)
 
         AppSettings.shared.objectWillChange
@@ -608,23 +609,149 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         for t in tables { replaceWithoutUndo(t.range, with: t.text) }
     }
 
-    /// The formula lines whose caption, under `point`, offers Recalculate.
-    private func staleCaption(at point: NSPoint) -> Int? {
-        guard let container = textView.textContainer else { return nil }
+    /// The formula caption under `point`: where its formula lines start, the rect of its
+    /// words (view coordinates), and whether the point is on its link (Recalculate).
+    func caption(at point: NSPoint) -> (formulas: Int, rect: NSRect, onAction: Bool)? {
+        guard let container = textView.textContainer, storage.length > 0 else { return nil }
         let local = NSPoint(x: point.x - textView.textContainerOrigin.x, y: point.y - textView.textContainerOrigin.y)
         let glyph = layoutManager.glyphIndex(for: local, in: container)
         var line = NSRange()
-        guard layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: &line).contains(local) else { return nil }
+        let frag = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: &line)
+        guard frag.contains(local) else { return nil }
         // The caption sits on the line's hidden source, whose glyphs take no room: the line's first.
         let index = layoutManager.characterIndexForGlyph(at: line.location)
         guard index < storage.length, let caption = storage.attribute(.mdCaption, at: index, effectiveRange: nil) as? CaptionDecoration,
-              let action = caption.action, let i = styler.blockIndex(containing: index) else { return nil }
-        // Only the link itself, drawn after the caption's text (as MarkdownLayoutManager does).
+              let i = styler.blockIndex(containing: index) else { return nil }
+        // Measured as MarkdownLayoutManager draws it: the text, then " · " and the link.
         let font: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11)]
         let x = layoutManager.contentColumn(glyph: line.location, container: container, origin: textView.textContainerOrigin).x
-            + ((caption.text + " · ") as NSString).size(withAttributes: font).width
-        guard point.x >= x - 2, point.x <= x + (action as NSString).size(withAttributes: font).width + 2 else { return nil }
-        return styler.blocks[i].range.location
+        let words = (caption.text as NSString).size(withAttributes: font).width
+        let linkX = x + ((caption.text + " · ") as NSString).size(withAttributes: font).width
+        let end = caption.action.map { linkX + ($0 as NSString).size(withAttributes: font).width } ?? x + words
+        guard point.x >= x - 2, point.x <= end + 2 else { return nil }
+        let rect = NSRect(x: x, y: frag.minY + textView.textContainerOrigin.y, width: words, height: frag.height)
+        return (styler.blocks[i].range.location, rect, caption.action != nil && point.x >= linkX - 2)
+    }
+
+    /// The formulas under a table, one per row in plain words, each with Edit: the
+    /// caption's popover.
+    private func showFormulaList(formulasAt location: Int, from rect: NSRect) {
+        guard location > 0, let parts = tableParts(at: location - 1), let i = styler.blockIndex(containing: location - 1),
+              let grid = TableFormulaUI.grid(of: parts.table)?.grid else { return }
+        let table = styler.blocks[i].range.location
+        let rows = TableFormulaUI.summaries(grid: grid, formulaLines: parts.formulas)
+        let list = TableFormulaListPopover(rows: rows.map { ($0.text, $0.target != nil) })
+        let popover = NSPopover()
+        list.presentingPopover = popover
+        list.onEdit = { [weak self] n in
+            guard let self else { return }
+            if let target = rows[n].target {
+                let labels = TableFormulaUI.hasLabelColumn(grid)
+                let cell = target.isRow ? (target.index - 1, labels ? 1 : 0) : (0, target.index - 1)
+                self.beginTableEditing(at: table, row: cell.0, column: cell.1)
+                self.showFormulaPopover(cell: cell, target: target)
+            } else {
+                self.revealFormulaLine(rows[n].line, formulasAt: location)
+            }
+        }
+        list.onShowSource = { [weak self] in self?.revealFormulaLine(0, formulasAt: location) }
+        popover.contentViewController = list
+        popover.behavior = .transient
+        popover.show(relativeTo: rect, of: textView, preferredEdge: .maxY)
+        formulaListPopover = popover
+    }
+    private(set) weak var formulaListPopover: NSPopover?
+
+    /// The caret at the start of a formula line, which shows the lines as source.
+    private func revealFormulaLine(_ n: Int, formulasAt location: Int) {
+        guard let i = styler.blockIndex(containing: location) else { return }
+        let block = styler.blocks[i].range
+        var at = block.location
+        for _ in 0..<n {
+            let next = NSMaxRange(ns.lineRange(for: NSRange(location: at, length: 0)))
+            guard next < NSMaxRange(block) else { break }
+            at = next
+        }
+        textView.window?.makeFirstResponder(textView)
+        textView.setSelectedRange(NSRange(location: at, length: 0))
+    }
+
+    // MARK: Computed cells
+
+    /// Tooltips over the computed cells of the tables on screen (an open table's cells
+    /// carry their own). Refreshed as the pointer moves, only when something changed.
+    private var cellTips: [(tag: NSView.ToolTipTag, owner: CellTip)] = []
+    private var cellTipKey: [String] = []
+
+    func updateCellTips() {
+        var tips: [(NSRect, String)] = []
+        for block in visibleBlocks() {
+            guard case let .table(table) = block.decoration.content, block.decoration.placement != .below else { continue }
+            for (cell, mark) in table.marks.sorted(by: { ($0.key.row, $0.key.column) < ($1.key.row, $1.key.column) })
+            where cell.row < table.rowHeights.count && cell.column < table.columnWidths.count {
+                tips.append((table.cellRect(row: cell.row, column: cell.column, in: block.content), mark.tip))
+            }
+        }
+        let key = tips.map { "\(NSStringFromRect($0.0))\u{1}\($0.1)" }
+        guard key != cellTipKey else { return }
+        cellTipKey = key
+        cellTips.forEach { textView.removeToolTip($0.tag) }
+        cellTips = tips.map { rect, text in
+            let owner = CellTip(text)
+            return (textView.addToolTip(rect, owner: owner, userData: nil), owner)
+        }
+    }
+
+    var cellTipCount: Int { cellTips.count }
+
+    /// The tooltip text of a computed cell under `point` on the rendered page, for the debug harness.
+    func cellTip(at point: NSPoint) -> String? {
+        for block in visibleBlocks() {
+            guard case let .table(table) = block.decoration.content else { continue }
+            let local = NSPoint(x: point.x - block.content.minX, y: point.y - block.content.minY)
+            if let cell = table.cell(at: local), let mark = table.mark(row: cell.row, column: cell.column) { return mark.tip }
+        }
+        return nil
+    }
+
+    /// "This cell is calculated…" under a computed cell being edited, with Edit Formula….
+    private(set) var calculatedNote: TableCalculatedNote?
+    private var calculatedFocus: TableRender.Position?
+
+    private func updateCalculatedNote() {
+        guard let editor = tableEditor, editor.selection == nil, let location = styler.editingTableLocation,
+              editor.render.mark(row: editor.focus.row, column: editor.focus.column) != nil else {
+            calculatedNote?.removeFromSuperview()
+            calculatedNote = nil
+            return
+        }
+        let cell = TableRender.Position(row: editor.focus.row, column: editor.focus.column)
+        let note = calculatedNote ?? TableCalculatedNote()
+        note.onEditFormula = { [weak self] in
+            guard let self, let parts = self.tableParts(at: location), let grid = TableFormulaUI.grid(of: parts.table)?.grid,
+                  let i = TableFormulas.targets(grid: grid, formulaLines: parts.formulas)[TableFormulas.Cell(row: cell.row + 1, column: cell.column + 1)]
+            else { return }
+            let text = TableFormulas.parse(formulaLines: parts.formulas)[i].text
+            self.calculatedNote?.isHidden = true   // the popover says the rest
+            if let target = TableFormulaUI.target(of: text) {
+                self.showFormulaPopover(cell: (cell.row, cell.column), target: target)
+            } else {
+                let line = TableFormulas.parse(formulaLines: parts.formulas)[i].line
+                self.endTableEditing()
+                if let t = self.styler.blockIndex(containing: location), t + 1 < self.styler.blocks.count {
+                    self.revealFormulaLine(line, formulasAt: self.styler.blocks[t + 1].range.location)
+                }
+            }
+        }
+        if note.superview == nil { textView.addSubview(note) }
+        if calculatedNote == nil || calculatedFocus.map({ $0 != cell }) ?? true { note.isHidden = false }
+        calculatedFocus = cell
+        calculatedNote = note
+        let table = NSRect(origin: editor.frame.origin, size: NSSize(width: editor.render.width, height: editor.render.height))
+        let box = editor.render.cellRect(row: cell.row, column: cell.column, in: table)
+        let size = note.fittingSize
+        let x = min(max(box.minX, table.minX), max(table.maxX - size.width, table.minX))
+        note.frame = NSRect(x: round(x), y: round(box.maxY + 4), width: size.width, height: size.height)
     }
 
     /// Recalculate under a table whose stored results are out of date: one undo step.
@@ -665,14 +792,15 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     /// Formula… from the table toolbar or a cell's menu, for the focused row or column.
     /// `cell` (the editor's numbering) instead of the focused one, for the debug harness.
-    func showFormulaPopover(cell: (row: Int, column: Int)? = nil) {
+    /// `target` picks the row or column outright (a computed cell's own formula).
+    func showFormulaPopover(cell: (row: Int, column: Int)? = nil, target: TableFormulaUI.Target? = nil) {
         // A cell just typed in counts: its results first, so the preview starts from them.
         recalculateEditedTable()
         guard let editor = tableEditor, let location = styler.editingTableLocation, let parts = tableParts(at: location),
               let grid = TableFormulaUI.grid(of: parts.table)?.grid else { return }
         let popover = NSPopover()
         let controller = TableFormulaPopover(grid: grid, formulaLines: parts.formulas, variables: NoteVariables.parse(noteText: storage.string),
-                                             focus: ((cell ?? editor.focus).row + 1, (cell ?? editor.focus).column + 1))
+                                             focus: ((cell ?? editor.focus).row + 1, (cell ?? editor.focus).column + 1), target: target)
         controller.presentingPopover = popover
         controller.onApply = { [weak self] lines in self?.setTableFormulas(lines) }
         popover.contentViewController = controller
@@ -746,6 +874,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         editor.update(render: render)
         editor.frame.origin = rect.origin
         positionTableToolbar()
+        updateCalculatedNote()
     }
 
     private func deleteEditedTable() {
@@ -767,6 +896,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         layoutManager.hiddenFloat = nil
         tableEditor?.removeFromSuperview()
         tableToolbar?.removeFromSuperview()
+        calculatedNote?.removeFromSuperview()
+        calculatedNote = nil
         tableEditor = nil
         tableToolbar = nil
         tableColumnRect = .zero
@@ -1186,9 +1317,15 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         recordEditsAgain()
         if frontmatterEdited {
             frontmatterEdited = false
-            for block in styler.blocks where block.kind == .tableFormulas {
+            let blocks = styler.blocks
+            for (i, block) in blocks.enumerated() where block.kind == .tableFormulas {
                 styler.restyleBlock(at: block.range.location, in: storage)
                 relayout = relayout.map { NSUnionRange($0, block.range) } ?? block.range
+                // Its table too: which computed cells are out of date may have changed.
+                if i > 0, case .table = blocks[i - 1].kind {
+                    styler.restyleBlock(at: blocks[i - 1].range.location, in: storage)
+                    relayout = relayout.map { NSUnionRange($0, blocks[i - 1].range) } ?? blocks[i - 1].range
+                }
             }
         }
         relayoutRestyled()
@@ -1673,8 +1810,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func handleClick(at point: NSPoint, clickCount: Int) -> Bool {
         if let editor = tableEditor, editor.hitTest(point) == nil { endTableEditing() }
-        if let formulas = staleCaption(at: point) {
-            recalculateFormulas(at: formulas)
+        if let hit = caption(at: point) {
+            if hit.onAction { recalculateFormulas(at: hit.formulas) } else { showFormulaList(formulasAt: hit.formulas, from: hit.rect) }
             return true
         }
         for block in visibleBlocks() {

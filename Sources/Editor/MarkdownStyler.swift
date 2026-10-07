@@ -227,6 +227,9 @@ final class MarkdownStyler {
     /// The caption under a table with formulas (TableFormulaUI): given the note, the
     /// table's block and its formula lines. Without it (Quick Look) the lines just hide.
     var tableFormulaCaption: ((NSString, MDBlock, NSRange) -> CaptionDecoration)?
+    /// The cells those formulas fill, marked in the rendered table (TableFormulaUI.marks).
+    /// Without it (Quick Look), and on paper, computed cells look like any other.
+    var tableFormulaMarks: ((NSString, MDBlock, NSRange) -> [TableRender.Position: TableRender.Mark])?
 
     private var selection: [NSRange] = []
     private var text: NSString = ""
@@ -961,6 +964,10 @@ final class MarkdownStyler {
             ? TableRender(spec: spec, typography: typo, maxWidth: floatMaxWidth, fractionBase: config.columnWidth, naturalCap: floatNaturalWidth,
                           fixedWidths: fixed, revealing: reveal)
             : TableRender(spec: spec, typography: typo, maxWidth: contentWidth, fixedWidths: fixed, revealing: reveal)
+        if !config.printing, let marks = tableFormulaMarks, let i = blockIndex(containing: block.range.location),
+           i + 1 < blocks.count, blocks[i + 1].kind == .tableFormulas {
+            render.marks = marks(text, block, blocks[i + 1].range)
+        }
         // The blank line before a table already separates it; only a hair more on top,
         // so a label directly above reads as belonging to it.
         let pad: CGFloat = 2

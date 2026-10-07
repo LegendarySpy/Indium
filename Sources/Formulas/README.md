@@ -39,6 +39,7 @@ TableFormulas.evaluate(grid: [[String]], formulaLines: [String], variables:) -> 
 TableFormulas.apply(tableMarkdown:formulaLines:variables:) -> (markdown: String, outcome: Outcome)
 TableFormulas.apply(toNote:) -> (text: String, outcomes: [Outcome])           // every scanner .table block with TBLFM lines
 TableFormulas.trailingFormulaRange(in: NSString, tableRange: NSRange) -> NSRange?
+TableFormulas.targets(grid:formulaLines:) -> [Cell: Int]                       // computed cells → index into parse(formulaLines:)
 TableFormulas.parse(formulaLines:) -> [ParsedFormula]                          // for UI: each formula, verbatim text + result
 TableFormulas.formulaText(ofLine:) / isFormulaLine(_:) / cells(ofRow:)
 struct Outcome { grid; formulas; issues: [Issue]; changed: [Cell]; blanks: [Cell]; succeeded: Bool }
@@ -62,6 +63,13 @@ columns is up to the UI. Formula lines are never rewritten.
   "ƒ 2 formulas", or the first problem in red ("“Mass of water”, Copper: Can't subtract mol
   from g"). With the caret on them they show as source. PDF export, Quick Look and floating
   tables hide them.
+- **Computed cells show it.** Each cell a formula fills (`TableFormulas.targets`) gets a
+  faint tint and a small ƒ on screen, amber when its formula has a problem or its value is
+  out of date. Hovering one shows the formula in the table's words ("= Mass of hydrated
+  salt − Mass of anhydrous salt"), or its raw text when it can't be put that way. Editing
+  one in the table editor shows a note that the next recalculation replaces it, with
+  Edit Formula…. Clicking the caption lists every formula in plain words, each with Edit,
+  plus Show Source. Paper, PDFs and Quick Look show none of this.
 - **Recalculation** runs in the table editor only: after a change of shape, a paste, or
   clearing cells at once, and when you leave a cell you typed in. The results go into the
   same undo step as the edit, so one Undo restores the inputs and the outputs. On any issue

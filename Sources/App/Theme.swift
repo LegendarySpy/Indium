@@ -40,6 +40,10 @@ enum Palette {
     static let highlight = NSColor.dynamic(light: NSColor(hex: 0xF2D16B, alpha: 0.42), dark: NSColor(hex: 0xC7A13A, alpha: 0.32))
     static let error = NSColor.dynamic(light: NSColor(hex: 0xA8452F), dark: NSColor(hex: 0xE0907C))
     static let accentRing = NSColor.dynamic(light: NSColor(hex: 0x2F5C87, alpha: 0.55), dark: NSColor(hex: 0x93B7DA, alpha: 0.6))
+    /// Behind a table cell a formula fills, and one whose formula has a problem.
+    static let computedFill = NSColor.dynamic(light: NSColor(hex: 0x2F5C87, alpha: 0.05), dark: NSColor(hex: 0x93B7DA, alpha: 0.07))
+    static let warningFill = NSColor.dynamic(light: NSColor(hex: 0xC9861E, alpha: 0.13), dark: NSColor(hex: 0xE0A64A, alpha: 0.13))
+    static let warningText = NSColor.dynamic(light: NSColor(hex: 0x9A5F0C), dark: NSColor(hex: 0xE6B060))
     static let shadow = NSColor.dynamic(light: NSColor(hex: 0x000000, alpha: 0.12), dark: NSColor(hex: 0x000000, alpha: 0.45))
 }
 

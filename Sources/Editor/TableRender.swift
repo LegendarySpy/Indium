@@ -14,6 +14,23 @@ final class TableRender {
     private var cells: [[NSAttributedString]] = []
     private let columns: Int
 
+    /// A cell a table formula fills: tinted, with a small ƒ, and `tip` on hover.
+    /// `isError` when its formula has a problem or its value is out of date.
+    struct Mark: Equatable {
+        let isError: Bool
+        let tip: String
+    }
+    /// A cell in this layout's numbering: row 0 the header, column 0 the leftmost.
+    struct Position: Hashable {
+        var row: Int
+        var column: Int
+    }
+    /// Computed cells. Only set on screen: paper, PDFs and Quick Look leave it empty, so
+    /// they stay clean.
+    var marks: [Position: Mark] = [:]
+
+    func mark(row: Int, column: Int) -> Mark? { marks[Position(row: row, column: column)] }
+
     let typography: Typography
 
     /// Width available to the table (the page column or a column cell).
@@ -180,6 +197,7 @@ final class TableRender {
 
     func draw(in rect: NSRect) {
         drawChrome(in: rect)
+        drawMarks(in: rect)
         for (r, row) in cells.enumerated() {
             for (c, cell) in row.enumerated() {
                 let box = cellRect(row: r, column: c, in: NSRect(x: rect.minX, y: rect.minY, width: width, height: height))
@@ -223,6 +241,27 @@ final class TableRender {
         Palette.quoteBar.setStroke()
         outline.lineWidth = 1
         outline.stroke()
+    }
+
+    /// Computed cells: a faint tint (amber when something's wrong) and a small ƒ in
+    /// the top-left corner, clear of the text, which doesn't move.
+    func drawMarks(in rect: NSRect) {
+        guard !marks.isEmpty, !rowHeights.isEmpty else { return }
+        let frame = NSRect(x: rect.minX, y: rect.minY, width: width, height: height)
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        Self.outline(of: frame).addClip()
+        let glyph = NSFont.systemFont(ofSize: 9, weight: .regular)
+        for (cell, mark) in marks {
+            let r = cell.row, c = cell.column
+            guard r >= 0, c >= 0, r < rowHeights.count, c < columnWidths.count else { continue }
+            let box = cellRect(row: r, column: c, in: frame)
+            (mark.isError ? Palette.warningFill : Palette.computedFill).setFill()
+            box.insetBy(dx: 0.25, dy: 0.25).fill()
+            ("ƒ" as NSString).draw(at: NSPoint(x: box.minX + 4, y: box.minY + 1.5), withAttributes: [
+                .font: glyph, .foregroundColor: mark.isError ? Palette.warningText : Palette.secondaryText,
+            ])
+        }
     }
 
     // MARK: Cell text

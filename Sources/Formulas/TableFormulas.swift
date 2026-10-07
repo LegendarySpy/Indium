@@ -239,23 +239,7 @@ enum TableFormulas {
         for (fi, f) in formulas.enumerated() {
             // The corners of the destination, checked against the table before any
             // cell is listed, so a typo like @2$2..@999999$2 costs nothing.
-            let first: Cell, last: Cell
-            switch f.destination {
-            case .cell(let r):
-                first = Cell(row: resolve(r.row!, rows: true, current: 0), column: resolve(r.column!, rows: false, current: 0))
-                last = first
-            case .row(let r):
-                let row = resolve(r, rows: true, current: 0)
-                (first, last) = (Cell(row: row, column: 1), Cell(row: row, column: max(width, 1)))
-            case .column(let c):
-                let col = resolve(c, rows: false, current: 0)
-                guard height >= 2 else { continue }
-                (first, last) = (Cell(row: 2, column: col), Cell(row: height, column: col))
-            case .range(let a, let b):
-                let r1 = resolve(a.row!, rows: true, current: 0), r2 = resolve(b.row!, rows: true, current: 0)
-                let c1 = resolve(a.column!, rows: false, current: 0), c2 = resolve(b.column!, rows: false, current: 0)
-                (first, last) = (Cell(row: min(r1, r2), column: min(c1, c2)), Cell(row: max(r1, r2), column: max(c1, c2)))
-            }
+            guard let (first, last) = corners(of: f.destination, width: width, height: height) else { continue }
             if let e = inBounds(first) ?? inBounds(last) {
                 issues.append(Issue(formula: f.text, cell: nil, error: e))
                 continue
@@ -359,6 +343,52 @@ enum TableFormulas {
         }
         guard issues.isEmpty else { return fail() }
         return Outcome(grid: output, formulas: parsed, issues: [], changed: changed.sorted(), blanks: blanks.sorted())
+    }
+
+    /// The first and last cell a destination covers (destinations are never relative);
+    /// nil for a column destination in a table with no body rows. Not bounds-checked.
+    private static func corners(of destination: Destination, width: Int, height: Int) -> (Cell, Cell)? {
+        func resolve(_ index: CellReference.Index, rows: Bool) -> Int {
+            switch index {
+            case .absolute(let n): n
+            case .first: 1
+            case .last: rows ? height : width
+            case .firstBody: 2
+            case .relative(let k): k
+            }
+        }
+        switch destination {
+        case .cell(let r):
+            let cell = Cell(row: resolve(r.row!, rows: true), column: resolve(r.column!, rows: false))
+            return (cell, cell)
+        case .row(let r):
+            let row = resolve(r, rows: true)
+            return (Cell(row: row, column: 1), Cell(row: row, column: max(width, 1)))
+        case .column(let c):
+            guard height >= 2 else { return nil }
+            let col = resolve(c, rows: false)
+            return (Cell(row: 2, column: col), Cell(row: height, column: col))
+        case .range(let a, let b):
+            let r1 = resolve(a.row!, rows: true), r2 = resolve(b.row!, rows: true)
+            let c1 = resolve(a.column!, rows: false), c2 = resolve(b.column!, rows: false)
+            return (Cell(row: min(r1, r2), column: min(c1, c2)), Cell(row: max(r1, r2), column: max(c1, c2)))
+        }
+    }
+
+    /// The cells the formulas fill, each with the index (into `parse(formulaLines:)`) of
+    /// the formula that fills it: the last one, as in evaluation. Formulas that don't
+    /// parse or reach outside the table fill nothing. For the UI: which cells are computed.
+    static func targets(grid: [[String]], formulaLines: [String]) -> [Cell: Int] {
+        let width = grid.map(\.count).max() ?? 0, height = grid.count
+        var out: [Cell: Int] = [:]
+        for (i, p) in parse(formulaLines: formulaLines).enumerated() {
+            guard case let .success(f) = p.result, let (first, last) = corners(of: f.destination, width: width, height: height),
+                  first.row >= 1, first.column >= 1, last.row <= height, last.column <= width else { continue }
+            for r in first.row...last.row {
+                for c in first.column...last.column { out[Cell(row: r, column: c)] = i }
+            }
+        }
+        return out
     }
 
     // MARK: - Markdown

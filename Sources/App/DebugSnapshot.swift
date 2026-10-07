@@ -885,7 +885,7 @@ enum DebugSnapshot {
                 for step in steps {
                     // Steps that only look (and Tab, as a real key) open no explicit undo group: an empty
                     // explicit group stays on the stack, where a real key event's empty group is dropped.
-                    let isUndo = ["undo", "redo", "noteundo", "tab", "text", "caption", "fprint", "shot", "focus", "done", "notesel", "selectAll", "select", "pb", "pbhtml", "pbtsv", "copy", "copyTable", "keyev", "cmdev", "switchto", "idle", "cat"].contains(step.split(separator: ":").first.map(String.init) ?? "")
+                    let isUndo = ["undo", "redo", "noteundo", "tab", "text", "caption", "fprint", "shot", "focus", "done", "notesel", "selectAll", "select", "pb", "pbhtml", "pbtsv", "copy", "copyTable", "keyev", "cmdev", "switchto", "idle", "cat", "tips", "calcnote", "list"].contains(step.split(separator: ":").first.map(String.init) ?? "")
                     if !isUndo { undo?.beginUndoGrouping() }
                     defer { if !isUndo { undo?.endUndoGrouping() } }
                     let e = target.editor.tableEditor
@@ -914,13 +914,14 @@ enum DebugSnapshot {
                         let tv = target.editor.textView, lm = target.editor.layoutManager, st = target.editor.storage
                         var spot: NSPoint?
                         st.enumerateAttribute(.mdCaption, in: NSRange(location: 0, length: st.length)) { v, r, stop in
-                            guard let c = v as? CaptionDecoration, c.action != nil else { return }
+                            // `captionclick:list` takes any caption, on its words (the formula list).
+                            guard let c = v as? CaptionDecoration, c.action != nil || arg == "list" else { return }
                             let frag = lm.lineFragmentRect(forGlyphAt: lm.glyphIndexForCharacter(at: r.location), effectiveRange: nil)
                             // On the word Recalculate, or (`captionclick:text`) on the caption's own words.
                             let font: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11)]
                             let col = lm.contentColumn(glyph: lm.glyphIndexForCharacter(at: r.location), container: tv.textContainer!, origin: tv.textContainerOrigin).x
                             let word = col + ((c.text + " · ") as NSString).size(withAttributes: font).width + 20
-                            spot = NSPoint(x: arg == "text" ? col + 20 : word, y: tv.textContainerOrigin.y + frag.midY)
+                            spot = NSPoint(x: arg == "text" || arg == "list" ? col + 20 : word, y: tv.textContainerOrigin.y + frag.midY)
                             stop.pointee = true
                         }
                         if let spot {
@@ -1047,6 +1048,37 @@ enum DebugSnapshot {
                         }
                     case "shot":
                         debugShot(window: window, path: arg)
+                    // Computed cells: `tips` prints each one's tooltip (the open table's fields, or the
+                    // rendered page's), `calcnote` the note under a computed cell being edited,
+                    // `calcedit` its Edit Formula…, `list` the caption popover's rows, `listedit:n` its Edit.
+                    case "tips":
+                        let ed = target.editor
+                        if let open = e {
+                            for f in open.subviews.compactMap({ $0 as? CellField }) where f.toolTip != nil {
+                                print("  TIP field \(f.row),\(f.column): \(f.toolTip!.debugDescription)")
+                            }
+                        } else if let block = ed.styler.blocks.first(where: { if case .table = $0.kind { return true }; return false }),
+                                  let rect = ed.layoutManager.blockRects(in: NSRange(location: block.range.location, length: 1), origin: ed.textView.textContainerOrigin).first,
+                                  case let .table(t) = rect.decoration.content {
+                            ed.updateCellTips()
+                            for r in 0..<t.rowHeights.count {
+                                for c in 0..<t.columnWidths.count {
+                                    let box = t.cellRect(row: r, column: c, in: rect.content)
+                                    if let tip = ed.cellTip(at: NSPoint(x: box.midX, y: box.midY)) { print("  TIP page \(r),\(c): \(tip.debugDescription)") }
+                                }
+                            }
+                            print("  TIP rects on the page:", ed.cellTipCount)
+                        }
+                    case "calcnote":
+                        let n = target.editor.calculatedNote
+                        print("  CALCNOTE:", n.map { "\($0.text.debugDescription) frame \($0.frame)" } ?? "none")
+                    case "calcedit":
+                        target.editor.calculatedNote?.debugEditFormula()
+                    case "list", "listedit":
+                        let list = NSApp.windows.compactMap { $0.contentViewController as? TableFormulaListPopover }.first
+                            ?? target.editor.formulaListPopover?.contentViewController as? TableFormulaListPopover
+                        if !step.hasPrefix("listedit") { print("  LIST:", list.map { $0.rows.map(\.text) } ?? []) }
+                        else { list?.debugEdit(Int(arg) ?? 0) }
                     case "notesel":
                         let n = arg.split(separator: ",").compactMap { Int($0) }
                         window.makeFirstResponder(target.editor.textView)
