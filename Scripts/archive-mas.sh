@@ -19,10 +19,21 @@ if [[ -z "${DEVELOPMENT_TEAM:-}" ]]; then
 fi
 VERSION=${1:?version, e.g. 1.1}
 BUILD=${2:-$(date +%Y%m%d%H%M)}
-OUT="Releases/AppStore-$VERSION"
+for part in "$VERSION" "$BUILD"; do
+  if [[ ! "$part" =~ '^[0-9A-Za-z._-]+$' || "$part" == .* ]]; then
+    echo "error: \"$part\" isn't a plain version or build number (letters, digits, . _ - only)." >&2
+    exit 1
+  fi
+done
+# Each version and build gets its own folder. Nothing here deletes or overwrites: an
+# existing folder means that build was already archived, so the script stops.
+OUT="build/AppStore/Indium-$VERSION-$BUILD"
 ARCHIVE="$OUT/Indium.xcarchive"
-
-rm -rf "$OUT" && mkdir -p "$OUT"
+if [[ -e "$OUT" ]]; then
+  echo "error: $OUT already exists. Use a new build number, or move that folder away yourself." >&2
+  exit 1
+fi
+mkdir -p "$OUT"
 cat > "$OUT/ExportOptions.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
