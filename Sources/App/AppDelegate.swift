@@ -35,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let launchedForFile = !fileControllers.isEmpty
         let d = UserDefaults.standard
         #if APPSTORE
+        IconImport.copyOnFirstLaunch()
         let firstRun = (d.string(forKey: "vaultPath") ?? "").isEmpty && !d.bool(forKey: "didOnboard")
         if firstRun, !launchedForFile {
             chooseNotesFolderOnFirstRun()
@@ -51,7 +52,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 setWorkspace(opened.url, access: opened.lease, reopenLastNote: true)
             }
         }
-        if !launchedForFile { mainWindowController().showWindow(nil) }
+        if !launchedForFile {
+            mainWindowController().showWindow(nil)
+            #if APPSTORE
+            DispatchQueue.main.async { IconImport.offerIfNeeded(in: self.mainController?.window) }
+            #endif
+        }
         #if DEBUG
         DebugSnapshot.runIfRequested(mainWindowController())
         #endif
