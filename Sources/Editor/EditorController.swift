@@ -48,6 +48,15 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var mathBracketMarks: [NSRect] = []
     /// The text the pending blanks belong to; leaving it forgets them.
     var mathStopBounds: NSRange?
+    /// Copies of each pending blank (a tabstop number used twice), parallel to `mathStops`.
+    var mathStopCopies: [[NSRange]] = []
+    /// The blank being filled in, and its copies that follow what's typed in it.
+    var mathActiveStop: (range: NSRange, copies: [NSRange])?
+    /// The exact edit about to happen, so blanks move by it (the text storage reports a wider range).
+    var pendingMathEdit: (range: NSRange, length: Int)?
+    /// The rest of a command a shortcut completed (`ome` → `\omega`: `ga`), absorbed if typed next.
+    var mathWordTail: (location: Int, rest: String)?
+    var syncingMathCopies = false
     var applyingMathEdit = false
     /// Where a `$` typed on an empty line was just closed for you: `$‸$`.
     var pairedDollarAt: Int?
@@ -175,6 +184,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
         finder.noteClientStringWillChange()
+        pendingMathEdit = replacementString.map { (range, ($0 as NSString).length) }
         return true
     }
 
@@ -756,6 +766,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         updateFloats()
         completeLayoutSoon(delay: 0.4)
         updatePageLines()
+        syncMathCopies()
         updateMathPreview()
         if note?.isTemporary == false { scheduleSave() }
     }

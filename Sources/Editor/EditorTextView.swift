@@ -273,9 +273,19 @@ final class EditorTextView: NSTextView {
         super.insertText(s, replacementRange: selectedRange())
     }
 
+    /// The key press being handled, so Return can tell Shift-Return apart (math matrices).
+    private var keyEvent: NSEvent?
+
+    override func keyDown(with event: NSEvent) {
+        keyEvent = event
+        defer { keyEvent = nil }
+        super.keyDown(with: event)
+    }
+
     override func insertNewline(_ sender: Any?) {
         if editor?.handleSlashKey(#selector(insertNewline(_:))) == true { return }
-        if editor?.handleMathNewline() == true { return }
+        let shift = (keyEvent ?? NSApp.currentEvent)?.modifierFlags.contains(.shift) == true
+        if editor?.handleMathNewline(shift: shift) == true { return }
         if editor?.handleNewline() == true { return }
         super.insertNewline(sender)
     }
