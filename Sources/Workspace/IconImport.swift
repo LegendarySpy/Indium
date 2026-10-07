@@ -34,16 +34,25 @@ enum IconImport {
         guard d.string(forKey: stateKey) == nil, let source = directStore else { return }
         // The direct build was used here if its notes folder came over with its preferences.
         let usedDirectBuild = !(d.string(forKey: "vaultPath") ?? "").isEmpty
+        let data: Data
         do {
-            let added = try importIcons(from: source)
-            FolderAccess.log("icons: copied \(added) from \(source.path)")
-            d.set("copied", forKey: stateKey)
+            data = try Data(contentsOf: source)
         } catch let error as NSError where isPermissionError(error) {
             FolderAccess.log("icons: read refused (\(error.domain) \(error.code)), offer: \(usedDirectBuild)")
             d.set(usedDirectBuild ? "pending" : "refused", forKey: stateKey)
+            return
         } catch {
             FolderAccess.log("icons: nothing to copy (\((error as NSError).domain) \((error as NSError).code))")
             d.set("none", forKey: stateKey)
+            return
+        }
+        do {
+            let added = try importIcons(data)
+            FolderAccess.log("icons: copied \(added) from \(source.path)")
+            d.set("copied", forKey: stateKey)
+        } catch {
+            // Not saved (or not icons): nothing is marked done, so the next launch tries again.
+            FolderAccess.log("icons: copy failed \((error as NSError).domain) \((error as NSError).code)")
         }
     }
 
@@ -85,7 +94,7 @@ enum IconImport {
         }
         let alert = NSAlert()
         do {
-            let added = try importIcons(from: url)
+            let added = try importIcons(Data(contentsOf: url))
             UserDefaults.standard.set("imported", forKey: stateKey)
             FolderAccess.log("icons: imported \(added) from \(url.path)")
             alert.messageText = added == 1 ? "Imported 1 note icon" : "Imported \(added) note icons"
@@ -101,11 +110,10 @@ enum IconImport {
         alert.runModal()
     }
 
-    /// Reads (only reads) a store and merges it in. Returns how many icons were added.
-    private static func importIcons(from url: URL) throws -> Int {
-        let data = try Data(contentsOf: url)
+    /// Merges a store's contents in. Returns how many icons were added, once saved.
+    private static func importIcons(_ data: Data) throws -> Int {
         let icons = try JSONDecoder().decode([String: [String: String]].self, from: data)
-        return NoteIcons.shared.merge(icons)
+        return try NoteIcons.shared.merge(icons)
     }
 
     private static func isPermissionError(_ error: Error) -> Bool {

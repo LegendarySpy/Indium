@@ -106,9 +106,10 @@ final class NoteIcons {
     }
 
     /// Adds icons from another copy of the store (the direct-download build's), keeping
-    /// every icon already chosen here. Returns how many were added.
-    @discardableResult
-    func merge(_ other: [String: [String: String]]) -> Int {
+    /// every icon already chosen here. Returns how many were added once they're saved;
+    /// if saving fails, nothing changes and the error says why.
+    func merge(_ other: [String: [String: String]]) throws -> Int {
+        let before = store
         var added: [URL] = []
         for (vault, icons) in other {
             for (note, symbol) in icons where store[vault]?[note] == nil {
@@ -117,13 +118,24 @@ final class NoteIcons {
             }
         }
         guard !added.isEmpty else { return 0 }
-        persist()
+        do {
+            try write()
+        } catch {
+            store = before
+            throw error
+        }
         for url in added { NotificationCenter.default.post(name: Self.didChange, object: url) }
         return added.count
     }
 
-    private func persist() {
-        if let data = try? JSONEncoder().encode(store) { try? data.write(to: fileURL, options: .atomic) }
+    private func persist() { try? write() }
+
+    private func write() throws {
+        #if DEBUG
+        // `-IndiumFailIconWrites YES`: the store can't be saved.
+        if UserDefaults.standard.bool(forKey: "IndiumFailIconWrites") { throw CocoaError(.fileWriteNoPermission, userInfo: [NSFilePathErrorKey: fileURL.path]) }
+        #endif
+        try JSONEncoder().encode(store).write(to: fileURL, options: .atomic)
     }
 
     // MARK: Suggestion state
