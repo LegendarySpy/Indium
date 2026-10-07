@@ -19,6 +19,17 @@ struct EmbedRef: Hashable {
     var subpath: String?
 }
 
+struct CalloutHeader: Hashable {
+    enum Fold: Hashable { case none, open, folded }
+    /// As written, lowercased (`note`, `tip`, `faq`…).
+    var type: String
+    var fold: Fold
+    /// The `> [!type]- ` prefix, before the title.
+    var markerLength: Int
+    /// Just the `> `.
+    var quoteLength: Int
+}
+
 /// A GitHub-style pipe table. Offsets are relative to the start of the block.
 struct TableSpec: Hashable {
     struct Cell: Hashable {
@@ -106,6 +117,9 @@ enum BlockKind: Hashable {
     case math(latex: String)
     case image(ImageRef)
     case embed(EmbedRef)
+    /// The first line of an Obsidian callout, `> [!type]± Title`; the quote lines after
+    /// it are its body.
+    case callout(CalloutHeader)
     /// An Obsidian comment, `%% … %%`, on lines of its own (it may span several).
     case comment
 
@@ -225,7 +239,15 @@ enum MarkdownScanner {
                 }
             }
 
-            blocks.append(MDBlock(range: lines[i].full, kind: classify(line: line)))
+            var kind = classify(line: line)
+            // `[!type]` only starts a callout on a quote's first line; further down it's text.
+            if case let .callout(header) = kind, let previous = blocks.last?.kind {
+                switch previous {
+                case .quote, .callout: kind = .quote(depth: 1, markerLength: header.quoteLength)
+                default: break
+                }
+            }
+            blocks.append(MDBlock(range: lines[i].full, kind: kind))
             i += 1
         }
         return blocks
@@ -279,6 +301,12 @@ enum MarkdownScanner {
         if Regex.hr.firstMatch(in: line, range: full) != nil { return .hr }
         if let m = Regex.quote.firstMatch(in: line, range: full) {
             let depth = ns.substring(with: m.range).filter { $0 == ">" }.count
+            if depth == 1, let c = Regex.calloutHeader.firstMatch(in: line, options: .anchored, range: NSRange(location: m.range.length, length: ns.length - m.range.length)) {
+                let fold = ns.substring(with: c.range(at: 2))
+                return .callout(CalloutHeader(type: ns.substring(with: c.range(at: 1)).lowercased(),
+                                              fold: fold == "-" ? .folded : (fold == "+" ? .open : .none),
+                                              markerLength: NSMaxRange(c.range), quoteLength: m.range.length))
+            }
             return .quote(depth: depth, markerLength: m.range.length)
         }
         if let m = Regex.list.firstMatch(in: line, range: full) {
@@ -600,6 +628,7 @@ enum MarkdownScanner {
         static let heading = make(#"^ {0,3}(#{1,6})(?:[ \t]+|$)"#)
         static let hr = make(#"^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$"#)
         static let quote = make(#"^ {0,3}(?:>[ \t]?)+"#)
+        static let calloutHeader = make(#"\[!([A-Za-z][\w-]*)\]([+-]?)[ \t]*"#)
         static let list = make(#"^([ \t]*)([-*+]|\d{1,9}[.)])(?:[ \t]+|$)(?:(\[([ xX])\])(?:[ \t]+|$))?"#)
         static let imageLine = make(#"^[ \t]*!\[((?:\\.|[^\[\]\\])*)\]\((<[^>\n]*>|[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)(?:[ \t]+"[^"]*")?\)[ \t]*$"#)
         static let wikiImageLine = make(#"^[ \t]*!\[\[([^\[\]\n]+)\]\][ \t]*$"#)
