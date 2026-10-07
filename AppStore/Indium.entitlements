@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- The notes folder (and single notes) you choose in an Open panel or open from Finder. -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+	<!-- Remembering that folder across launches with security-scoped bookmarks. -->
+	<key>com.apple.security.files.bookmarks.app-scope</key>
+	<true/>
+	<!-- Images in notes that point at the web. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<!-- Shared with the Quick Look preview so it draws notes in your font, width and theme. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>$(TeamIdentifierPrefix)dev.garon.Indium</string>
+	</array>
+</dict>
+</plist>
