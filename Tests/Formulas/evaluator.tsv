@@ -1,0 +1,84 @@
+# kind: evaluator
+# Evaluator cases (Sources/Formulas/Evaluator.swift): expression<TAB>expected[<TAB>frontmatter, ↵ = line break]
+# Expected is Quantity.formatted() or ERROR:kind. Every success must also read back through Quantity.parse.
+# Precedence
+-2^2	-4
+(-2)^2	4
+2^-2	0.25
+2^3^2	512
+2 + 3 * 4	14
+(2 + 3) * 4	20
+10 / 4 / 5	0.5
+# Precision: sums keep decimals, products keep significant figures, whole numbers are exact
+0.100 + 0.200	0.300
+2.008 - 0.715	1.293
+2.008 g - 0.715 g	1.293 g
+(2.008 - 0.715) / 2.008 * 100	64.39
+1.293 / 2.008 * 100	64.39
+2.50 * 2	5.00
+9.996 * 1.00	10.0
+12345 * 1.5	19000
+1/3	0.333333
+6.022e23 * 2	1.204e+24
+1e20 + 1	1e+20
+1.0 + 2.25	3.3
+1.005 * 1.000	1.005
+0.000012 * 0.5	6e-06
+# Units: + and - need the same unit (a plain number adopts it)
+2.008 g + 0.715	2.723 g
+3 g + 2 mol	ERROR:incompatibleUnits
+3 g - 2 kg	ERROR:incompatibleUnits
+10.0 g / 2.0 mol	5.0 g/mol
+2.0 mol * 18.02 g/mol	36 g
+1.293 g / 2.008 g	0.6439
+2 m * 3 m	6 m^2
+sqrt(16 m^2)	4 m
+1 / (3 g)	0.333333 g^-1
+1 / (2 mol * 4 L)	0.125 mol^-1·L^-1
+6 J / (2 mol * 3 K)	1 J/(mol·K)
+(2 m)^2	4 m^2
+(2 m)^-1	0.5 m^-1
+# Unsupported dimensional operations are errors, never a silently unitless number
+sqrt(4 m)	ERROR:incompatibleUnits
+(4 m)^0.5	ERROR:incompatibleUnits
+sin(3 g)	ERROR:incompatibleUnits
+log(10 mL)	ERROR:incompatibleUnits
+2 ⟦g Zn⟧ * 3 g	ERROR:incompatibleUnits
+2 ⟦g Zn⟧ / (3 g/mol)	ERROR:incompatibleUnits
+1 / (2 ⟦g Zn⟧)	ERROR:incompatibleUnits
+4 ⟦g Zn⟧ / 2	2 g Zn
+4 ⟦g Zn⟧ / (2 ⟦g Zn⟧)	2
+2 ⟦g Zn⟧ + 1 ⟦g Zn⟧	3 g Zn
+2 ⟦5x⟧	ERROR:parse
+2 m ^ 2 ^ 2000	ERROR:notReal
+(1 m)^2000	ERROR:incompatibleUnits
+16 m^2 + 1 m^2	17 m^2
+2^(1 g)	ERROR:incompatibleUnits
+# Non-finite and pathological input is rejected, not formatted
+1e999	ERROR:notReal
+1e308 * 10	ERROR:notReal
+0e99999999999999999999 + 1	1
+1/0	ERROR:divisionByZero
+sqrt(-1)	ERROR:notReal
+log(0)	ERROR:notReal
+2.0000000000000000000000001 * 1	2.000000000000000
+# Percent is /100
+15% * 200	30
+64.4% * 2	1.29
+# Names: all must resolve
+hydrated - anhydrous	1.293 g	---↵hydrated: 2.008 g↵anhydrous: 0.715 g↵---
+hydrated - water	ERROR:unknownVariable	---↵hydrated: 2.008 g↵---
+hydrated + moles	ERROR:incompatibleUnits	---↵hydrated: 2.008 g↵moles: 0.0112 mol↵---
+2 hydrated	ERROR:parse	---↵hydrated: 2.008 g↵---
+foo(2)	ERROR:unknownFunction
+2pi	6.283185
+max(3, 5, 4)	5
+mean(2.0, 3.0)	2.5
+count(1, 2, 3)	3
+sum(1 g, 2 mol)	ERROR:incompatibleUnits
+# Parse errors
+1 2	ERROR:parse
+2 +	ERROR:parse
+(1 + 2	ERROR:parse
+1.2.3	ERROR:parse
+if(1, 2, 3)	ERROR:unsupported

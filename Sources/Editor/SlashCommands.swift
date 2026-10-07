@@ -134,7 +134,7 @@ extension EditorController {
         // Only at the end of what's being written (a closing $ may follow).
         guard after.trimmingCharacters(in: .whitespaces).isEmpty || after.hasPrefix("$") else { clearAnswer(); return }
         if !inMath { inMath = before.filter { $0 == "$" }.count % 2 == 1 }
-        guard let result = MathAnswer.suggest(lineBeforeCaret: before, inMath: inMath) else {
+        guard let result = MathAnswer.suggest(lineBeforeCaret: before, inMath: inMath, variables: NoteVariables.parse(noteText: storage.string)) else {
             answerDismissedAt = nil
             clearAnswer()
             return
