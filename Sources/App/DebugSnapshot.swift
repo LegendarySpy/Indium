@@ -85,6 +85,11 @@ enum DebugSnapshot {
             print("\(lines.count - failed)/\(lines.count) typeset")
             exit(0)
         }
+        // `-IndiumEvalCases quick_answers.tsv`: quick-answer regression cases (see FormulaSelfTest).
+        if let path = d.string(forKey: "IndiumEvalCases") {
+            let failed = FormulaSelfTest.runQuickAnswerCases(path: path)
+            exit(failed == 0 ? 0 : 1)
+        }
         if d.bool(forKey: "IndiumMathTest") {
             let cases: [(String, Bool)] = [("1 + 2 =", false), ("1 + 2 = ", false), ("Mass is 2 + 3 =", false), ("x =", false),
                 ("35.134\\text{ g} - 34.794\\text{ g} =", true), ("\\frac{0.147\\text{ g Zn}}{65.38\\text{ g/mol}} =", true),
