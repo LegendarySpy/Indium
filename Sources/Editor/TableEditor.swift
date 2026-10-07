@@ -24,6 +24,11 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     /// The cell whose text is being edited (nil while cells are selected as a block).
     var onFocusChange: ((Cell?) -> Void)?
     var onDeleteTable: (() -> Void)?
+    /// Formula… in a cell's menu.
+    var onFormula: (() -> Void)?
+    /// Called instead of `onChange` when rows or columns were inserted or deleted, with
+    /// what was done, so formulas can keep pointing at the same rows and columns.
+    var onStructureChange: ((String, TableFormulaUI.ShapeChange) -> Void)?
 
     private(set) var render: TableRender
     private var fields: [[CellField]] = []
@@ -43,18 +48,20 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     /// Floating on the right: the table grows from its left edge (toward the text),
     /// and inner dividers trade width between neighbours so the right edge holds.
     var anchoredRight = false
-    /// Text wraps right up against a floating table, so its add-row button would sit
-    /// on the words below; rows come from Tab, Return, the toolbar and the menu instead.
-    var floating = false { didSet { addRowButton.isHidden = floating } }
+    var floating = false
+    /// Whether the add strips fit outside the grid (see `TableEdgeStrip.frames`). Text
+    /// wraps right up against a floating table, and a table can fill its column, so
+    /// then they lie along the grid's inner edges instead.
+    var stripRoom: (right: Bool, below: Bool) = (true, true) { didSet { layoutFields() } }
     private var dragStartWidths: [CGFloat] = []
     /// While a divider is dragged, the table as last rendered underneath; painted over
     /// so the old layout never shows through a narrower one.
     private var coverRect: NSRect?
-    /// Room around the grid for the add-row / add-column buttons. It overlaps the page
-    /// rather than pushing the text below down; clicks there pass through to the note.
-    static let margin: CGFloat = 34
-    private let addColumnButton = HoverButton(symbol: "plus", label: "Add Column", pointSize: 11, target: nil, action: nil)
-    private let addRowButton = HoverButton(symbol: "plus", label: "Add Row", pointSize: 11, target: nil, action: nil)
+    /// Room around the grid for the add strips. It overlaps the page rather than
+    /// pushing the text below down; clicks there pass through to the note.
+    static let margin: CGFloat = TableEdgeStrip.outset
+    private let addColumnStrip = TableEdgeStrip(adds: .column)
+    private let addRowStrip = TableEdgeStrip(adds: .row)
     private var tableRect: NSRect { NSRect(x: 0, y: 0, width: render.width, height: render.height) }
 
     init(render: TableRender) {
@@ -65,14 +72,9 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         dashes = render.spec.widthFractions != nil ? render.spec.dashes : nil
         super.init(frame: NSRect(x: 0, y: 0, width: render.width + Self.margin, height: render.height + Self.margin))
         fieldEditor.table = self
-        for button in [addColumnButton, addRowButton] {
-            button.translatesAutoresizingMaskIntoConstraints = true
-            button.target = self
-            button.restingTint = Palette.tertiaryText
-            addSubview(button)
-        }
-        addColumnButton.action = #selector(addColumnAtEnd)
-        addRowButton.action = #selector(addRowAtEnd)
+        for strip in [addColumnStrip, addRowStrip] { addSubview(strip) }
+        addColumnStrip.onClick = { [weak self] in self?.addColumnAtEnd() }
+        addRowStrip.onClick = { [weak self] in self?.addRowAtEnd() }
         rebuildFields()
     }
 
@@ -100,12 +102,14 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     }
 
     var markdown: String {
-        TableSpec.markdown(header: header, body: body, alignments: alignments, dashes: dashes)
+        TableSpec.markdown(header: header.map(TableSpec.escapeCell), body: body.map { $0.map(TableSpec.escapeCell) },
+                           alignments: alignments, dashes: dashes)
     }
 
-    /// `a \| b` in the file is `a | b` in the cell; pipes are escaped again on the way out.
+    /// `a \| b` in the file is `a | b` in the cell, `a<br>b` two lines; they're written
+    /// back the same way (`TableSpec.escapeCell`).
     private static func unescape(_ text: String) -> String {
-        text.replacingOccurrences(of: #"\|"#, with: "|")
+        TableSpec.unescapeCell(text)
     }
 
     /// Adopts a fresh layout after the note re-rendered the table.
@@ -168,20 +172,25 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
                 field.delegate = self
                 field.row = r
                 field.column = c
-                addSubview(field, positioned: .below, relativeTo: addColumnButton)
+                addSubview(field, positioned: .below, relativeTo: addColumnStrip)
                 return field
             }
         }
+        // Keyboard navigation runs from the cells on to the add strips.
+        fields.last?.last?.nextKeyView = addColumnStrip
+        addColumnStrip.nextKeyView = addRowStrip
         focus = (min(focus.row, rowCount - 1), min(focus.column, columns - 1))
         layoutFields()
     }
 
     private func layoutFields() {
         let rect = tableRect
-        // The + buttons sit where the next column and row would appear.
-        let headerHeight = render.rowHeights.first ?? 30
-        addColumnButton.frame = NSRect(x: rect.maxX + 4, y: (headerHeight - 24) / 2, width: 26, height: 24)
-        addRowButton.frame = NSRect(x: 4, y: rect.maxY + 4, width: 26, height: 24)
+        // The strips run along the edges where the next column and row would appear.
+        let strips = TableEdgeStrip.frames(table: rect, room: stripRoom)
+        addColumnStrip.frame = strips.column
+        addColumnStrip.inside = !stripRoom.right
+        addRowStrip.frame = strips.row
+        addRowStrip.inside = !stripRoom.below
         for (r, row) in fields.enumerated() {
             for (c, field) in row.enumerated() {
                 guard r < render.rowHeights.count, c < render.columnWidths.count else {
@@ -201,10 +210,13 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         }
     }
 
-    /// Cell text styled like the rendered table; `reveal` keeps the Markdown markers.
+    /// Cell text styled like the rendered table, equations fitted to the column the
+    /// same way; `reveal` keeps the Markdown markers.
     private func styled(_ text: String, row: Int, column: Int, reveal: Bool) -> NSAttributedString {
-        TableRender.render(text, header: row == 0, alignment: column < alignments.count ? alignments[column] : 0,
-                           typography: render.typography, size: round(render.typography.size * 0.9), revealMarkers: reveal)
+        let styled = TableRender.render(text, header: row == 0, alignment: column < alignments.count ? alignments[column] : 0,
+                                        typography: render.typography, size: round(render.typography.size * 0.9), revealMarkers: reveal)
+        guard column < render.columnWidths.count else { return styled }
+        return TableRender.fit(styled, width: render.columnWidths[column] - TableRender.padX * 2)
     }
 
     /// The text view editing the focused cell, if any. Formatting commands act on it
@@ -217,6 +229,10 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         Palette.background.setFill()
         tableRect.union(coverRect ?? tableRect).fill()
         render.drawChrome(in: tableRect)
+        // Highlights on edge cells follow the table's rounded corners.
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        TableRender.outline(of: tableRect).addClip()
         if let bounds = selectedBounds, bounds.rows.upperBound <= render.rowHeights.count, bounds.columns.upperBound <= render.columnWidths.count {
             // Selected cells: tinted, with one outline around the block.
             let first = render.cellRect(row: bounds.rows.lowerBound, column: bounds.columns.lowerBound, in: tableRect)
@@ -269,8 +285,15 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         field.source = field.stringValue
         setText(field.source, row: field.row, column: field.column)
         field.restyleEditor()
-        onChange?(markdown, (field.row, field.column))
+        let typing = separatesNextChange ? nil : (field.row, field.column)
+        separatesNextChange = false
+        onChange?(markdown, typing)
     }
+
+    /// The next change in a cell is its own Undo step rather than more of the typing
+    /// before it (a math shortcut expanding: Undo brings back what was typed).
+    private var separatesNextChange = false
+    func separateNextChange() { separatesNextChange = true }
 
     func controlTextDidEndEditing(_ obj: Notification) {
         (obj.object as? CellField)?.showRendered()
@@ -281,6 +304,21 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         let (r, c) = (field.row, field.column)
         let range = textView.selectedRange()
         let length = (textView.string as NSString).length
+        // Math comes first: a shortcut's blanks, then out of the equation; only then the
+        // keys move between cells. Return and Escape always leave (dropping any blanks).
+        let math = (textView as? CellTextView)?.math
+        if let math {
+            let handled: Bool
+            switch selector {
+            case #selector(NSResponder.insertTab(_:)): handled = math.handleTab()
+            case #selector(NSResponder.insertBacktab(_:)): handled = math.handleBacktab()
+            case #selector(NSResponder.deleteBackward(_:)): handled = math.handleBackspace()
+            case #selector(NSResponder.insertNewline(_:)):
+                handled = math.handleNewline(shift: NSApp.currentEvent?.modifierFlags.contains(.shift) == true)
+            default: handled = false
+            }
+            if handled { return true }
+        }
         switch selector {
         case #selector(NSResponder.insertTab(_:)):
             if c + 1 < columns { focusCell(row: r, column: c + 1, selectAll: true) }
@@ -326,6 +364,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
             select(from: (r, c), to: (r + 1, c))
             return true
         case #selector(NSResponder.cancelOperation(_:)):
+            math?.clearStops()
             onExit?()
             return true
         default:
@@ -430,11 +469,16 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
 
     // MARK: Clipboard
 
+    /// The table's Markdown in the note with its formula lines, for Copy Table.
+    var noteSource: (() -> String?)?
+
+    /// Selected cells only, never the formulas: Markdown for Indium, plain text and
+    /// HTML for other apps. All of them selected also go out as a Markdown table.
     @objc func copy(_ sender: Any?) {
         let b = targetBounds
         let rows = b.rows.map { r in b.columns.map { c in text(row: r, column: c) } }
         let whole = b.rows == 0..<rowCount && b.columns == 0..<columns
-        TableClipboard.write(rows, header: b.rows.lowerBound == 0, markdown: whole ? markdown : nil, to: .general)
+        TableClipboard.write(rows, header: b.rows.lowerBound == 0, markdown: whole ? markdown : nil, to: TableClipboard.board)
     }
 
     @objc func cut(_ sender: Any?) {
@@ -443,13 +487,14 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     }
 
     @objc func paste(_ sender: Any?) {
-        _ = pasteGrid(from: .general, intoText: false)
+        _ = pasteGrid(from: TableClipboard.board, intoText: false)
     }
 
+    /// The whole table as it is in the note, formula lines included.
     func copyTable() {
         TableClipboard.write([header + Array(repeating: "", count: max(0, columns - header.count))]
                              + body.map { $0 + Array(repeating: "", count: max(0, columns - $0.count)) },
-                             header: true, markdown: markdown, to: .general)
+                             header: true, markdown: noteSource?() ?? markdown, to: TableClipboard.board)
     }
 
     /// Pastes cells copied from a spreadsheet, a web page or another table, starting at
@@ -468,7 +513,8 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
             while rowCount < origin.row + grid.count { body.append(Array(repeating: "", count: columns)) }
             while columns < origin.column + width { insertColumn(at: columns) }
             for (i, row) in grid.enumerated() {
-                for (j, value) in row.enumerated() { setText(value.replacingOccurrences(of: "\n", with: " "), row: origin.row + i, column: origin.column + j) }
+                // Line breaks stay (written as `<br>`).
+                for (j, value) in row.enumerated() { setText(value, row: origin.row + i, column: origin.column + j) }
             }
         }
         commitStructure()
@@ -481,21 +527,21 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         switch item.action {
         case #selector(copy(_:)), #selector(cut(_:)), #selector(delete(_:)), #selector(selectAll(_:)): return true
-        case #selector(paste(_:)): return NSPasteboard.general.string(forType: .string) != nil
+        case #selector(paste(_:)): return TableClipboard.canPaste(TableClipboard.board)
         default: return responds(to: item.action)
         }
     }
 
     // MARK: Structure
 
-    @objc private func addColumnAtEnd() {
+    func addColumnAtEnd() {
         addColumn(right: columns - 1)
         focusCell(row: 0, column: columns - 1)
     }
 
-    @objc private func addRowAtEnd() {
+    func addRowAtEnd() {
         body.append(Array(repeating: "", count: columns))
-        commitStructure()
+        commitStructure(.insertRows(at: rowCount, count: 1))
         focusCell(row: rowCount - 1, column: 0)
     }
 
@@ -503,28 +549,28 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     func addRow(below row: Int? = nil) {
         let index = min(row ?? targetBounds.rows.upperBound - 1, rowCount - 1)
         body.insert(Array(repeating: "", count: columns), at: index)
-        commitStructure()
+        commitStructure(.insertRows(at: index + 2, count: 1))
     }
 
     /// A row above the header would take its place; it goes under it instead.
     func addRow(above row: Int? = nil) {
         let index = max((row ?? targetBounds.rows.lowerBound) - 1, 0)
         body.insert(Array(repeating: "", count: columns), at: index)
-        commitStructure()
+        commitStructure(.insertRows(at: index + 2, count: 1))
         if (row ?? targetBounds.rows.lowerBound) > 0 { focusCell(row: index + 1, column: focus.column) }
     }
 
     func addColumn(right column: Int? = nil) {
         let index = min((column ?? targetBounds.columns.upperBound - 1) + 1, columns)
         insertColumn(at: index)
-        commitStructure()
+        commitStructure(.insertColumns(at: index + 1, count: 1))
         focusCell(row: focus.row, column: index)
     }
 
     func addColumn(left column: Int? = nil) {
         let index = column ?? targetBounds.columns.lowerBound
         insertColumn(at: index)
-        commitStructure()
+        commitStructure(.insertColumns(at: index + 1, count: 1))
         focusCell(row: focus.row, column: index)
     }
 
@@ -550,7 +596,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         let rows = targetBounds.rows.filter { $0 > 0 }
         guard !rows.isEmpty else { NSSound.beep(); return }
         for r in rows.reversed() { body.remove(at: r - 1) }
-        commitStructure()
+        commitStructure(.deleteRows(at: rows.first! + 1, count: rows.count))
         focusCell(row: min(rows.first!, rowCount - 1), column: focus.column)
     }
 
@@ -563,7 +609,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
             if c < alignments.count { alignments.remove(at: c) }
             if var d = dashes, c < d.count { d.remove(at: c); dashes = d }
         }
-        commitStructure()
+        commitStructure(.deleteColumns(at: cols.lowerBound + 1, count: cols.count))
         focusCell(row: focus.row, column: min(cols.lowerBound, columns - 1))
     }
 
@@ -575,9 +621,10 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         if let kept { select(from: kept.anchor, to: kept.head) } else { focusCell(row: focus.row, column: focus.column) }
     }
 
-    private func commitStructure() {
+    /// `change` in TBLFM numbering (row 1 the header, column 1 the leftmost).
+    private func commitStructure(_ change: TableFormulaUI.ShapeChange? = nil) {
         selection = nil
-        onChange?(markdown, nil)
+        if let change, let onStructureChange { onStructureChange(markdown, change) } else { onChange?(markdown, nil) }
         rebuildFields()
     }
 
@@ -589,7 +636,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         // Dividers win over the cells next to them; the table handles its own clicks
         // so a drag can run from one cell into the next.
         if divider(at: local) != nil { return self }
-        for button in [addColumnButton, addRowButton] where !button.isHidden && button.frame.contains(local) { return super.hitTest(point) }
+        for strip in [addColumnStrip, addRowStrip] where !strip.isHidden && strip.frame.contains(local) { return strip }
         return tableRect.contains(local) ? self : nil
     }
 
@@ -668,6 +715,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         menu.addItem(deleteColumns)
         menu.addItem(ClosureMenuItem(rows * cols > 1 ? "Clear Cells" : "Clear Cell") { [weak self] in self?.clearCells() })
         menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem("Formula…") { [weak self] in self?.onFormula?() })
         menu.addItem(ClosureMenuItem("Copy Table") { [weak self] in self?.copyTable() })
         menu.addItem(ClosureMenuItem("Delete Table") { [weak self] in self?.onDeleteTable?() })
         return menu
@@ -769,8 +817,96 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
 
 /// The field editor shared by a table's cells. Paste and Select All reach past the
 /// cell: a copied grid fills cells, and a second Select All takes the whole table.
-final class CellTextView: NSTextView {
+final class CellTextView: NSTextView, MathEditingHost {
     weak var table: TableEditorView?
+
+    /// Math is written in a cell just as in the note: shortcuts, `/` fractions, Tab
+    /// through the blanks and out, and the preview card (floating over the page, so the
+    /// table doesn't clip it). The keys reach it through `TableEditorView`'s commands.
+    lazy var math = MathEditor(host: self)
+    private var storageObserver: NSObjectProtocol?
+
+    var mathTextView: NSTextView { self }
+    var mathEnabled: Bool { table != nil }
+    /// A cell is one line of a pipe table: no `$$` blocks or line breaks, no bare `|`.
+    var mathSingleLine: Bool { true }
+    func mathBlock(at location: Int) -> MathEditor.Block { .text }
+    var mathUndoManager: UndoManager? { noteUndo }
+    func mathSeparateUndo() { table?.separateNextChange() }
+    var mathPreviewParent: NSView? { table?.superview }
+    var mathPreviewColumn: NSRect {
+        guard let page = table?.superview else { return .zero }
+        guard let text = page as? NSTextView, let container = text.textContainer else { return page.bounds }
+        return NSRect(origin: text.textContainerOrigin, size: container.size)
+    }
+    var mathFontSize: CGFloat { table.map { round($0.render.typography.size * 0.9) } ?? font?.pointSize ?? 13 }
+
+    func insertTypedText(_ s: String) {
+        super.insertText(s, replacementRange: selectedRange())
+    }
+
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        // A key typed at the caret (not text put in by a command or an input method).
+        if let s = string as? String, !hasMarkedText(),
+           replacementRange.location == NSNotFound || replacementRange == selectedRange(),
+           math.handleInput(s) { return }
+        super.insertText(string, replacementRange: replacementRange)
+    }
+
+    override func shouldChangeText(in range: NSRange, replacementString: String?) -> Bool {
+        guard super.shouldChangeText(in: range, replacementString: replacementString) else { return false }
+        observeStorage()
+        math.pendingEdit = replacementString.map { (range, ($0 as NSString).length) }
+        return true
+    }
+
+    /// Blanks move with the text as it changes around them.
+    private func observeStorage() {
+        guard storageObserver == nil, let storage = textStorage else { return }
+        storageObserver = NotificationCenter.default.addObserver(forName: NSTextStorage.didProcessEditingNotification, object: storage,
+                                                                 queue: nil) { [weak self] note in
+            guard let storage = note.object as? NSTextStorage, storage.editedMask.contains(.editedCharacters) else { return }
+            MainActor.assumeIsolated { self?.math.shiftStops(editedRange: storage.editedRange, delta: storage.changeInLength) }
+        }
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        math.syncCopies()
+        math.updatePreview()
+    }
+
+    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        guard !stillSelecting else { return }
+        math.selectionChanged()
+        math.updatePreview()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        math.drawMarks()
+    }
+
+    /// Leaving the cell leaves its equation: no blanks or preview linger.
+    override func resignFirstResponder() -> Bool {
+        guard super.resignFirstResponder() else { return false }
+        math.clearStops()
+        math.hidePreview()
+        return true
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil {
+            math.clearStops()
+            math.hidePreview()
+        }
+    }
+
+    deinit {
+        if let storageObserver { NotificationCenter.default.removeObserver(storageObserver) }
+    }
 
     /// Cells never record their own typing (with no undo manager there's nowhere to):
     /// the note keeps a copy of the table from before each run of typing instead, and
@@ -794,9 +930,29 @@ final class CellTextView: NSTextView {
         }
     }
 
+    /// Text selected in a cell copies as just that text, as it's seen (a line break
+    /// as a newline, not `<br>`).
+    override func copy(_ sender: Any?) {
+        let sel = selectedRange()
+        guard sel.length > 0 else { return }
+        let pb = TableClipboard.board
+        pb.clearContents()
+        pb.setString((string as NSString).substring(with: sel), forType: .string)
+    }
+
+    override func cut(_ sender: Any?) {
+        guard selectedRange().length > 0 else { return }
+        copy(sender)
+        delete(sender)
+    }
+
+    /// Cells pasted while typing fill the table from here; text goes in as typed (its
+    /// line breaks kept, as `<br>`), without expanding math shortcuts.
     override func paste(_ sender: Any?) {
-        if table?.pasteGrid(from: .general, intoText: true) == true { return }
-        pasteAsPlainText(sender)
+        let pb = TableClipboard.board
+        if table?.pasteGrid(from: pb, intoText: true) == true { return }
+        guard let text = TableClipboard.grid(from: pb, lines: false)?.first?.first ?? pb.string(forType: .string), !text.isEmpty else { return }
+        insertTypedText(text.replacingOccurrences(of: "\r\n", with: "\n"))
     }
 
     override func pasteAsRichText(_ sender: Any?) { paste(sender) }
@@ -867,6 +1023,105 @@ final class CellField: NSTextField {
     }
 }
 
+/// A thin bar along a table's right edge (adds a column) or bottom edge (adds a row),
+/// as in Notion. Faint while the table is hovered or open; under the pointer it
+/// darkens and shows a +. The whole strip is the target, not just the +.
+final class TableEdgeStrip: NSView {
+    enum Adds { case column, row }
+
+    /// How thick the strip is, and its gap from the grid.
+    static let thickness: CGFloat = 16
+    static let gap: CGFloat = 4
+    /// How far an outside strip reaches past the grid.
+    static let outset: CGFloat = gap + thickness
+
+    /// Where the strips go for a grid at `table`: just outside its right and bottom
+    /// edges when there's room there, else along its inner edges, thinner.
+    static func frames(table: NSRect, room: (right: Bool, below: Bool)) -> (column: NSRect, row: NSRect) {
+        let inner: CGFloat = 10
+        let column = room.right ? NSRect(x: table.maxX + gap, y: table.minY, width: thickness, height: table.height)
+                                : NSRect(x: table.maxX - inner, y: table.minY, width: inner, height: table.height)
+        let row = room.below ? NSRect(x: table.minX, y: table.maxY + gap, width: table.width, height: thickness)
+                             : NSRect(x: table.minX, y: table.maxY - inner, width: table.width, height: inner)
+        return (column, row)
+    }
+
+    let adds: Adds
+    var onClick: (() -> Void)?
+    /// Lying over the grid's edge cells: shown only under the pointer.
+    var inside = false { didSet { if inside != oldValue { needsDisplay = true } } }
+    private var hovering = false { didSet { if hovering != oldValue { needsDisplay = true } } }
+
+    init(adds: Adds) {
+        self.adds = adds
+        super.init(frame: .zero)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(adds == .column ? "Add Column" : "Add Row")
+        toolTip = adds == .column ? "Add Column" : "Add Row"
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+
+    override func accessibilityPerformPress() -> Bool {
+        onClick?()
+        return true
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .arrow) }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        hovering = false
+        onClick?()
+    }
+
+    // With keyboard navigation on, the strip is a stop in the key view loop: Space or
+    // Return adds, and it shows the focus ring and its + while focused.
+    private var focused = false { didSet { needsDisplay = true } }
+    override var acceptsFirstResponder: Bool { NSApp.isFullKeyboardAccessEnabled }
+    override var canBecomeKeyView: Bool { NSApp.isFullKeyboardAccessEnabled && !isHiddenOrHasHiddenAncestor }
+    override func becomeFirstResponder() -> Bool { focused = true; return true }
+    override func resignFirstResponder() -> Bool { focused = false; return true }
+    override var focusRingMaskBounds: NSRect { bar }
+    override func drawFocusRingMask() { NSBezierPath(roundedRect: bar, xRadius: 4, yRadius: 4).fill() }
+
+    override func keyDown(with event: NSEvent) {
+        if [" ", "\r", "\u{3}"].contains(event.charactersIgnoringModifiers ?? "") { onClick?() } else { super.keyDown(with: event) }
+    }
+
+    private var bar: NSRect {
+        adds == .column ? bounds.insetBy(dx: inside ? 1.5 : 3, dy: 1) : bounds.insetBy(dx: 1, dy: inside ? 1.5 : 3)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let lit = hovering || focused
+        guard lit || !inside else { return }
+        (lit ? NSColor.quaternaryLabelColor : Palette.fill).setFill()
+        NSBezierPath(roundedRect: bar, xRadius: 4, yRadius: 4).fill()
+        guard lit, let plus = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: inside ? 8 : 10, weight: .semibold)) else { return }
+        let tinted = NSImage(size: plus.size, flipped: false) { rect in
+            plus.draw(in: rect)
+            Palette.secondaryText.set()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
+        tinted.draw(in: NSRect(x: bar.midX - plus.size.width / 2, y: bar.midY - plus.size.height / 2,
+                               width: plus.size.width, height: plus.size.height))
+    }
+}
+
 /// The glass bar shown above a table while editing it.
 final class TableToolbarView: NSView {
     override func resetCursorRects() {
@@ -880,10 +1135,19 @@ final class TableToolbarView: NSView {
     var onDeleteColumn: (() -> Void)?
     var onDeleteTable: (() -> Void)?
     var onCopyTable: (() -> Void)?
+    /// Formula… for the focused row or column.
+    var onFormula: (() -> Void)?
     var onDone: (() -> Void)?
     /// nil: full width; true/false: text wraps beside it on the right/left.
     var onPlace: ((Bool?) -> Void)?
     var placement: Bool?
+    /// How much of the bar shows. Narrower columns get less: `compact` folds alignment
+    /// into one menu and drops Done's label; `minimal` is just a menu of everything and
+    /// Done (the edge strips still add rows and columns).
+    enum Size: CaseIterable { case full, compact, minimal }
+    var size: Size = .full { didSet { if size != oldValue { build() } } }
+    /// The bar's width at each size, largest first, to pick the one that fits.
+    private(set) var widths: [Size: CGFloat] = [:]
 
     private let stack = NSStackView()
 
@@ -905,46 +1169,99 @@ final class TableToolbarView: NSView {
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor), stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             stack.topAnchor.constraint(equalTo: content.topAnchor), stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
-        stack.addArrangedSubview(PillButton(symbol: "plus", title: "Row") { [weak self] in self?.onAddRow?() })
-        stack.addArrangedSubview(PillButton(symbol: "plus", title: "Column") { [weak self] in self?.onAddColumn?() })
-        stack.addArrangedSubview(divider())
-        stack.addArrangedSubview(PillButton(symbol: "text.alignleft", title: "") { [weak self] in self?.onAlign?(1) })
-        stack.addArrangedSubview(PillButton(symbol: "text.aligncenter", title: "") { [weak self] in self?.onAlign?(2) })
-        stack.addArrangedSubview(PillButton(symbol: "text.alignright", title: "") { [weak self] in self?.onAlign?(3) })
-        stack.addArrangedSubview(divider())
-        let place = PillButton(symbol: "rectangle.righthalf.inset.filled", title: "") { }
-        place.toolTip = "Layout"
-        place.action = { [weak self, weak place] in
-            guard let self, let place else { return }
-            let menu = NSMenu()
-            let options: [(String, Bool?)] = [("Full Width", nil), ("Right, Text Wraps Beside", true), ("Left, Text Wraps Beside", false)]
-            for (title, side) in options {
-                let item = ClosureMenuItem(title) { self.onPlace?(side) }
-                item.state = self.placement == side ? .on : .off
-                menu.addItem(item)
-            }
-            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: place.bounds.height + 4), in: place)
+        // Observers don't run in init, so each size is built here by hand.
+        for s in Size.allCases.reversed() {
+            size = s
+            build()
+            widths[s] = self.frame.width
         }
-        stack.addArrangedSubview(place)
-        let more = PillButton(symbol: "ellipsis", title: "") { }
-        more.action = { [weak self, weak more] in
-            guard let self, let more else { return }
-            let menu = NSMenu()
-            menu.addItem(ClosureMenuItem("Delete Row") { self.onDeleteRow?() })
-            menu.addItem(ClosureMenuItem("Delete Column") { self.onDeleteColumn?() })
-            menu.addItem(.separator())
-            menu.addItem(ClosureMenuItem("Copy Table") { self.onCopyTable?() })
-            menu.addItem(ClosureMenuItem("Delete Table") { self.onDeleteTable?() })
-            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: more.bounds.height + 4), in: more)
-        }
-        stack.addArrangedSubview(more)
-        stack.addArrangedSubview(PillButton(symbol: "checkmark", title: "Done") { [weak self] in self?.onDone?() })
-        stack.layoutSubtreeIfNeeded()
-        let size = stack.fittingSize
-        setFrameSize(NSSize(width: ceil(size.width), height: ceil(max(size.height, 34))))
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    /// The largest size no wider than `width` (the smallest if none is).
+    func fit(width: CGFloat) {
+        size = Size.allCases.first { (widths[$0] ?? 0) <= width } ?? .minimal
+    }
+
+    private func build() {
+        stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let aligns = [("text.alignleft", "Align Left"), ("text.aligncenter", "Align Center"), ("text.alignright", "Align Right")]
+        let places: [(String, Bool?)] = [("Full Width", nil), ("Right, Text Wraps Beside", true), ("Left, Text Wraps Beside", false)]
+        func menuButton(_ symbol: String, _ title: String, _ fill: @escaping (NSMenu) -> Void) -> PillButton {
+            let button = PillButton(symbol: symbol, title: "") { }
+            labelIcon(button, title)
+            button.action = { [weak button] in
+                guard let button else { return }
+                let menu = NSMenu()
+                fill(menu)
+                menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
+            }
+            return button
+        }
+        let addAlign = { [weak self] (menu: NSMenu) in
+            for (i, (symbol, title)) in aligns.enumerated() {
+                let item = ClosureMenuItem(title) { self?.onAlign?(i + 1) }
+                item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+                menu.addItem(item)
+            }
+        }
+        let addPlaces = { [weak self] (menu: NSMenu) in
+            for (title, side) in places {
+                let item = ClosureMenuItem(title) { self?.onPlace?(side) }
+                item.state = self?.placement == side ? .on : .off
+                menu.addItem(item)
+            }
+        }
+        let addMore = { [weak self] (menu: NSMenu) in
+            menu.addItem(ClosureMenuItem("Formula…") { self?.onFormula?() })
+            menu.addItem(.separator())
+            menu.addItem(ClosureMenuItem("Delete Row") { self?.onDeleteRow?() })
+            menu.addItem(ClosureMenuItem("Delete Column") { self?.onDeleteColumn?() })
+            menu.addItem(.separator())
+            menu.addItem(ClosureMenuItem("Copy Table") { self?.onCopyTable?() })
+            menu.addItem(ClosureMenuItem("Delete Table") { self?.onDeleteTable?() })
+        }
+        if size == .minimal {
+            stack.addArrangedSubview(menuButton("ellipsis", "Table") { [weak self] menu in
+                menu.addItem(ClosureMenuItem("Add Row") { self?.onAddRow?() })
+                menu.addItem(ClosureMenuItem("Add Column") { self?.onAddColumn?() })
+                menu.addItem(.separator())
+                addAlign(menu)
+                menu.addItem(.separator())
+                addPlaces(menu)
+                menu.addItem(.separator())
+                addMore(menu)
+            })
+        } else {
+            stack.addArrangedSubview(PillButton(symbol: "plus", title: "Row") { [weak self] in self?.onAddRow?() })
+            stack.addArrangedSubview(PillButton(symbol: "plus", title: "Column") { [weak self] in self?.onAddColumn?() })
+            stack.addArrangedSubview(divider())
+            if size == .compact {
+                stack.addArrangedSubview(menuButton("text.alignleft", "Alignment", addAlign))
+            } else {
+                for (i, (symbol, title)) in aligns.enumerated() {
+                    let button = PillButton(symbol: symbol, title: "") { [weak self] in self?.onAlign?(i + 1) }
+                    labelIcon(button, title)
+                    stack.addArrangedSubview(button)
+                }
+            }
+            stack.addArrangedSubview(divider())
+            stack.addArrangedSubview(menuButton("rectangle.righthalf.inset.filled", "Layout", addPlaces))
+            stack.addArrangedSubview(menuButton("ellipsis", "More", addMore))
+        }
+        let done = PillButton(symbol: "checkmark", title: size == .full ? "Done" : "") { [weak self] in self?.onDone?() }
+        if size != .full { labelIcon(done, "Done") }
+        stack.addArrangedSubview(done)
+        stack.layoutSubtreeIfNeeded()
+        let fitting = stack.fittingSize
+        setFrameSize(NSSize(width: ceil(fitting.width), height: ceil(max(fitting.height, 34))))
+    }
+
+    private func labelIcon(_ button: PillButton, _ title: String) {
+        button.toolTip = title
+        button.setAccessibilityLabel(title)
+    }
 
     override func cursorUpdate(with event: NSEvent) { NSCursor.arrow.set() }
 

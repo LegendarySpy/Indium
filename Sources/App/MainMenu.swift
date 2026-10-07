@@ -38,8 +38,10 @@ enum MainMenu {
 
     private static func appMenu() -> NSMenu {
         let m = NSMenu(title: "Indium")
-        add(m, "About Indium", #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
+        add(m, "About Indium", #selector(AppDelegate.showAbout(_:)))
+        #if !APPSTORE
         add(m, "Check for Updates…", #selector(AppDelegate.checkForUpdates(_:)))
+        #endif
         m.addItem(.separator())
         add(m, "Settings…", #selector(AppDelegate.showSettings(_:)), ",")
         m.addItem(.separator())
@@ -156,6 +158,8 @@ enum MainMenu {
         add(m, "Image…", #selector(W.insertImage(_:)), "i", [.command, .shift])
         add(m, "Inline Equation", #selector(W.insertInlineMath(_:)), "m", [.command, .control])
         add(m, "Display Equation", #selector(W.insertDisplayMath(_:)), "m", [.command, .control, .shift])
+        add(m, "Math Shortcuts", #selector(MathSnippetConfig.showMathShortcuts(_:))).target = MathSnippetConfig.shared
+        add(m, "Edit Math Shortcuts…", #selector(MathSnippetConfig.editMathShortcuts(_:))).target = MathSnippetConfig.shared
         m.addItem(.separator())
         return m
     }

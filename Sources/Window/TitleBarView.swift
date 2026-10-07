@@ -32,7 +32,12 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
     private var titleIcon: HoverButton!
     /// The note's icon was clicked: offer the icon picker.
     var onIconClick: ((NSView) -> Void)?
-    var iconAvailable = false { didSet { titleIcon.isHidden = !iconAvailable } }
+    var iconAvailable = false {
+        didSet {
+            titleIcon.isHidden = !iconAvailable
+            if !iconAvailable { iconNoteURL = nil }
+        }
+    }
     private let leftStack = NSStackView()
     private let rightStack = NSStackView()
     private(set) var chromeVisible = true
@@ -188,7 +193,9 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
         guard let image = NSImage(systemSymbolName: name, accessibilityDescription: "Note icon")?
             .withSymbolConfiguration(.init(pointSize: 12, weight: .medium)) else { return }
         titleIcon.restingTint = symbol == nil ? Palette.syntax : Palette.tertiaryText
-        guard titleIcon.image != image else { return }
+        iconImage = image
+        // While a suggestion runs the spinner holds the spot; the icon arrives when it ends.
+        guard !iconSpinner.isAnimating, titleIcon.image != image else { return }
         // Cross-fade to the new symbol.
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.1
@@ -203,6 +210,70 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
     @objc private func iconClicked() {
         onIconClick?(titleIcon)
     }
+
+    // MARK: Icon suggestion
+
+    /// The note the icon belongs to: the bar shows that note's suggestion progress.
+    var iconNoteURL: URL? {
+        didSet {
+            guard iconNoteURL.map(NoteIcons.key) != oldValue.map(NoteIcons.key) else { return }
+            // Another note: show what this one is doing (usually nothing), never the last one's news.
+            showSuggestion(iconNoteURL.map { NoteIcons.shared.suggestion(for: $0) } ?? .idle, announce: false)
+        }
+    }
+    private var iconImage: NSImage?
+    private var suggestionObserver: NSObjectProtocol?
+    deinit { suggestionObserver.map(NotificationCenter.default.removeObserver) }
+    private lazy var iconSpinner: IconSpinner = {
+        let spinner = IconSpinner()
+        addSubview(spinner)
+        NSLayoutConstraint.activate([
+            spinner.centerXAnchor.constraint(equalTo: titleIcon.centerXAnchor),
+            spinner.centerYAnchor.constraint(equalTo: titleIcon.centerYAnchor),
+        ])
+        suggestionObserver = NotificationCenter.default.addObserver(forName: NoteIcons.suggestionDidChange, object: nil, queue: .main) { [weak self] n in
+            guard let self, let url = n.object as? URL, url == self.iconNoteURL.map(NoteIcons.key) else { return }
+            self.showSuggestion(NoteIcons.shared.suggestion(for: url), announce: true)
+        }
+        return spinner
+    }()
+
+    /// A spinner in the icon's place while a suggestion runs; then the new icon springs
+    /// in, or a small note says it kept the same one or why it couldn't.
+    private func showSuggestion(_ state: NoteIcons.Suggestion, announce: Bool) {
+        let suggesting = state == .suggesting
+        let wasSpinning = iconSpinner.isAnimating
+        // The button stays in place (blank, not transparent) so it can still be clicked
+        // to pick an icon by hand, which replaces the suggestion.
+        if suggesting != wasSpinning {
+            titleIcon.image = suggesting ? NSImage(size: iconImage?.size ?? NSSize(width: 14, height: 14)) : iconImage
+        }
+        titleIcon.toolTip = suggesting ? "Suggesting an icon…" : "Change Icon"
+        titleIcon.setAccessibilityLabel(titleIcon.toolTip)
+        if suggesting { iconSpinner.start() } else { iconSpinner.stop() }
+        guard announce else { return }
+        if case .changed = state, wasSpinning { titleIcon.springIn(from: 0.5) }
+        // The picker, if it's open, already says how it went.
+        guard let url = iconNoteURL, !IconPickerController.isShowing(for: url) else { return }
+        IconSuggestionNotice.show(state, relativeTo: titleIcon.bounds, of: titleIcon) { NoteIcons.shared.retry(for: url) }
+    }
+
+    #if DEBUG
+    /// Clicks the note's icon the way the pointer does: hit-tested, then a real mouse down.
+    func debugClickIcon() {
+        guard let window, let frameView = window.contentView?.superview else { return }
+        let point = titleIcon.convert(NSPoint(x: titleIcon.bounds.midX, y: titleIcon.bounds.midY), to: nil)
+        let hit = frameView.hitTest(frameView.convert(point, from: nil))
+        print("  icon hit:", hit.map { String(describing: type(of: $0)) } ?? "nil")
+        func mouse(_ type: NSEvent.EventType) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+        }
+        NSApp.postEvent(mouse(.leftMouseUp), atStart: false)
+        hit?.mouseDown(with: mouse(.leftMouseDown))
+    }
+    var debugIconState: String { "spinner:\(iconSpinner.isAnimating) tooltip:\(titleIcon.toolTip ?? "-")" }
+    #endif
 
     // MARK: Menus
 
@@ -386,6 +457,42 @@ final class TitleField: NSTextField {
         hovering = false
         invalidateIntrinsicContentSize()
         needsDisplay = true
+    }
+}
+
+/// A small spinner standing in for a note's icon. Clicks pass through to the icon
+/// underneath, so it can still open the picker.
+final class IconSpinner: NSProgressIndicator {
+    private(set) var isAnimating = false
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        style = .spinning
+        controlSize = .small
+        isDisplayedWhenStopped = false
+        isHidden = true
+        setAccessibilityLabel("Suggesting an icon")
+        translatesAutoresizingMaskIntoConstraints = false
+        widthAnchor.constraint(equalToConstant: 12).isActive = true
+        heightAnchor.constraint(equalToConstant: 12).isActive = true
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func start() {
+        guard !isAnimating else { return }
+        isAnimating = true
+        isHidden = false
+        startAnimation(nil)
+    }
+
+    func stop() {
+        guard isAnimating else { return }
+        isAnimating = false
+        stopAnimation(nil)
+        isHidden = true
     }
 }
 

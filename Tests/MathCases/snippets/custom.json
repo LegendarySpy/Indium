@@ -1,0 +1,17 @@
+[
+    // Pasted from LaTeX Suite: unquoted keys, a /regex/, comments, a trailing comma.
+    {trigger: "ce", replacement: "\\mathrm{$0}$1", options: "mA"},
+    {trigger: /(\d)deg/, replacement: "[[0]]^{\\circ}", options: "rmA", description: "degrees"},
+    {trigger: "dg", replacement: "^{\\circ}", options: "m"},
+    {trigger: '->', replacement: '→', options: 'tA'},
+    /* Same trigger and priority as a built-in: this one wins. */
+    {trigger: "sr", replacement: "^{3}", options: "mA"},
+    // Lower priority than the built-in @a: the built-in stays.
+    {trigger: "@a", replacement: "\\aleph", options: "mA", priority: -1},
+    // LaTeX Suite's ${GREEK} variable.
+    {trigger: /\\(${GREEK})hat/, replacement: "\\hat{\\[[0]]}", options: "rmA", priority: 2},
+    // No mode letter: everywhere.
+    {trigger: "qed", replacement: "∎", options: "A"},
+    // Strict JSON is fine too.
+    {"trigger": "nn", "replacement": "\\mathbb{N}", "options": "mA"},
+]

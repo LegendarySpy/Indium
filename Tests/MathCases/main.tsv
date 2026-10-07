@@ -1,0 +1,192 @@
+# Math editing regression corpus, after Obsidian's LaTeX Suite defaults.
+# Run: Indium -IndiumTemp YES -IndiumMathCases Tests/MathCases/main.tsv -IndiumSnapshot /tmp/x.png [-IndiumMathRealKeys YES]
+# before<TAB>keys<TAB>expected. ‸ caret, «» selection, ↵ newline. Keys: ⇥ Tab, ⏎ Return, ⇧ Shift-Return, ⌫ Backspace, ↶ Undo, ↷ Redo.
+#
+# Auto-fraction: the term before the slash becomes the numerator.
+$x‸$	/	$\frac{x}{‸}$
+$$x‸$$	/	$$\frac{x}{‸}$$
+$$↵x‸↵$$	/	$$↵\frac{x}{‸}↵$$
+$(a+b(c+d))‸$	/	$\frac{a+b(c+d)}{‸}$
+$(a+b)‸$	/	$\frac{a+b}{‸}$
+$(a)(b)‸$	/	$\frac{(a)(b)}{‸}$
+$\sin x‸$	/	$\sin \frac{x}{‸}$
+$x^2‸$	/	$\frac{x^2}{‸}$
+$e^{x}‸$	/	$\frac{e^{x}}{‸}$
+$a+b‸$	/	$a+\frac{b}{‸}$
+$a = 2x‸$	/	$a = \frac{2x}{‸}$
+$\alpha‸$	/	$\frac{\alpha}{‸}$
+$\alpha x‸$	/	$\frac{\alpha x}{‸}$
+$x‸$	/2	$\frac{x}{2‸}$
+$x‸$	/y⇥	$\frac{x}{y}‸$
+$x‸$	/y⇥⇥	$\frac{x}{y}$‸
+$$↵x‸↵$$	/y⇥⇥	$$↵\frac{x}{y}↵$$↵‸
+$«a+b»$	/	$\frac{a+b}{‸}$
+# Nothing before the slash: it stays a slash, and a second slash makes an empty fraction (the // snippet).
+$‸$	/	$/‸$
+$a+‸$	/	$a+/‸$
+$‸$	//	$\frac{‸}{}$
+$‸$	//a⇥b⇥	$\frac{a}{b}‸$
+$‸$	//a⇥b⇥⇥	$\frac{a}{b}$‸
+$\frac{x}{‸}$	/	$\frac{x}{/‸}$
+# Scripts: upstream's default autofractionExcludedEnvs is ^{…} only, so subscripts still make fractions.
+$x^{a‸}$	/	$x^{a/‸}$
+$x_{a‸}$	/	$x_{\frac{a}{‸}}$
+$\text{a‸}$	/	$\text{a/‸}$
+$a\‸$	/	$a\/‸$
+# Brackets around a new fraction grow to fit (auto-enlarge).
+$(x‸)$	/	$\left( \frac{x}{‸} \right)$
+$‸$	(x/y⇥⇥	$\left( \frac{x}{y} \right)‸$
+$‸$	(x/y⇥⇥⇥	$\left( \frac{x}{y} \right)$‸
+# Undo and redo
+$x‸$	/↶	$x/‸$
+$x‸$	/↶↶	$x‸$
+$x‸$	/↶2	$x/2‸$
+$x‸$	/↶↷	$\frac{x}{‸}$
+# Never a fraction: prices, escaped dollars, code, prose.
+Price $5‸	/	Price $5/‸
+Costs $5 and $10‸	/	Costs $5 and $10/‸
+\$x‸	/	\$x/‸
+`$x‸$`	/	`$x/‸$`
+```↵$x‸$↵```	/	```↵$x/‸$↵```
+and‸	/	and/‸
+#
+# Tabstops
+$‸$	sum⇥	$\sum_{«i»=1}^{N}$
+$‸$	sum⇥k⇥0⇥n⇥	$\sum_{k=0}^{n}‸$
+$$↵‸↵$$	sum⇥k⇥0⇥n⇥x	$$↵\sum_{k=0}^{n} x‸↵$$
+$‸$	sum⇥↶	$\sum‸$
+$‸$	lim	$\lim_{ «n» \to \infty }$
+$‸$	lim⇥⇥x	$\lim_{ n \to \infty }x‸$
+$‸$	sq	$\sqrt{ ‸ }$
+$‸$	sqx⇥⇥	$\sqrt{ x }$‸
+$‸$	par⇥	$\frac{ \partial «y» }{ \partial x }$
+$‸$	3rt	$\sqrt[3]{ ‸ }$
+# Repeated tabstops are mirrored.
+$‸$	outer	$\ket{«\psi»} \bra{\psi}$
+$‸$	outerab	$\ket{ab‸} \bra{ab}$
+$‸$	outerab⇥	$\ket{ab} \bra{ab}‸$
+$‸$	outerab⌫	$\ket{a‸} \bra{a}$
+$‸$	taylg	$g‸(x + h) = g(x) + g'(x)h + g''(x) \frac{h^{2}}{2!} + \dots$
+$‸$	taylg⇥y	$g(y‸ + h) = g(y) + g'(y)h + g''(y) \frac{h^{2}}{2!} + \dots$
+$$↵‸↵$$	begcases	$$↵\begin{cases‸}↵↵\end{cases}↵$$
+$$↵‸↵$$	begcases⇥	$$↵\begin{cases}↵‸↵\end{cases}↵$$
+#
+# Matrices
+$$↵‸↵$$	pmat	$$↵\begin{pmatrix}↵‸↵\end{pmatrix}↵$$
+$$↵‸↵$$	pmata⇥b⏎c⇥d	$$↵\begin{pmatrix}↵a & b \\↵c & d‸↵\end{pmatrix}↵$$
+$$↵‸↵$$	pmata⇥b⏎c⇥d⇧	$$↵\begin{pmatrix}↵a & b \\↵c & d↵\end{pmatrix}‸↵$$
+$‸$	pmata⇥b	$\begin{pmatrix}a & b‸\end{pmatrix}$
+$‸$	pmata⏎b	$\begin{pmatrix}a \\ b‸\end{pmatrix}$
+$‸$	pmata⇧	$\begin{pmatrix}a\end{pmatrix}‸$
+$$↵‸↵$$	cases	$$↵\begin{cases}↵‸↵\end{cases}↵$$
+$$↵‸↵$$	bmat	$$↵\begin{bmatrix}↵‸↵\end{bmatrix}↵$$
+$$↵‸↵$$	iden2	$$↵\begin{pmatrix}↵1 & 0 \\↵0 & 1↵\end{pmatrix}‸↵$$
+#
+# Brackets
+$‸$	(	$(‸)$
+$‸$	(x)	$(x)‸$
+$‸$	(x⇥	$(x)‸$
+$‸$	[x]	$[x]‸$
+$‸$	{x}	${x}‸$
+$(‸)$	⌫	$‸$
+$‸$	lr(	$\left( ‸ \right)$
+$‸$	lr(x⇥	$\left( x \right)‸$
+$‸$	lr|x⇥	$\left| x \right|‸$
+$‸$	avgx⇥	$\langle x \rangle‸$
+$(\frac{a}{b}‸)$	)	$\left( \frac{a}{b} \right)‸$
+$(\frac{a}{b}‸)$	⇥	$\left( \frac{a}{b} \right)‸$
+$(a‸)$	⇥	$(a)‸$
+#
+# Visual snippets on a selection
+$«x»$	U	$\underbrace{ x }_{ ‸ }$
+$«x»$	O	$\overbrace{ x }^{ ‸ }$
+$«x»$	B	$\underset{ ‸ }{ x }$
+$«x»$	C	$\cancel{ x }‸$
+$«x»$	K	$\cancelto{ ‸ }{ x }$
+$«x»$	S	$\sqrt{ x }‸$
+$«a+b»$	(	$(a+b)‸$
+$«a+b»$	[	$[a+b]‸$
+$«x»$	C↶	$«x»$
+«x»	U	U‸
+#
+# Into math from prose
+‸	mk	$‸$
+‸	mkx	$x‸$
+a ‸	mk	a $‸$
+am‸	k	amk‸
+‸	dm	$$↵‸↵$$
+‸	mk↶	mk‸
+‸	$x$	$x$‸
+#
+# Greek and symbols
+$‸$	@a	$\alpha‸$
+$‸$	@ax	$\alpha x‸$
+$‸$	alpha	$\alpha‸$
+$‸$	ome	$\omega‸$
+$‸$	@a↶	$@a‸$
+$x‸$	**y	$x\cdot y‸$
+$‸$	->	$\to‸$
+$‸$	+-	$\pm‸$
+$‸$	!=	$\neq‸$
+$‸$	ooo	$\infty‸$
+$‸$	RR	$\mathbb{R}‸$
+$‸$	nabl	$\nabla‸$
+$‸$	deg	$\degree‸$
+$‸$	kbt	$k_{B}T‸$
+$‸$	dag	$^{\dagger}‸$
+# Powers
+$x‸$	sr	$x^{2}‸$
+$x‸$	cb	$x^{3}‸$
+$x‸$	sr↶	$xsr‸$
+$x‸$	rd3⇥+1	$x^{3}+1‸$
+$‸$	@asr	$\alpha^{2}‸$
+$‸$	ee	$e^{ ‸ }$
+$a‸$	invs	$a^{-1}‸$
+# Auto subscript
+$x‸$	1	$x_{1}‸$
+$x‸$	12	$x_{12}‸$
+$‸$	@a1	$\alpha_{1}‸$
+$‸$	CO2	$CO_{2}‸$
+$‸$	xhat1	$\hat{x}_{1}‸$
+$2‸$	3	$23‸$
+$\sin‸$	2	$\sin 2‸$
+$‸$	xhat	$\hat{x}‸$
+#
+# More fractions
+$\frac{a}{b}‸$	/	$\frac{\frac{a}{b}}{‸}$
+$2\pi r‸$	/	$\frac{2\pi r}{‸}$
+$\alpha ‸$	/	$\alpha /‸$
+$x^{a}‸$	/	$\frac{x^{a}}{‸}$
+$x_{1}‸$	/	$\frac{x_{1}}{‸}$
+$[a]‸$	/	$\frac{[a]}{‸}$
+$a, b‸$	/	$a, \frac{b}{‸}$
+$\text{km/h‸}$	/	$\text{km/h/‸}$
+$$↵a = (b + c‸)↵$$	/	$$↵a = \left( b + \frac{c}{‸} \right)↵$$
+$$↵(x‸)↵$$	/y⇥⇥⇥	$$↵\left( \frac{x}{y} \right)↵$$↵‸
+# Undo and redo after other expansions
+$x‸$	sr↶↷	$x^{2}‸$
+$‸$	@a↶↷	$\alpha‸$
+$«x»$	C↶↷	$\cancel{ x }‸$
+$‸$	sum⇥↶↷	$\sum_{«i»=1}^{N}$
+$x‸$	/↶↶↷↷	$\frac{x}{‸}$
+# Typing a command by hand isn't interrupted by shortcuts
+$‸$	\lbrace	$\lbrace‸$
+$‸$	\rightarrow	$\rightarrow‸$
+$‸$	\braket	$\braket‸$
+$‸$	\sqrt	$\sqrt‸$
+$‸$	\text	$\text‸$
+$‸$	\alphax	$\alpha x‸$
+# Spelling out a command a shortcut started
+$‸$	omega	$\omega‸$
+$‸$	nabla	$\nabla‸$
+$‸$	nablax	$\nabla x‸$
+$‸$	omex	$\omega x‸$
+# Repeated blanks, more
+$‸$	outer@a	$\ket{\alpha‸} \bra{\alpha}$
+$‸$	parn2⇥f⇥x	$\frac{ \partial^{2} f }{ \partial x‸^{2} }$
+$‸$	iden2	$\begin{pmatrix}1 & 0 \\ 0 & 1\end{pmatrix}‸$
+$‸$	par2	$\frac{ \partial^{2} «y» }{ \partial x^{2} }$
+# Matrix rows that already end
+$$↵\begin{pmatrix}↵a \\‸↵\end{pmatrix}↵$$	⏎b	$$↵\begin{pmatrix}↵a \\↵b‸↵\end{pmatrix}↵$$
+$$↵‸↵$$	bmat1⇥2⏎3⇥4	$$↵\begin{bmatrix}↵1 & 2 \\↵3 & 4‸↵\end{bmatrix}↵$$
+$$↵‸↵$$	align	$$↵\begin{aligned}↵‸↵\end{aligned}↵$$
