@@ -1503,14 +1503,14 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         if ref.source.hasPrefix("http://") || ref.source.hasPrefix("https://") {
             return URL(string: ref.source).flatMap { ImageCache.shared.remote($0) }
         }
-        if let url = workspace?.resolveImage(ref, from: note?.url) ?? noteRelative(key),
-           let image = ImageCache.shared.image(at: url) {
-            return image
-        }
+        let found = workspace?.resolveImage(ref, from: note?.url) ?? noteRelative(key)
+        if let found, let image = ImageCache.shared.image(at: found) { return image }
         // A note opened on its own in the App Store build may read only itself, so images
         // beside it can't be read until you grant its folder (the window offers that).
         if FolderAccess.isSandboxed, let url = note?.url, workspace?.contains(url) != true { onImageNeedsAccess?() }
-        return nil
+        // An image that's there but can't be read says so, rather than "not found".
+        let target = found ?? (key.hasPrefix("/") ? URL(fileURLWithPath: key) : note?.url?.deletingLastPathComponent().appendingPathComponent(key))
+        return target.map(ImageCache.isAccessDenied) == true ? UnreadableImage() : nil
     }
 
     // MARK: Tables on the pasteboard

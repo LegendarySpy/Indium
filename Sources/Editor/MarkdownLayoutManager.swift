@@ -662,7 +662,7 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
             case let .table(table):
                 table.draw(in: content)
             case let .image(image, _, caption, name):
-                if let image {
+                if let image, !(image is UnreadableImage) {
                     NSGraphicsContext.saveGraphicsState()
                     let path = NSBezierPath(roundedRect: content, xRadius: 6, yRadius: 6)
                     path.addClip()
@@ -677,7 +677,7 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
                     Palette.fill.setFill()
                     NSBezierPath(roundedRect: content, xRadius: 6, yRadius: 6).fill()
                     let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: Palette.tertiaryText]
-                    let label = "Image not found · \(name)" as NSString
+                    let label = (image is UnreadableImage ? "Indium doesn't have access to this image · \(name)" : "Image not found · \(name)") as NSString
                     let size = label.size(withAttributes: attrs)
                     label.draw(at: NSPoint(x: content.midX - size.width / 2, y: content.midY - size.height / 2), withAttributes: attrs)
                 }
@@ -775,3 +775,7 @@ extension MarkdownLayoutManager {
         return frag.minY + baseline - font.capHeight - 3
     }
 }
+
+/// Stands in for an image that's there but can't be read (refused by the sandbox), so its
+/// placeholder says so instead of "Image not found". It has no size of its own.
+final class UnreadableImage: NSImage {}
