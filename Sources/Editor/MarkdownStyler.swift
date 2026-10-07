@@ -17,6 +17,17 @@ extension NSAttributedString.Key {
     static let mdRule = NSAttributedString.Key("indium.rule")
     /// A page break written into the note, drawn as a labeled dashed line.
     static let mdPageBreak = NSAttributedString.Key("indium.pageBreak")
+    /// A one-line caption drawn in place of hidden source (a table's formula lines).
+    static let mdCaption = NSAttributedString.Key("indium.caption")
+}
+
+final class CaptionDecoration: NSObject {
+    let text: String
+    let isError: Bool
+    init(text: String, isError: Bool) {
+        self.text = text
+        self.isError = isError
+    }
 }
 
 final class InlineMath: NSObject {
@@ -105,6 +116,9 @@ final class MarkdownStyler {
     var editingTableWidths: [CGFloat]?
     /// Its cell being typed in, measured with the Markdown markers it shows.
     var editingTableCell: (row: Int, column: Int)?
+    /// The caption under a table with formulas (TableFormulaUI): given the note, the
+    /// table's block and its formula lines. Without it (Quick Look) the lines just hide.
+    var tableFormulaCaption: ((NSString, MDBlock, NSRange) -> CaptionDecoration)?
 
     private var selection: [NSRange] = []
     private var text: NSString = ""
@@ -554,6 +568,9 @@ final class MarkdownStyler {
         case let .table(spec):
             styleTable(spec, block: block, lines: lineRanges, in: s)
 
+        case .tableFormulas:
+            styleTableFormulas(block, lines: lineRanges, in: s)
+
         case .frontmatter where config.printing:
             for line in lineRanges { collapse(lineWithTerminator(line), in: s) }
 
@@ -714,6 +731,43 @@ final class MarkdownStyler {
                                  .paragraphStyle: paragraph(fixedHeight: height)], range: full)
                 s.addAttribute(.mdBlock, value: BlockDecoration(content: .table(render), placement: .replace, height: height, padding: pad),
                                range: line.length > 0 ? line : full)
+            } else {
+                collapse(full, in: s)
+            }
+        }
+    }
+
+    /// Formula lines show as their source while the caret is on them (or Markdown is
+    /// always shown), and otherwise as a one-line caption under the table. Paper and
+    /// floating tables get neither.
+    private func styleTableFormulas(_ block: MDBlock, lines: [NSRange], in s: NSTextStorage) {
+        let table = blockIndex(containing: block.range.location - 1).map { blocks[$0] }
+        let floating = table.flatMap { t in blockIndex(containing: t.range.location).flatMap { floatOfBlock[$0] } } != nil
+        let content = NSRange(location: block.range.location, length: max(0, NSMaxRange(lines.last!) - block.range.location))
+        if config.printing || floating || table == nil {
+            collapse(block.range, in: s)
+            return
+        }
+        if config.syntax == .always || touches(content) {
+            let font = NSFont.monospacedSystemFont(ofSize: round(typo.size * 0.72), weight: .regular)
+            s.addAttributes([.font: font, .foregroundColor: Palette.secondaryText,
+                             .paragraphStyle: paragraph(after: 0, lineSpacing: 2)], range: block.range)
+            if let last = lines.last {
+                s.addAttribute(.paragraphStyle, value: paragraph(after: typo.paragraphSpacing, lineSpacing: 2), range: lineWithTerminator(last))
+            }
+            return
+        }
+        guard let table, let caption = tableFormulaCaption?(text, table, block.range) else {
+            collapse(block.range, in: s)
+            return
+        }
+        let height = round(typo.size * 1.5)
+        for (i, line) in lines.enumerated() {
+            let full = lineWithTerminator(line)
+            if i == 0 {
+                s.setAttributes([.font: typo.body, .foregroundColor: NSColor.clear, .mdHidden: true,
+                                 .paragraphStyle: paragraph(fixedHeight: height)], range: full)
+                s.addAttribute(.mdCaption, value: caption, range: line.length > 0 ? line : full)
             } else {
                 collapse(full, in: s)
             }

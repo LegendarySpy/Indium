@@ -79,6 +79,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         super.init()
         configureTextView()
         styler.imageResolver = self
+        styler.tableFormulaCaption = TableFormulaUI.caption
         applySettings(restyle: false)
 
         AppSettings.shared.objectWillChange
@@ -369,6 +370,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         tableColumnRect = columnRect
         editor.stripRoom = tableStripRoom(table: rect, column: columnRect, floating: floatSide != nil)
         editor.onChange = { [weak self] markdown, cell in self?.commitTable(markdown, typingIn: cell) }
+        editor.onStructureChange = { [weak self] markdown, shape in self?.commitTable(markdown, typingIn: nil, shape: shape) }
         editor.onExit = { [weak self] in self?.endTableEditing(caretAfter: true) }
         editor.onLeave = { [weak self] down in
             guard let self else { return }
@@ -394,6 +396,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         bar.onDone = { [weak self] in self?.endTableEditing(caretAfter: true) }
         bar.placement = floatSide
         bar.onPlace = { [weak self] side in self?.placeEditedTable(float: side) }
+        bar.onFormula = { [weak self] in self?.showFormulaPopover() }
+        editor.onFormula = { [weak self] in self?.showFormulaPopover() }
         textView.addSubview(bar)
         tableToolbar = bar
         positionTableToolbar()
@@ -471,27 +475,64 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return free
     }
 
-    /// A table's Markdown, without the line break after it.
+    /// A table's Markdown with its formula lines, without the line break after them.
     private func tableSource(at location: Int) -> NSRange? {
         guard let i = styler.blockIndex(containing: location), case .table = styler.blocks[i].kind else { return nil }
         var range = styler.blocks[i].range
+        if i + 1 < styler.blocks.count, case .tableFormulas = styler.blocks[i + 1].kind { range = NSUnionRange(range, styler.blocks[i + 1].range) }
         while range.length > 0, [0x0A, 0x0D].contains(ns.character(at: NSMaxRange(range) - 1)) { range.length -= 1 }
         return range
     }
 
+    /// `tableSource` split into the table and its formula lines.
+    private func tableParts(at location: Int) -> (range: NSRange, table: String, formulas: [String])? {
+        guard let range = tableSource(at: location) else { return nil }
+        let lines = ns.substring(with: range).components(separatedBy: "\n")
+        let split = lines.firstIndex { MarkdownScanner.isTableFormulaLine($0) } ?? lines.count
+        return (range, lines[..<split].joined(separator: "\n"), Array(lines[split...]))
+    }
+
+    private static func joined(_ table: String, _ formulas: [String]) -> String {
+        ([table] + formulas).joined(separator: "\n")
+    }
+
     /// The cell last typed in: more typing there joins the same undo step.
     private var tableTypingCell: TableEditorView.Cell?
+    /// Typing waits until the cell is left to recalculate the table's formulas.
+    private var tableFormulasPending = false
 
-    private func commitTable(_ markdown: String, typingIn cell: TableEditorView.Cell?) {
-        guard let location = styler.editingTableLocation, let range = tableSource(at: location) else { return }
-        let old = ns.substring(with: range)
-        guard old != markdown else { return }
+    /// Writes the table editor's Markdown back. A change of shape (rows or columns
+    /// inserted or deleted) moves the formulas' references along and recalculates;
+    /// typing recalculates when the cell is left (`recalculateEditedTable`). Either way
+    /// the results join the edit's undo step, which restores table and formulas whole.
+    private func commitTable(_ markdown: String, typingIn cell: TableEditorView.Cell?, shape: TableFormulaUI.ShapeChange? = nil) {
+        guard let location = styler.editingTableLocation, let parts = tableParts(at: location) else { return }
+        let old = ns.substring(with: parts.range)
+        var table = markdown, formulas = parts.formulas
+        if cell == nil, !formulas.isEmpty {
+            if let shape { formulas = TableFormulaUI.adjust(formulas, for: shape) }
+            table = TableFormulaUI.recalculate(tableMarkdown: markdown, formulaLines: formulas, noteText: storage.string)
+        }
+        tableFormulasPending = cell != nil && !formulas.isEmpty
+        let new = Self.joined(table, formulas)
+        guard old != new else { return }
         // Widths the editor holds (or was just dragged to) carry into the new layout.
         if let widths = tableEditor?.render.columnWidths { styler.editingTableWidths = widths }
         let continuing = cell != nil && tableTypingCell?.row == cell?.row && tableTypingCell?.column == cell?.column
         tableTypingCell = cell
-        if !continuing { registerTableUndo(at: range.location, restoring: old) }
-        replaceWithoutUndo(range, with: markdown)
+        if !continuing { registerTableUndo(at: parts.range.location, restoring: old) }
+        replaceWithoutUndo(parts.range, with: new)
+        refreshTableEditor()
+    }
+
+    /// After typing in a cell: the formulas' results, in the typing's undo step.
+    private func recalculateEditedTable() {
+        guard tableFormulasPending else { return }
+        tableFormulasPending = false
+        guard let location = styler.editingTableLocation, let parts = tableParts(at: location), !parts.formulas.isEmpty else { return }
+        let table = TableFormulaUI.recalculate(tableMarkdown: parts.table, formulaLines: parts.formulas, noteText: storage.string)
+        guard table != parts.table else { return }
+        replaceWithoutUndo(parts.range, with: Self.joined(table, parts.formulas))
         refreshTableEditor()
     }
 
@@ -502,10 +543,47 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             guard let range = controller.tableSource(at: location) else { return }
             controller.registerTableUndo(at: range.location, restoring: controller.ns.substring(with: range))
             controller.tableTypingCell = nil
+            controller.tableFormulasPending = false
             controller.replaceWithoutUndo(range, with: markdown)
             controller.refreshTableEditor()
         }
         undo.setActionName("Edit Table")
+    }
+
+    /// Formula… from the table toolbar or a cell's menu, for the focused row or column.
+    func showFormulaPopover() {
+        guard let editor = tableEditor, let location = styler.editingTableLocation, let parts = tableParts(at: location),
+              let grid = TableFormulaUI.grid(of: parts.table)?.grid else { return }
+        recalculateEditedTable()
+        let popover = NSPopover()
+        let controller = TableFormulaPopover(grid: grid, formulaLines: parts.formulas, variables: NoteVariables.parse(noteText: storage.string),
+                                             focus: (editor.focus.row + 1, editor.focus.column + 1))
+        controller.presentingPopover = popover
+        controller.onApply = { [weak self] lines in self?.setTableFormulas(lines) }
+        popover.contentViewController = controller
+        popover.behavior = .transient
+        let cell = editor.render.cellRect(row: editor.focus.row, column: editor.focus.column,
+                                          in: NSRect(x: 0, y: 0, width: editor.render.width, height: editor.render.height))
+        popover.show(relativeTo: cell, of: editor, preferredEdge: .maxY)
+        formulaPopover = popover
+    }
+    private(set) weak var formulaPopover: NSPopover?
+
+    /// New formula lines for the edited table, and its values recalculated: one undo step.
+    private func setTableFormulas(_ formulas: [String]) {
+        guard let location = styler.editingTableLocation, let parts = tableParts(at: location) else { return }
+        let old = ns.substring(with: parts.range)
+        let table = TableFormulaUI.recalculate(tableMarkdown: parts.table, formulaLines: formulas, noteText: storage.string)
+        let new = Self.joined(table, formulas)
+        guard old != new else { return }
+        tableTypingCell = nil
+        registerTableUndo(at: parts.range.location, restoring: old)
+        textView.undoManager?.setActionName("Formula")
+        replaceWithoutUndo(parts.range, with: new)
+        refreshTableEditor()
+        if let i = styler.blockIndex(containing: location), i + 1 < styler.blocks.count {
+            styler.restyleBlock(at: styler.blocks[i + 1].range.location, in: storage)
+        }
     }
 
     private func replaceWithoutUndo(_ range: NSRange, with markdown: String) {
@@ -519,6 +597,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private func tableFocusChanged(_ cell: TableEditorView.Cell?) {
         guard let location = styler.editingTableLocation,
               styler.editingTableCell?.row != cell?.row || styler.editingTableCell?.column != cell?.column else { return }
+        recalculateEditedTable()
         styler.editingTableCell = cell
         tableTypingCell = nil
         guard location < storage.length else { return }
@@ -555,13 +634,17 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     private func deleteEditedTable() {
         guard let location = styler.editingTableLocation, let i = styler.blockIndex(containing: location) else { return }
-        let range = styler.blocks[i].range
+        var range = styler.blocks[i].range
+        // Its formula lines go with it.
+        if i + 1 < styler.blocks.count, case .tableFormulas = styler.blocks[i + 1].kind { range = NSUnionRange(range, styler.blocks[i + 1].range) }
         endTableEditing()
         replace(range, with: "", select: NSRange(location: range.location, length: 0), actionName: "Delete Table")
     }
 
     func endTableEditing(caretAfter: Bool = false, caretBefore: Bool = false) {
         guard let location = styler.editingTableLocation else { return }
+        recalculateEditedTable()
+        formulaPopover?.close()
         styler.editingTableLocation = nil
         styler.editingTableWidths = nil
         styler.editingTableCell = nil
@@ -575,7 +658,9 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         tableScrollObserver = nil
         textView.window?.makeFirstResponder(textView)
         if caretAfter, let i = styler.blockIndex(containing: location) {
-            let end = NSMaxRange(styler.blocks[i].range)
+            // Past the formula lines too, so leaving the table doesn't open their source.
+            var end = NSMaxRange(styler.blocks[i].range)
+            if i + 1 < styler.blocks.count, case .tableFormulas = styler.blocks[i + 1].kind { end = NSMaxRange(styler.blocks[i + 1].range) }
             textView.setSelectedRange(NSRange(location: min(end, storage.length), length: 0))
         } else if caretBefore {
             textView.setSelectedRange(NSRange(location: max(0, location - 1), length: 0))
@@ -587,6 +672,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     // MARK: Loading
 
     func load(_ newNote: Note?) {
+        recalculateEditedTable()
         saveNow()
         if let old = note {
             old.selection = textView.selectedRange()
