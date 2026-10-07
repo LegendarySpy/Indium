@@ -190,6 +190,117 @@ enum DebugSnapshot {
         run(0)
     }
 
+    /// `-IndiumAccessSteps "type:x;save;open:B.md;switch:/abs;close;openFile:/abs;grant;quit;wait:1;dump;exit"`
+    /// drives saving, switching and folder access (works without `-IndiumSnapshot`, and in
+    /// the sandboxed App Store build). `dump` prints the open note, its unsaved state and
+    /// how many holders keep each folder open.
+    static func runAccessSteps(_ steps: [String], controller main: DocumentWindowController) {
+        var target = main
+        func findButtons(in view: NSView) -> [NSButton] {
+            ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap { findButtons(in: $0) }
+        }
+        func fileControllers() -> [DocumentWindowController] {
+            NSApp.windows.compactMap { $0.windowController as? DocumentWindowController }.filter { $0.kind == .file }
+        }
+        func dump() {
+            let ws = AppDelegate.shared.workspace
+            let note = target.note
+            print("  vault:", ws?.root.path ?? "-", "holders:", ws.map { FolderAccess.holders(of: $0.root) } ?? 0,
+                  "| note:", note?.url?.path ?? "-", "unsaved:", target.editor.hasUnsavedEdits,
+                  "saveFailure:", target.editor.saveFailure.map { ($0 as NSError).code } as Any,
+                  "sheet:", target.window?.attachedSheet != nil, "visible:", target.window?.isVisible ?? false)
+            if let url = note?.url {
+                print("  note holders:", FolderAccess.holders(of: url), "folder holders:", FolderAccess.holders(of: url.deletingLastPathComponent()),
+                      "bar:", target.debugFolderAccessBarShown, "file windows:", fileControllers().count)
+                print("  editor text:", target.editor.text.debugDescription)
+                print("  disk text:  ", ((try? String(contentsOf: url, encoding: .utf8)) ?? "<unreadable>").debugDescription)
+            }
+        }
+        func run(_ i: Int) {
+            guard i < steps.count else { return }
+            let step = steps[i]
+            let parts = step.split(separator: ":", maxSplits: 1).map(String.init)
+            let arg = parts.count > 1 ? parts[1] : ""
+            var delay = 0.4
+            print("STEP \(step)")
+            switch parts[0] {
+            case "type":
+                let tv = target.editor.textView
+                tv.window?.makeFirstResponder(tv)
+                tv.setSelectedRange(NSRange(location: (tv.string as NSString).length, length: 0))
+                tv.insertText(arg, replacementRange: tv.selectedRange())
+            case "save": print("  saveNow ->", target.editor.saveNow())
+            case "open":
+                if let root = AppDelegate.shared.workspace?.root { target.open(root.appendingPathComponent(arg)) }
+            case "switch":
+                let item = NSMenuItem()
+                item.representedObject = URL(fileURLWithPath: arg, isDirectory: true)
+                AppDelegate.shared.switchFolder(item)
+            case "close": target.window?.performClose(nil)
+            case "openFile":
+                AppDelegate.shared.openDocument(URL(fileURLWithPath: arg))
+                if let c = fileControllers().first(where: { $0.note?.url?.path == URL(fileURLWithPath: arg).standardizedFileURL.path }) { target = c }
+            case "grant": target.debugGrantFolderAccess()
+            case "file": if let c = fileControllers().first { target = c } else { print("  no file window") }
+            case "trash": target.trashNote(nil)
+            case "tempimage":
+                // A temporary note holding a pasted (memory-only) image.
+                AppDelegate.shared.newTemporaryNote(nil)
+                if let c = NSApp.windows.compactMap({ $0.windowController as? DocumentWindowController }).last(where: { $0.kind == .temporary }),
+                   let note = c.note {
+                    target = c
+                    let image = NSImage(size: NSSize(width: 80, height: 60), flipped: false) { r in NSColor.systemOrange.setFill(); r.fill(); return true }
+                    if let tiff = image.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                        note.memoryImages["attachments/pasted.png"] = png
+                    }
+                    c.editor.textView.insertText("# Scratch\n\n![](attachments/pasted.png)\n", replacementRange: NSRange(location: 0, length: 0))
+                }
+            case "savetemp": target.saveTemporaryToVault(closeAfter: false)
+            case "iconstore":
+                // What the note-icon store looks like from inside (the container, when sandboxed).
+                let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Indium")
+                let file = dir.appendingPathComponent("icons.json")
+                print("  icon store:", file.path, "exists:", FileManager.default.fileExists(atPath: file.path))
+                print("  contents:", (try? String(contentsOf: file, encoding: .utf8)) ?? "-")
+            case "external":
+                // Another app appends to the open note (a plain, uncoordinated write).
+                if let url = target.note?.url, let h = try? FileHandle(forWritingTo: url) {
+                    h.seekToEndOfFile(); h.write(Data(arg.utf8)); try? h.close()
+                }
+            case "check": target.editor.checkForExternalChanges()
+            case "forceopen":
+                // Replaces the note the way only an explicit discard may (bypassing the save check).
+                if let root = AppDelegate.shared.workspace?.root, let n = try? Note(url: root.appendingPathComponent(arg)) {
+                    print("  forced load ->", target.editor.load(n, discardingEdits: true))
+                }
+            case "images":
+                // Which image references in the note resolve to a picture right now.
+                let ns = target.editor.text as NSString
+                let re = try? NSRegularExpression(pattern: #"!\[\[([^\]]+)\]\]|!\[[^\]]*\]\(([^)]+)\)"#)
+                for m in re?.matches(in: ns as String, range: NSRange(location: 0, length: ns.length)) ?? [] {
+                    let wiki = m.range(at: 1).location != NSNotFound
+                    let src = ns.substring(with: m.range(at: wiki ? 1 : 2))
+                    let image = target.editor.image(for: ImageRef(source: src, alt: "", width: nil, isWiki: wiki, altRange: NSRange(location: 0, length: 0)))
+                    print("  image \(src):", image.map { "\(Int($0.size.width))x\(Int($0.size.height))" } ?? "nil")
+                }
+            case "answer":
+                // `answer:3` presses the third button of the window's sheet.
+                if let window = target.window, let sheet = window.attachedSheet {
+                    let title = (sheet.contentView.map { findButtons(in: $0) } ?? []).map(\.title)
+                    print("  sheet buttons:", title)
+                    window.endSheet(sheet, returnCode: NSApplication.ModalResponse(rawValue: 999 + (Int(arg) ?? 1)))
+                } else { print("  no sheet") }
+            case "quit": DispatchQueue.main.async { NSApp.terminate(nil) }
+            case "wait": delay = Double(arg) ?? 1
+            case "dump": dump()
+            case "exit": exit(0)
+            default: print("  unknown step")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { run(i + 1) }
+        }
+        run(0)
+    }
+
     /// The window and any popovers over it, as a PNG.
     static func debugShot(window: NSWindow, path: String) {
         guard let frame = window.contentView?.superview else { return }
@@ -343,6 +454,12 @@ enum DebugSnapshot {
 
     static func runIfRequested(_ controller: DocumentWindowController) {
         let d = UserDefaults.standard
+        if let steps = d.string(forKey: "IndiumAccessSteps") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                runAccessSteps(steps.split(separator: ";").map(String.init), controller: controller)
+            }
+            return
+        }
         if let steps = d.string(forKey: "IndiumSidebarSteps") {
             if let size = d.string(forKey: "IndiumSize")?.split(separator: "x").compactMap({ Double($0) }), size.count == 2 {
                 controller.window?.setContentSize(NSSize(width: size[0], height: size[1]))

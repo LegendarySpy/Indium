@@ -91,23 +91,78 @@ final class PreviewViewController: NSViewController, QLPreviewingController, Ima
 
     /// Looks beside the note, then in the folders above it (a vault's attachments),
     /// since the preview doesn't know which vault the note belongs to.
+    ///
+    /// Each place is actually tried. The sandbox may refuse files beyond the note itself
+    /// (the App Store preview has no exception to read the rest of the disk), and only
+    /// then does the image become a placeholder that says so. An image that simply
+    /// isn't there stays missing, as in the editor.
     func image(for ref: ImageRef) -> NSImage? {
         guard let noteURL else { return nil }
         let source = ref.source.removingPercentEncoding ?? ref.source
         guard !source.hasPrefix("http://"), !source.hasPrefix("https://") else { return nil }
-        if source.hasPrefix("/") { return NSImage(contentsOfFile: source) }
+        var denied = false
+        func load(_ url: URL) -> NSImage? {
+            do {
+                return NSImage(data: try Data(contentsOf: url.standardizedFileURL))
+            } catch {
+                if Self.isPermissionError(error) { denied = true }
+                return nil
+            }
+        }
+        defer {
+            #if DEBUG
+            NSLog("IndiumQL %@ image %@: denied=%d", Bundle.main.bundleIdentifier ?? "-", source, denied ? 1 : 0)
+            #endif
+        }
+        if source.hasPrefix("/") {
+            return load(URL(fileURLWithPath: source)) ?? (denied ? Self.unreadablePlaceholder(source) : nil)
+        }
         let name = (source as NSString).lastPathComponent
         var folder = noteURL.deletingLastPathComponent()
         for _ in 0..<4 {
             for candidate in [folder.appendingPathComponent(source), folder.appendingPathComponent("attachments/\(name)")] {
-                if let image = NSImage(contentsOf: candidate.standardizedFileURL) { return image }
+                if let image = load(candidate) { return image }
             }
             if FileManager.default.fileExists(atPath: folder.appendingPathComponent(".obsidian").path) { break }
             let parent = folder.deletingLastPathComponent()
             if parent.path == folder.path { break }
             folder = parent
         }
-        return nil
+        return denied ? Self.unreadablePlaceholder(source) : nil
+    }
+
+    private static func isPermissionError(_ error: Error) -> Bool {
+        let ns = error as NSError
+        if ns.domain == NSCocoaErrorDomain, ns.code == NSFileReadNoPermissionError { return true }
+        if ns.domain == NSPOSIXErrorDomain, ns.code == Int(EPERM) || ns.code == Int(EACCES) { return true }
+        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? Error { return isPermissionError(underlying) }
+        return false
+    }
+
+    /// An honest stand-in for an image Quick Look isn't allowed to read.
+    private static func unreadablePlaceholder(_ source: String) -> NSImage {
+        let size = NSSize(width: 420, height: 96)
+        return NSImage(size: size, flipped: false) { rect in
+            let box = NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), xRadius: 10, yRadius: 10)
+            Palette.background.blended(withFraction: 0.06, of: .labelColor)?.setFill()
+            box.fill()
+            NSColor.separatorColor.setStroke()
+            box.lineWidth = 1
+            box.stroke()
+            if let symbol = NSImage(systemSymbolName: "photo", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 22, weight: .regular)) {
+                let s = symbol.size
+                symbol.draw(in: NSRect(x: 22, y: (rect.height - s.height) / 2, width: s.width, height: s.height),
+                            from: .zero, operation: .sourceOver, fraction: 0.45)
+            }
+            let title = NSAttributedString(string: "Image not shown in Quick Look", attributes: [
+                .font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: NSColor.secondaryLabelColor])
+            let detail = NSAttributedString(string: "Open the note in Indium to see \((source as NSString).lastPathComponent).", attributes: [
+                .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.tertiaryLabelColor])
+            title.draw(at: NSPoint(x: 64, y: rect.midY + 2))
+            detail.draw(at: NSPoint(x: 64, y: rect.midY - 16))
+            return true
+        }
     }
 }
 
