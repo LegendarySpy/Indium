@@ -102,6 +102,23 @@ final class ImageCache {
         return image
     }
 
+    /// Whether `url` is there but Indium isn't allowed to read it (the sandbox, or the
+    /// file's permissions), as opposed to missing.
+    static func isAccessDenied(_ url: URL) -> Bool {
+        do {
+            try FileHandle(forReadingFrom: url).close()
+            return false
+        } catch {
+            func denied(_ error: Error) -> Bool {
+                let ns = error as NSError
+                if ns.domain == NSCocoaErrorDomain, ns.code == NSFileReadNoPermissionError { return true }
+                if ns.domain == NSPOSIXErrorDomain, ns.code == Int(EPERM) || ns.code == Int(EACCES) { return true }
+                return (ns.userInfo[NSUnderlyingErrorKey] as? Error).map(denied) ?? false
+            }
+            return denied(error)
+        }
+    }
+
     /// Returns the cached image or starts a fetch and returns nil.
     func remote(_ url: URL) -> NSImage? {
         let key = "remote|\(url.absoluteString)" as NSString
