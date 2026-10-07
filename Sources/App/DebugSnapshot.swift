@@ -290,6 +290,7 @@ enum DebugSnapshot {
                     print("  sheet buttons:", title)
                     window.endSheet(sheet, returnCode: NSApplication.ModalResponse(rawValue: 999 + (Int(arg) ?? 1)))
                 } else { print("  no sheet") }
+            case "about": AppDelegate.shared.showAbout(nil); print(Acknowledgements.text.string.components(separatedBy: "\n").filter { !$0.isEmpty }.prefix(12).joined(separator: "\n"))
             case "quit": DispatchQueue.main.async { NSApp.terminate(nil) }
             case "wait": delay = Double(arg) ?? 1
             case "dump": dump()
