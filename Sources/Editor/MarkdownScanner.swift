@@ -120,6 +120,8 @@ enum BlockKind: Hashable {
     /// The first line of an Obsidian callout, `> [!type]± Title`; the quote lines after
     /// it are its body.
     case callout(CalloutHeader)
+    /// A footnote's text, `[^label]: text`; `markerLength` covers `[^label]:`.
+    case footnote(label: String, markerLength: Int)
     /// An Obsidian comment, `%% … %%`, on lines of its own (it may span several).
     case comment
 
@@ -318,6 +320,9 @@ enum MarkdownScanner {
             return .list(indentLength: m.range(at: 1).length, markerLength: m.range.length,
                          ordered: marker.first?.isNumber == true, task: task)
         }
+        if let m = Regex.footnoteDefinition.firstMatch(in: line, range: full) {
+            return .footnote(label: ns.substring(with: m.range(at: 1)), markerLength: m.range.length)
+        }
         if let image = imageLine(line) { return .image(image) }
         if let embed = embedLine(line) { return .embed(embed) }
         return .paragraph
@@ -453,6 +458,10 @@ enum MarkdownScanner {
             /// The tags aren't listed as markers (they're the span's range around its
             /// content), so renderers that don't know HTML, like table cells, leave them as written.
             case html(HTMLTag)
+            /// `[^label]`, a reference to a footnote; the content is the label.
+            case footnoteRef(String)
+            /// `^[text]`, a footnote written where it's referenced.
+            case inlineFootnote
         }
         enum HTMLTag: String {
             case br, sup, sub, u, mark, kbd
@@ -559,6 +568,23 @@ enum MarkdownScanner {
                               content: abs(visible)))
         }
 
+        // Footnote references, and footnotes written inline.
+        for m in Regex.footnoteRef.matches(in: line as String, range: full) where free(m.range) {
+            consume(m.range)
+            let label = m.range(at: 1)
+            spans.append(Span(kind: .footnoteRef(line.substring(with: label)), range: abs(m.range),
+                              markers: [abs(NSRange(location: m.range.location, length: 2)), abs(NSRange(location: NSMaxRange(label), length: 1))],
+                              content: abs(label)))
+        }
+        for m in Regex.inlineFootnote.matches(in: line as String, range: full) {
+            let open = NSRange(location: m.range.location, length: 2)
+            let close = NSRange(location: NSMaxRange(m.range) - 1, length: 1)
+            guard free(open), free(close) else { continue }
+            consume(open)
+            consume(close)
+            spans.append(Span(kind: .inlineFootnote, range: abs(m.range), markers: [abs(open), abs(close)], content: abs(m.range(at: 1))))
+        }
+
         // Standard links and inline images.
         var linkTexts: [NSRange] = []
         for m in Regex.link.matches(in: line as String, range: full) where free(m.range) {
@@ -634,6 +660,9 @@ enum MarkdownScanner {
         static let wikiImageLine = make(#"^[ \t]*!\[\[([^\[\]\n]+)\]\][ \t]*$"#)
 
         static let comment = make(#"%%.*?%%"#)
+        static let footnoteDefinition = make(#"^\[\^([^\]\s]+)\]:"#)
+        static let footnoteRef = make(#"\[\^([^\]\s]+)\](?!:)"#)
+        static let inlineFootnote = make(#"\^\[((?:[^\[\]\n]|\[\[[^\[\]\n]*\]\]|\[[^\[\]\n]*\])+)\]"#)
         static let lineBreakTag = make(#"<br\s*/?>"#, .caseInsensitive)
         static let htmlTag = make(#"<(sup|sub|u|mark|kbd)>(.+?)</\1>"#, .caseInsensitive)
         static let tag = make(#"(?<![^\s])#([\p{L}\p{N}_/\-]+)"#)
