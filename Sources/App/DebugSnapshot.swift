@@ -396,7 +396,7 @@ enum DebugSnapshot {
                 for step in steps {
                     // Steps that only look (and Tab, as a real key) open no explicit undo group: an empty
                     // explicit group stays on the stack, where a real key event's empty group is dropped.
-                    let isUndo = ["undo", "redo", "noteundo", "tab", "text", "caption", "fprint", "shot", "focus"].contains(step.split(separator: ":").first.map(String.init) ?? "")
+                    let isUndo = ["undo", "redo", "noteundo", "tab", "text", "caption", "fprint", "shot", "focus", "done", "notesel", "selectAll", "select", "pb"].contains(step.split(separator: ":").first.map(String.init) ?? "")
                     if !isUndo { undo?.beginUndoGrouping() }
                     defer { if !isUndo { undo?.endUndoGrouping() } }
                     let e = target.editor.tableEditor
@@ -441,7 +441,8 @@ enum DebugSnapshot {
                     // `ftext:…` types the formula; `fok`, `fremove`, `fcancel`; `fprint` shows it;
                     // `text` prints the note; `caption` the captions drawn; `shot:path` a screenshot.
                     case "formula":
-                        target.editor.showFormulaPopover()
+                        let n = arg.split(separator: ",").compactMap { Int($0) }
+                        target.editor.showFormulaPopover(cell: n.count == 2 ? (n[0], n[1]) : nil)
                         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
                     case "fpick", "ftext", "fok", "fremove", "fcancel", "fprint":
                         guard let pop = target.editor.formulaPopover?.contentViewController as? TableFormulaPopover else { print("  no formula popover"); break }
@@ -475,11 +476,11 @@ enum DebugSnapshot {
                         // Tab to the next cell outside an explicit undo group: a real key's
                         // event group that registers nothing is dropped, an explicit one isn't.
                         window.firstResponder?.doCommand(by: #selector(NSResponder.insertTab(_:)))
-                    case "noteundo":
+                    case "noteundo", "undo", "redo":
                         // The note's own undo, as Edit ▸ Undo in the note would.
                         let um = target.editor.textView.undoManager
                         print("  noteundo level:", um?.groupingLevel ?? -1, "name:", um?.undoActionName ?? "-", "same as note's:", um === target.editor.note?.undoManager)
-                        um?.undo()
+                        if step == "redo" { um?.redo() } else { um?.undo() }
                     case "text":
                         let um = target.editor.textView.undoManager
                         print("NOTE TEXT (canUndo \(um?.canUndo ?? false) [\(um?.undoActionName ?? "-")] canRedo \(um?.canRedo ?? false)):\n" + target.editor.text)
