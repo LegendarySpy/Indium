@@ -405,6 +405,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         mainWindowController().showWindow(nil)
     }
 
+    /// The standard About panel, with acknowledgements as its credits.
+    @objc func showAbout(_ sender: Any?) { Acknowledgements.showAboutPanel() }
+
     @objc func showSettings(_ sender: Any?) {
         if settingsWindow == nil {
             let host = NSHostingController(rootView: SettingsView())
