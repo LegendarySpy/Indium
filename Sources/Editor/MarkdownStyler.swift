@@ -172,6 +172,13 @@ protocol NoteEmbedResolving: AnyObject {
     func noteURL(forEmbed target: String, from note: URL?) -> URL?
     /// An image written in `note`, resolved from that note's folder.
     func image(for ref: ImageRef, from note: URL?) -> NSImage?
+    /// Whether a note it can't find shows as "Note not found". Quick Look sees only part
+    /// of the disk, so there an embed it can't read stays a plain link.
+    var showsMissingEmbeds: Bool { get }
+}
+
+extension NoteEmbedResolving {
+    var showsMissingEmbeds: Bool { true }
 }
 
 /// Resolves links and images inside an embedded note from that note's own folder,
@@ -187,6 +194,7 @@ final class EmbeddedNoteContext: ImageResolving, NoteEmbedResolving {
     func noteURL(forEmbed target: String, from note: URL?) -> URL? { root.noteURL(forEmbed: target, from: note) }
     func image(for ref: ImageRef, from note: URL?) -> NSImage? { root.image(for: ref, from: note) }
     func image(for ref: ImageRef) -> NSImage? { root.image(for: ref, from: note) }
+    var showsMissingEmbeds: Bool { root.showsMissingEmbeds }
 }
 
 struct StyleConfig {
@@ -1080,6 +1088,10 @@ final class MarkdownStyler {
         let url = resolver.noteURL(forEmbed: ref.note, from: host)
         if let url, chain.contains(url.standardizedFileURL.path) {
             // A note embedding one that's already open above it: a link, not a loop.
+            inline(line, in: s, font: link, color: Palette.text)
+            return
+        }
+        if url == nil, !resolver.showsMissingEmbeds {
             inline(line, in: s, font: link, color: Palette.text)
             return
         }
