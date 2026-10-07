@@ -453,8 +453,197 @@ enum DebugSnapshot {
         print("MATH CELL CASES: \(total - failed)/\(total) passed")
     }
 
+    /// `-IndiumClipboardCases file`: tables through the pasteboard (a private one) and back.
+    /// A case is `### name`, then `<<< kind [arg]` sections that fill the board and `>>> kind`
+    /// sections that check it; each section's body is the lines under it (`⇥` is a tab, `␠` a space).
+    /// In: `table [r1,c1,r2,c2]` (a note's table copied whole, Copy Table, or a block of its
+    /// cells), `tsv` (as Numbers and Excel put it), `string`, `html`, `cell` (text as typed).
+    /// Out: `grid` (JSON, what a table pastes), `page` (Markdown pasted into the page, `nil`),
+    /// `string`, `tsv`, `html~` (each line found in the HTML), `stored` (a typed cell's
+    /// Markdown), `latex` (what a cell's math typesets), `noformulas`. Pasted cells must
+    /// survive being written into a table and read back.
+    static func runClipboardCases(_ text: String) {
+        let pb = TableClipboard.board
+        var cases: [(name: String, sections: [(kind: String, arg: String, body: [String])])] = []
+        for line in text.components(separatedBy: "\n") {
+            if line.hasPrefix("### ") { cases.append((String(line.dropFirst(4)), [])); continue }
+            guard !cases.isEmpty else { continue }
+            if line.hasPrefix("<<< ") || line.hasPrefix(">>> ") {
+                let rest = line.dropFirst(4).split(separator: " ", maxSplits: 1).map(String.init)
+                cases[cases.count - 1].sections.append((String(line.prefix(1)) + rest[0], rest.count > 1 ? rest[1] : "", []))
+            } else if !cases[cases.count - 1].sections.isEmpty {
+                cases[cases.count - 1].sections[cases[cases.count - 1].sections.count - 1].body.append(line.replacingOccurrences(of: "⇥", with: "\t").replacingOccurrences(of: "␠", with: " "))
+            }
+        }
+        var passed = 0
+        for c in cases {
+            pb.clearContents()
+            var notes: [String] = []
+            var typed: String?
+            func check(_ what: String, _ got: String?, _ want: String) {
+                if (got ?? "nil") != want { notes.append("\(what): got \((got ?? "nil").debugDescription), want \(want.debugDescription)") }
+            }
+            for s in c.sections {
+                var body = s.body
+                while body.last == "" { body.removeLast() }
+                let joined = body.joined(separator: "\n")
+                switch s.kind {
+                case "<table":
+                    guard let block = MarkdownScanner.scan(joined as NSString).first, case let .table(spec) = block.kind else { notes.append("no table"); continue }
+                    let columns = max(spec.alignments.count, spec.rows.map(\.count).max() ?? 0)
+                    let all = spec.rows.map { row in (0..<columns).map { $0 < row.count ? TableSpec.unescapeCell(row[$0].text) : "" } }
+                    let n = s.arg.split(separator: ",").compactMap { Int($0) }
+                    if n.count == 4 {
+                        let cells = all[n[0]...n[2]].map { Array($0[n[1]...n[3]]) }
+                        TableClipboard.write(cells, header: n[0] == 0, markdown: nil, to: pb)
+                    } else {
+                        TableClipboard.write(all, header: true, markdown: joined, to: pb)
+                    }
+                case "<tsv":
+                    pb.addTypes([TableClipboard.tabularType, .string], owner: nil)
+                    pb.setString(joined, forType: TableClipboard.tabularType)
+                    pb.setString(joined, forType: .string)
+                case "<string":
+                    pb.addTypes([.string], owner: nil)
+                    pb.setString(joined, forType: .string)
+                case "<html":
+                    pb.addTypes([.html], owner: nil)
+                    pb.setString(joined, forType: .html)
+                case "<cell":
+                    typed = joined
+                case ">grid":
+                    let grid = TableClipboard.grid(from: pb)
+                    let want = joined == "null" ? nil : (try? JSONDecoder().decode([[String]].self, from: Data(joined.utf8))) ?? [["<bad json>"]]
+                    if grid != want { notes.append("grid: got \(grid.map { "\($0)" } ?? "nil"), want \(want.map { "\($0)" } ?? "nil")") }
+                    // Written into a table and read back, the cells are the same.
+                    if let grid, let first = grid.first {
+                        let md = TableSpec.markdown(header: first.map(TableSpec.escapeCell), body: grid.dropFirst().map { $0.map(TableSpec.escapeCell) },
+                                                    alignments: [], dashes: nil)
+                        if let back = TableClipboard.markdownTable(md), back.map({ $0.map { $0.trimmingCharacters(in: .whitespaces) } })
+                            != grid.map({ $0.map { $0.trimmingCharacters(in: .whitespaces) } }) {
+                            notes.append("table round trip: \(back) from \(md.debugDescription)")
+                        }
+                    }
+                case ">page": check("page", TableClipboard.pageTable(from: pb), joined)
+                case ">cell": check("cell into the page", TableClipboard.singleCell(from: pb), joined)
+                case ">string": check("string", pb.string(forType: .string), joined)
+                case ">tsv": check("tsv", pb.string(forType: TableClipboard.tabularType), joined)
+                case ">html~":
+                    let html = pb.string(forType: .html) ?? ""
+                    for line in body where !html.contains(line) { notes.append("html lacks \(line.debugDescription) in \(html.debugDescription)") }
+                case ">noformulas":
+                    for type in pb.types ?? [] where (pb.string(forType: type) ?? pb.data(forType: type).flatMap { String(data: $0, encoding: .utf8) } ?? "").contains("TBLFM") {
+                        notes.append("formulas in \(type.rawValue)")
+                    }
+                case ">stored":
+                    guard let typed else { notes.append("no <cell"); continue }
+                    let stored = TableSpec.escapeCell(typed)
+                    check("stored", stored, joined)
+                    check("seen again", TableSpec.unescapeCell(stored), typed)
+                    // Through a whole table in a note and back.
+                    let note = TableSpec.markdown(header: ["h"], body: [[stored]], alignments: [], dashes: nil)
+                    if case let .table(spec)? = MarkdownScanner.scan(note as NSString).first?.kind {
+                        check("scanned", spec.body.first?.first, joined)
+                    }
+                case ">latex":
+                    guard let typed else { notes.append("no <cell"); continue }
+                    let seen = typed as NSString
+                    let maths = MarkdownScanner.inlineSpans(in: seen, range: NSRange(location: 0, length: seen.length)).compactMap { span -> String? in
+                        if case let .math(latex, _) = span.kind { return latex }
+                        return nil
+                    }
+                    check("latex", maths.joined(separator: " ; "), joined)
+                    // The table draws stored text the way the cell editor draws what's typed.
+                    let stored = TableSpec.escapeCell(typed)
+                    let render = TableRender(spec: TableSpec(rows: [[.init(text: stored, offset: 0)]], alignments: [0]),
+                                             typography: Typography.current, maxWidth: 600)
+                    let editor = TableRender.render(typed, header: true, alignment: 0, typography: .current, size: round(Typography.current.size * 0.9))
+                    let widths = render.columnWidths.first.map { Int($0) }
+                    let natural = Int(ceil(editor.size().width) + TableRender.padX * 2)
+                    print("  \(c.name): typeset \(maths) table cell width \(widths ?? -1), editor text width \(natural)")
+                default:
+                    notes.append("unknown section \(s.kind)")
+                }
+            }
+            if notes.isEmpty { passed += 1 }
+            print(notes.isEmpty ? "PASS" : "FAIL", c.name, notes.isEmpty ? "" : "\n    " + notes.joined(separator: "\n    "))
+        }
+        print("CLIPBOARD CASES: \(passed)/\(cases.count) passed")
+    }
+
+    /// `-IndiumDragSteps "hover:0;drag:0,Outro,after,/tmp/d.png;text;undo;text"`: moves tables by
+    /// their grip with real mouse events. `hover:n` shows table n's grip; `drag:n,prefix,where[,shot]`
+    /// drags it to the block starting with `prefix` (`before`, `after`, `left`, `right` = beside it),
+    /// screenshotting the drop indicator mid-drag; `escape:n,prefix,where` drags and presses Escape;
+    /// `text`, `undo`, `redo`, `shot:path`. Each mutating step is its own undo group.
+    static func runDragSteps(_ steps: [String], editor: EditorController, window: NSWindow) {
+        let tv = editor.textView
+        let undo = tv.undoManager
+        if let undo, undo.groupingLevel > 0 { undo.endUndoGrouping() }
+        undo?.groupsByEvent = false
+        func mouse(_ type: NSEvent.EventType, _ p: NSPoint) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: tv.convert(p, to: nil), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+        }
+        func hover(_ n: Int) -> BlockHandleView? {
+            let tables = editor.visibleTables().sorted { $0.location < $1.location }
+            guard n < tables.count else { print("  no table \(n)"); return nil }
+            editor.hoverTableGrip(at: NSPoint(x: tables[n].content.midX, y: tables[n].content.minY + 4))
+            print("  GRIP table \(n) at \(tables[n].content): \(editor.tableGrip.map { "\($0.frame)" } ?? "none")")
+            return editor.tableGrip
+        }
+        for step in steps {
+            let parts = step.split(separator: ":", maxSplits: 1).map(String.init)
+            let args = parts.count > 1 ? parts[1].split(separator: ",").map(String.init) : []
+            switch parts[0] {
+            case "hover": _ = hover(Int(args.first ?? "0") ?? 0)
+            case "drag", "escape":
+                guard args.count >= 3, let grip = hover(Int(args[0]) ?? 0),
+                      let target = editor.visibleGroupFrames().first(where: { $0.group.text.hasPrefix(args[1]) }) else { print("  DRAG: nothing to drag or no target \(args)"); break }
+                let r = target.rect
+                let p: NSPoint = switch args[2] {
+                case "before": NSPoint(x: r.midX, y: r.minY + min(6, r.height / 4))
+                case "left": NSPoint(x: r.minX + 8, y: r.midY)
+                case "right": NSPoint(x: r.maxX - 8, y: r.midY)
+                default: NSPoint(x: r.midX, y: r.maxY - min(6, r.height / 4))
+                }
+                if args.count > 3 { EditorController.onDragStep = { debugShot(window: window, path: args[3]) } }
+                let start = NSPoint(x: grip.frame.midX, y: grip.frame.midY)
+                NSApp.postEvent(mouse(.leftMouseDragged, NSPoint(x: (start.x + p.x) / 2, y: (start.y + p.y) / 2)), atStart: false)
+                NSApp.postEvent(mouse(.leftMouseDragged, p), atStart: false)
+                if parts[0] == "escape", let esc = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                                                     context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53) {
+                    NSApp.postEvent(esc, atStart: false)
+                }
+                NSApp.postEvent(mouse(.leftMouseUp, p), atStart: false)
+                print("  DRAG table \(args[0]) to \(args[2]) \(args[1].debugDescription) at \(p), hit:", window.contentView?.superview?.hitTest(window.contentView!.superview!.convert(tv.convert(start, to: nil), from: nil)).map { "\(type(of: $0))" } ?? "nil")
+                undo?.beginUndoGrouping()
+                grip.mouseDown(with: mouse(.leftMouseDown, start))
+                undo?.endUndoGrouping()
+                EditorController.onDragStep = nil
+                print("  undo name:", undo?.undoActionName ?? "-", "grip left:", editor.tableGrip == nil)
+            case "undo": undo?.undo()
+            case "redo": undo?.redo()
+            case "text": print("NOTE TEXT:\n" + editor.text + "\nEND NOTE TEXT")
+            case "shot": debugShot(window: window, path: parts.count > 1 ? parts[1] : "/tmp/drag.png")
+            default: print("  unknown step \(step)")
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+    }
+
     static func runIfRequested(_ controller: DocumentWindowController) {
         let d = UserDefaults.standard
+        // Harness runs copy and paste on a board of their own, never the real clipboard.
+        if d.object(forKey: "IndiumSnapshot") != nil || d.object(forKey: "IndiumPDF") != nil {
+            TableClipboard.board = NSPasteboard.withUniqueName()
+            atexit { TableClipboard.board.releaseGlobally() }
+        }
+        if let path = d.string(forKey: "IndiumClipboardCases") {
+            guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { print("CLIPBOARD CASES: can't read \(path)"); exit(1) }
+            runClipboardCases(text)
+            exit(0)
+        }
         if let steps = d.string(forKey: "IndiumAccessSteps") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 runAccessSteps(steps.split(separator: ";").map(String.init), controller: controller)
@@ -697,7 +886,7 @@ enum DebugSnapshot {
                 for step in steps {
                     // Steps that only look (and Tab, as a real key) open no explicit undo group: an empty
                     // explicit group stays on the stack, where a real key event's empty group is dropped.
-                    let isUndo = ["undo", "redo", "noteundo", "tab", "text", "caption", "fprint", "shot", "focus", "done", "notesel", "selectAll", "select", "pb", "keyev", "cmdev", "switchto", "idle", "cat"].contains(step.split(separator: ":").first.map(String.init) ?? "")
+                    let isUndo = ["undo", "redo", "noteundo", "tab", "text", "caption", "fprint", "shot", "focus", "done", "notesel", "selectAll", "select", "pb", "pbhtml", "pbtsv", "copy", "copyTable", "keyev", "cmdev", "switchto", "idle", "cat"].contains(step.split(separator: ":").first.map(String.init) ?? "")
                     if !isUndo { undo?.beginUndoGrouping() }
                     defer { if !isUndo { undo?.endUndoGrouping() } }
                     let e = target.editor.tableEditor
@@ -706,9 +895,19 @@ enum DebugSnapshot {
                     case "select":
                         let n = arg.split(separator: ",").compactMap { Int($0) }
                         e?.select(from: (n[0], n[1]), to: (n[2], n[3]))
-                    case "pb":
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(arg.replacingOccurrences(of: "\\t", with: "\t").replacingOccurrences(of: "\\n", with: "\n"), forType: .string)
+                    case "pb", "pbhtml", "pbtsv":
+                        // `pb:text` plain text, `pbhtml:<table>…` a web page's HTML only, `pbtsv:a\tb`
+                        // a spreadsheet's cells; on the harness's private board.
+                        let board = TableClipboard.board
+                        let value = arg.replacingOccurrences(of: "\\t", with: "\t").replacingOccurrences(of: "\\n", with: "\n")
+                        board.clearContents()
+                        switch step.split(separator: ":").first {
+                        case "pbhtml": board.setString(value, forType: .html)
+                        case "pbtsv":
+                            board.setString(value, forType: TableClipboard.tabularType)
+                            board.setString(value, forType: .string)
+                        default: board.setString(value, forType: .string)
+                        }
                     case "type":
                         window.firstResponder?.insertText(arg)
                     case "captionclick":
@@ -791,6 +990,7 @@ enum DebugSnapshot {
                         let hit = window.contentView?.superview?.hitTest(window.contentView!.superview!.convert(from, from: nil))
                         print("  hit:", hit.map { String(describing: type(of: $0)) } ?? "nil")
                         hit?.mouseDown(with: mouse(.leftMouseDown, from, clicks: clicks))
+                    case "copyTable": e?.copyTable()
                     case "done":
                         target.editor.endTableEditing(caretAfter: true)
                     // Table formulas: `formula` opens Formula… for the focused cell; `fpick:2,−,3`
@@ -862,16 +1062,17 @@ enum DebugSnapshot {
                     }
                     // Each step its own event, so undo groups fall as they would with real keys.
                     RunLoop.current.run(until: Date().addingTimeInterval(0.02))
-                    let pb = NSPasteboard.general
+                    let pb = TableClipboard.board
                     print("STEP \(step) responder:", window.firstResponder.map { String(describing: type(of: $0)) } ?? "-",
                           "focus:", e.map { "\($0.focus)" } ?? "-", "selection:", e?.selection.map { "\($0.anchor)->\($0.head)" } ?? "none",
                           "cell:", e?.cellEditor.map { "\($0.string.debugDescription) sel \(NSStringFromRange($0.selectedRange()))" } ?? "-")
                     if let i = target.editor.styler.blocks.firstIndex(where: { if case .table = $0.kind { return true }; return false }) {
                         print("  NOTE TABLE:", (target.editor.text as NSString).substring(with: target.editor.styler.blocks[i].range).components(separatedBy: "\n").enumerated().filter { $0.offset != 1 }.map { $0.element.replacingOccurrences(of: " ", with: "") }.joined(separator: " "))
                     }
-                    if step == "copy" || step == "cut" {
+                    if step == "copy" || step == "cut" || step == "copyTable" {
                         print("  PB string:", (pb.string(forType: .string) ?? "nil").debugDescription)
                         print("  PB html:", pb.string(forType: .html) ?? "nil")
+                        print("  PB cells:", TableClipboard.payload(pb).map { "\($0.cells) source: \(($0.source ?? "nil").debugDescription)" } ?? "nil")
                     }
                 }
                 if let side = d.string(forKey: "IndiumPlaceTable") {
@@ -883,6 +1084,9 @@ enum DebugSnapshot {
             // corner of a table's grid (L top-left, R top-right, B bottom-left; `-IndiumPointerTable n`
             // picks the table). `move` hovers (entering whatever strip is there), `click` sends a
             // mouse-down to the view hit testing picks, `scroll` scrolls the note to a y offset.
+            if let steps = d.string(forKey: "IndiumDragSteps") {
+                runDragSteps(steps.split(separator: ";").map(String.init), editor: target.editor, window: window)
+            }
             if let steps = d.string(forKey: "IndiumPointerSteps") {
                 let editor = target.editor, tv = editor.textView
                 func tableRect() -> NSRect? {

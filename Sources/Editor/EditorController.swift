@@ -364,6 +364,10 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         editor.onFocusChange = { [weak self] cell in self?.tableFocusChanged(cell) }
         editor.onDeleteTable = { [weak self] in self?.deleteEditedTable() }
+        editor.noteSource = { [weak self] in
+            guard let self, let at = self.styler.editingTableLocation, let range = self.tableSource(at: at) else { return nil }
+            return self.ns.substring(with: range)
+        }
         textView.addSubview(editor)
         tableEditor = editor
 
@@ -1515,19 +1519,12 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     // MARK: Tables on the pasteboard
 
-    /// Cells copied from a spreadsheet or web page (tab-separated, two rows or more)
-    /// arrive as a Markdown table on lines of their own.
+    /// Cells copied from a spreadsheet, a web page or a table in Indium (with its
+    /// formulas) arrive as a Markdown table on lines of their own.
     func pasteTable(from pb: NSPasteboard) -> Bool {
-        guard textView.isEditable, let text = pb.string(forType: .string), text.contains("\t"),
-              TableClipboard.markdownTable(text) == nil else { return false }
+        guard textView.isEditable, let table = TableClipboard.pageTable(from: pb) else { return false }
         let sel = textView.selectedRange()
         if let i = styler.blockIndex(containing: sel.location), case .code = styler.blocks[i].kind { return false }
-        // Tab-indented text (code, outlines) isn't a table.
-        let lines = text.components(separatedBy: .newlines).filter { !$0.isEmpty }
-        guard !lines.contains(where: { $0.hasPrefix("\t") }) else { return false }
-        let rows = TableClipboard.parseTSV(text)
-        guard rows.count >= 2, (rows.first?.count ?? 0) >= 2 else { return false }
-        let table = TableSpec.markdown(header: rows[0], body: Array(rows.dropFirst()), alignments: [], dashes: nil)
         let start = lineRange(at: sel.location), end = lineRange(at: NSMaxRange(sel))
         let textBefore = sel.location > start.content.location
         let lineAboveHasText = start.content.location > 0 && lineRange(at: start.content.location - 1).content.length > 0
@@ -1539,12 +1536,6 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let insert = before + table + after
         replace(sel, with: insert, select: NSRange(location: sel.location + (insert as NSString).length, length: 0), actionName: "Paste Table")
         return true
-    }
-
-    /// An HTML version of note text that holds a table, for apps that read tables.
-    func tableHTML(for range: NSRange) -> String? {
-        guard range.length > 0, NSMaxRange(range) <= storage.length else { return nil }
-        return TableClipboard.noteHTML(ns.substring(with: range))
     }
 
     func pasteboardHasImages(_ pb: NSPasteboard) -> Bool {

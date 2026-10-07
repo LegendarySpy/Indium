@@ -37,7 +37,8 @@ final class TableRender {
         let size = round(typography.size * 0.9)
         cells = spec.rows.enumerated().map { r, row in
             (0..<columns).map { c in
-                let text = c < row.count ? row[c].text : ""
+                // As seen: `\|` a pipe (also inside math, as GFM has it), `<br>` a line break.
+                let text = c < row.count ? TableSpec.unescapeCell(row[c].text) : ""
                 return TableRender.render(text, header: r == 0, alignment: c < spec.alignments.count ? spec.alignments[c] : 0,
                                           typography: typography, size: size,
                                           revealMarkers: revealing.map { $0.row == r && $0.column == c } ?? false)
