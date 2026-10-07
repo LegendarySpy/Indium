@@ -36,6 +36,141 @@ enum DebugSnapshot {
         print("=== gamma to top ===\n" + t4)
     }
 
+    /// `-IndiumIconSteps "files;open:A.md;icon;suggest;wait:0.3;shot:/tmp/a.png;wait:2;dump"` drives
+    /// icon suggestions (pair with `-IndiumIconStub` and `-IndiumIconStore`). Steps: `files` shows
+    /// the sidebar, `open:rel` opens a note, `icon` clicks the title bar icon, `suggest` clicks the
+    /// picker's Suggest/Try Again, `pick:symbol` picks one, `close` closes popovers, `menu:rel` is the
+    /// sidebar's Suggest New Icon, `retry` presses Try Again in a notice, `suggestAt:/abs/path` asks
+    /// for any file (vault = its folder), `wait:s`, `shot:path` (popovers included), `dump`.
+    static func runIconSteps(_ steps: [String], controller: DocumentWindowController) {
+        guard let window = controller.window, let frame = window.contentView?.superview else { exit(1) }
+        func find<T: NSView>(_ type: T.Type, in view: NSView) -> T? {
+            if let v = view as? T { return v }
+            for sub in view.subviews { if let v = find(type, in: sub) { return v } }
+            return nil
+        }
+        func findAll(in view: NSView, _ match: (NSView) -> Bool) -> [NSView] {
+            (match(view) ? [view] : []) + view.subviews.flatMap { findAll(in: $0, match) }
+        }
+        func popoverWindows() -> [NSWindow] {
+            NSApp.windows.filter { $0 !== window && $0.isVisible && String(describing: type(of: $0)).contains("Popover") }
+        }
+        func picker() -> IconPickerController? {
+            for w in popoverWindows() {
+                if let v = w.contentView.map({ findAll(in: $0) { $0.nextResponder is IconPickerController } }), let p = v.first?.nextResponder as? IconPickerController { return p }
+            }
+            return nil
+        }
+        func button(titled titles: [String]) -> NSButton? {
+            for w in popoverWindows() {
+                if let b = w.contentView.flatMap({ findAll(in: $0) { ($0 as? NSButton).map { titles.contains($0.title) } ?? false }.first }) as? NSButton { return b }
+            }
+            return nil
+        }
+        let root = AppDelegate.shared.workspace?.root
+        func url(_ rel: String) -> URL? { root?.appendingPathComponent(rel) }
+        func dump() {
+            let bar = find(TitleBarView.self, in: frame)
+            print("  title bar:", bar?.debugIconState ?? "-", "note:", controller.note?.url?.lastPathComponent ?? "-")
+            if let ws = AppDelegate.shared.workspace {
+                for note in ws.notes.sorted(by: { $0.path < $1.path }) {
+                    print("  \(ws.relativePath(note)): icon=\(NoteIcons.shared.icon(for: note, in: ws) ?? "nil") state=\(NoteIcons.shared.suggestion(for: note))")
+                }
+            }
+            if let p = picker() {
+                let texts = findAll(in: p.view) { $0 is NSTextField || $0 is NSButton && !($0 is SymbolCell) }.compactMap { v -> String? in
+                    if let t = v as? NSTextField, !t.isHidden { return "label[\(t.stringValue)]" }
+                    if let b = v as? NSButton { return "button[\(b.title) enabled=\(b.isEnabled)]" }
+                    return nil
+                }
+                let selected = findAll(in: p.view) { ($0 as? SymbolCell)?.selected == true }.compactMap { ($0 as? SymbolCell)?.symbol }
+                print("  picker:", texts.joined(separator: " "), "selected:", selected)
+            }
+            for w in popoverWindows() where picker().map({ $0.view.window !== w }) ?? true {
+                let labels = w.contentView.map { findAll(in: $0) { $0 is NSTextField || $0 is NSButton }.map { ($0 as? NSTextField)?.stringValue ?? "[\(($0 as! NSButton).title)]" } } ?? []
+                print("  notice:", labels.joined(separator: " "))
+            }
+        }
+        func shot(_ path: String) {
+            frame.layoutSubtreeIfNeeded()
+            guard let base = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return }
+            frame.cacheDisplay(in: frame.bounds, to: base)
+            // Popovers are their own windows: draw each where it sits over the main window.
+            let pops = popoverWindows()
+            var canvas = window.frame
+            for w in pops { canvas = canvas.union(w.frame) }
+            let image = NSImage(size: canvas.size)
+            image.lockFocus()
+            NSColor.windowBackgroundColor.setFill()
+            NSRect(origin: .zero, size: canvas.size).fill()
+            base.draw(in: NSRect(x: window.frame.minX - canvas.minX, y: window.frame.minY - canvas.minY, width: window.frame.width, height: window.frame.height))
+            for w in pops {
+                // The popover's material doesn't render offscreen: its content on a plain backing.
+                guard let v = w.contentView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { continue }
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+                NSColor.controlBackgroundColor.setFill()
+                v.bounds.fill()
+                NSGraphicsContext.restoreGraphicsState()
+                v.cacheDisplay(in: v.bounds, to: rep)
+                let content = v.convert(v.bounds, to: nil)
+                let r = content.offsetBy(dx: w.frame.minX - canvas.minX, dy: w.frame.minY - canvas.minY)
+                let shape = NSBezierPath(roundedRect: r, xRadius: 10, yRadius: 10)
+                NSColor.controlBackgroundColor.setFill()
+                shape.fill()
+                NSColor.separatorColor.setStroke()
+                shape.stroke()
+                rep.draw(in: r)
+            }
+            image.unlockFocus()
+            if let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) {
+                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            }
+            print("  shot:", path)
+        }
+        func run(_ i: Int) {
+            guard i < steps.count else { exit(0) }
+            let step = steps[i]
+            let parts = step.split(separator: ":", maxSplits: 1).map(String.init)
+            let arg = parts.count > 1 ? parts[1] : ""
+            print("STEP", step)
+            var delay = 0.25
+            switch parts[0] {
+            case "files": controller.toggleFiles(nil)
+            case "open":
+                if let sidebar = find(SidebarView.self, in: frame) { sidebar.debugStep("click:" + arg) }
+                else { print("  no sidebar; use files first") }
+            case "icon": find(TitleBarView.self, in: frame)?.debugClickIcon()
+            case "suggest":
+                if let b = button(titled: ["Suggest", "Try Again", "Suggest Again", "Suggesting…"]) { print("  pressing [\(b.title)] enabled=\(b.isEnabled)"); b.performClick(nil) }
+                else { print("  no suggest button") }
+                delay = 0.05
+            case "pick":
+                if let p = picker(), let cell = findAll(in: p.view, { ($0 as? SymbolCell)?.symbol == arg }).first as? SymbolCell { cell.performClick(nil) }
+                else { print("  no cell", arg) }
+            case "close": popoverWindows().forEach { $0.close() }
+            case "menu":
+                if let sidebar = find(SidebarView.self, in: frame), let u = url(arg) { sidebar.debugSuggestIcon(u) } else { print("  no sidebar") }
+                delay = 0.05
+            case "retry":
+                if let b = button(titled: ["Try Again"]) { b.performClick(nil) } else { print("  no Try Again") }
+                delay = 0.05
+            case "suggestAt":
+                let u = URL(fileURLWithPath: arg)
+                let ws = Workspace(root: u.deletingLastPathComponent())
+                let s = NoteIcons.shared.suggest(for: u, text: (try? String(contentsOf: u, encoding: .utf8)) ?? "", in: ws, force: true)
+                print("  \(u.path): \(s)")
+                delay = 0.05
+            case "wait": delay = Double(arg) ?? 1
+            case "shot": shot(arg); delay = 0.05
+            case "dump": dump(); delay = 0.05
+            default: print("  unknown step")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { run(i + 1) }
+        }
+        run(0)
+    }
+
     static func runIfRequested(_ controller: DocumentWindowController) {
         let d = UserDefaults.standard
         if let steps = d.string(forKey: "IndiumSidebarSteps") {
@@ -44,6 +179,12 @@ enum DebugSnapshot {
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 controller.debugSidebar(steps: steps.split(separator: ",").map(String.init), out: d.string(forKey: "IndiumSnapshot"))
+            }
+            return
+        }
+        if let steps = d.string(forKey: "IndiumIconSteps") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                runIconSteps(steps.split(separator: ";").map(String.init), controller: controller)
             }
             return
         }

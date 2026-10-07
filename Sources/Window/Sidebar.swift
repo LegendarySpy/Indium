@@ -353,6 +353,7 @@ final class SidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate,
     }
 
     private func configure(_ cell: SidebarCell, _ item: SidebarItem) {
+        _ = iconFeedback // listening from the first row on
         cell.configure(name: item.name, isFolder: item.isFolder,
                        isCurrent: item.url == currentURL.map(key),
                        symbol: item.isFolder ? nil : NoteIcons.shared.icon(for: item.url, in: workspace))
@@ -545,8 +546,13 @@ final class SidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate,
         menu.addItem(.separator())
         menu.addItem(withTitle: "Rename", action: #selector(renameClicked), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Show in Finder", action: #selector(revealClicked), keyEquivalent: "").target = self
-        if AppSettings.shared.suggestIcons, NoteIcons.isAvailable, !item.isFolder {
-            menu.addItem(withTitle: "Suggest New Icon", action: #selector(suggestIconClicked), keyEquivalent: "").target = self
+        if AppSettings.shared.suggestIcons, !item.isFolder {
+            // Shown even when Apple Intelligence is off, so choosing it can say why it can't.
+            let suggesting = NoteIcons.shared.suggestion(for: item.url) == .suggesting
+            let entry = menu.addItem(withTitle: suggesting ? "Suggesting Icon…" : "Suggest New Icon",
+                                     action: suggesting ? nil : #selector(suggestIconClicked), keyEquivalent: "")
+            entry.target = self
+            entry.isEnabled = !suggesting
         }
         menu.addItem(.separator())
         menu.addItem(withTitle: "Move to Trash", action: #selector(trashClicked), keyEquivalent: "").target = self
@@ -560,6 +566,56 @@ final class SidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate,
         guard let item = clickedItem, let workspace, let text = try? Note.read(item.url) else { return }
         NoteIcons.shared.suggest(for: item.url, text: text, in: workspace, force: true)
     }
+
+    private lazy var iconFeedback = IconFeedback(sidebar: self)
+
+    /// Icon suggestions as seen from the list: a spinner in place of a row's icon while
+    /// it works, then the new icon springs in, or a small note says how it went. The open
+    /// note's title bar speaks for that note, so notes here are for the others.
+    private final class IconFeedback {
+        weak var sidebar: SidebarView?
+        private var spinners: [URL: IconSpinner] = [:]
+
+        init(sidebar: SidebarView) {
+            self.sidebar = sidebar
+            NotificationCenter.default.addObserver(forName: NoteIcons.suggestionDidChange, object: nil, queue: .main) { [weak self] n in
+                if let url = n.object as? URL { self?.update(url) }
+            }
+        }
+
+        private func update(_ key: URL) {
+            guard let sidebar, let item = sidebar.sidebarItem(for: key) else { return }
+            let row = sidebar.outline.row(forItem: item)
+            let cell = row < 0 ? nil : sidebar.outline.view(atColumn: 0, row: row, makeIfNecessary: false)
+            let icon = cell?.subviews.first { $0 is NSImageView }
+            let state = NoteIcons.shared.suggestion(for: key)
+            spinners.removeValue(forKey: key)?.removeFromSuperview()
+            icon?.alphaValue = state == .suggesting ? 0 : 1
+            guard let cell, let icon else { return }
+            switch state {
+            case .suggesting:
+                let spinner = IconSpinner()
+                cell.addSubview(spinner)
+                spinner.centerXAnchor.constraint(equalTo: icon.centerXAnchor).isActive = true
+                spinner.centerYAnchor.constraint(equalTo: icon.centerYAnchor).isActive = true
+                spinner.start()
+                spinners[key] = spinner
+            case .changed:
+                icon.springIn()
+            default:
+                guard sidebar.currentURL.map(NoteIcons.key) != key else { return }
+                IconSuggestionNotice.show(state, relativeTo: cell.bounds, of: cell, edge: .maxX) { NoteIcons.shared.retry(for: key) }
+            }
+        }
+    }
+
+    #if DEBUG
+    /// "Suggest New Icon" from a row's menu.
+    func debugSuggestIcon(_ url: URL) {
+        guard let workspace, let text = try? Note.read(url) else { print("no note at", url.path); return }
+        NoteIcons.shared.suggest(for: url, text: text, in: workspace, force: true)
+    }
+    #endif
 
     @objc private func revealClicked() {
         if let item = clickedItem { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
