@@ -62,8 +62,9 @@ enum TableFormulaUI {
             return CaptionDecoration(text: "ƒ " + describe(issue, grid: grid) + more, isError: true)
         }
         let n = outcome.formulas.count
-        let stale = outcome.changed.isEmpty ? "" : " · values out of date"
-        return CaptionDecoration(text: "ƒ \(n) formula\(n == 1 ? "" : "s")" + stale, isError: false)
+        let stale = !outcome.changed.isEmpty
+        return CaptionDecoration(text: "ƒ \(n) formula\(n == 1 ? "" : "s")" + (stale ? " · values out of date" : ""), isError: false,
+                                 action: stale ? "Recalculate" : nil)
     }
 
     /// An issue in the table's own words: the row's label and the column's header.

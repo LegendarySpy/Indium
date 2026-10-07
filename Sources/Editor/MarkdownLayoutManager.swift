@@ -520,10 +520,16 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
                 .font: NSFont.systemFont(ofSize: 11, weight: .regular),
                 .foregroundColor: caption.isError ? Palette.error : Palette.tertiaryText,
             ]
-            let text = caption.text as NSString
-            let size = text.size(withAttributes: attrs)
+            let text = NSMutableAttributedString(string: caption.text, attributes: attrs)
+            if let action = caption.action {
+                var link = attrs
+                link[.foregroundColor] = Palette.link
+                text.append(NSAttributedString(string: " · ", attributes: attrs))
+                text.append(NSAttributedString(string: action, attributes: link))
+            }
+            let size = text.size()
             let rect = NSRect(x: col.x, y: round(origin.y + frag.midY - size.height / 2), width: col.width, height: ceil(size.height))
-            text.draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: attrs)
+            text.draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
         }
     }
 
