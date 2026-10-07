@@ -293,15 +293,39 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     // MARK: Table editing
 
-    private func tableLayout(at location: Int) -> (TableRender, NSRect)? {
-        guard let container = textView.textContainer, location < storage.length else { return nil }
+    /// A table's layout, where its grid sits, and the column it lives in (the page column,
+    /// or its cell in a side-by-side layout), all in view coordinates.
+    private func tableLayout(at location: Int) -> (TableRender, NSRect, column: NSRect)? {
+        guard textView.textContainer != nil, location < storage.length else { return nil }
         let glyph = layoutManager.glyphIndexForCharacter(at: location)
         layoutManager.ensureLayout(forGlyphRange: NSRange(location: glyph, length: 1))
-        _ = container
         for block in layoutManager.blockRects(in: NSRange(location: location, length: 1), origin: textView.textContainerOrigin) {
-            if case let .table(render) = block.decoration.content { return (render, block.content) }
+            if case let .table(render) = block.decoration.content { return (render, block.content, tableColumn(of: block)) }
         }
         return nil
+    }
+
+    /// The page column, in view coordinates.
+    private var pageColumn: NSRect {
+        let width = (textView.textContainer?.size.width ?? 0) - layoutManager.gutter * 2
+        return NSRect(x: textView.textContainerOrigin.x + layoutManager.gutter, y: 0, width: max(width, 0), height: textView.bounds.height)
+    }
+
+    /// The column a table block belongs to. A floating table's area is the table itself;
+    /// its column is the page's.
+    private func tableColumn(of block: (decoration: BlockDecoration, range: NSRange, area: NSRect, content: NSRect)) -> NSRect {
+        if case .float = block.decoration.placement { return pageColumn }
+        return block.area
+    }
+
+    /// Whether the add-column and add-row strips fit outside a table: there must be room
+    /// right of it in its column (a full-width table may use some of the page margin),
+    /// and text wraps right up against a floating table, so its strips stay inside.
+    private func tableStripRoom(table: NSRect, column: NSRect, floating: Bool) -> (right: Bool, below: Bool) {
+        guard !floating else { return (false, false) }
+        let page = pageColumn
+        let limit = abs(column.maxX - page.maxX) < 1 ? page.maxX + layoutManager.gutter / 2 : column.maxX
+        return (table.maxX + TableEdgeStrip.outset <= limit, true)
     }
 
     /// A caret that lands inside a table (arrow keys, clicks beside it) edits a cell
@@ -329,10 +353,11 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         styler.editingTableLocation = location
         styler.restyleBlock(at: location, in: storage)
         updateFloats()
-        guard let (render, rect) = tableLayout(at: location) else {
+        guard let (render, rect, columnRect) = tableLayout(at: location) else {
             styler.editingTableLocation = nil
             return
         }
+        hideTableStrips()
         // The columns hold these widths until editing ends, so typing never reshuffles them.
         styler.editingTableWidths = render.columnWidths
         let floatSide = styler.blockIndex(containing: location).flatMap { styler.floatOfBlock[$0] }
@@ -341,6 +366,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         editor.floating = floatSide != nil
         layoutManager.hiddenFloat = floatSide != nil ? location : nil
         editor.frame.origin = rect.origin
+        tableColumnRect = columnRect
+        editor.stripRoom = tableStripRoom(table: rect, column: columnRect, floating: floatSide != nil)
         editor.onChange = { [weak self] markdown, cell in self?.commitTable(markdown, typingIn: cell) }
         editor.onExit = { [weak self] in self?.endTableEditing(caretAfter: true) }
         editor.onLeave = { [weak self] down in
@@ -370,18 +397,78 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textView.addSubview(bar)
         tableToolbar = bar
         positionTableToolbar()
+        // Scrolling through a tall table carries the bar along its visible part.
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        tableScrollObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scrollView.contentView,
+                                                                     queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.positionTableToolbar() }
+        }
         bar.alphaValue = 0
         NSAnimationContext.runAnimationGroup { $0.duration = 0.18; bar.animator().alphaValue = 1 }
         editor.focusCell(row: row, column: column)
     }
 
+    /// The column the edited table sits in (view coordinates); the toolbar stays inside it.
+    private var tableColumnRect: NSRect = .zero
+    private var tableScrollObserver: NSObjectProtocol?
+
+    /// Puts the toolbar right-aligned over its own table and inside the table's column:
+    /// above the table where that space is empty, else below it, else along the top of
+    /// the view over the table's visible part (scrolled into a tall table). It only
+    /// covers neighbouring text when the table is hemmed in on both sides.
     private func positionTableToolbar() {
-        guard let editor = tableEditor, let bar = tableToolbar else { return }
+        guard let editor = tableEditor, let bar = tableToolbar, let location = styler.editingTableLocation else { return }
+        let table = NSRect(origin: editor.frame.origin, size: NSSize(width: editor.render.width, height: editor.render.height))
+        let column = tableColumnRect.width > 0 ? tableColumnRect : table
+        bar.fit(width: column.width)
         let size = bar.frame.size
-        var y = editor.frame.minY - size.height - 8
-        if y < textView.visibleRect.minY + 4 { y = editor.frame.maxY + 8 }
-        let tableRight = editor.frame.minX + editor.render.width
-        bar.setFrameOrigin(NSPoint(x: round(tableRight - size.width), y: round(y)))
+        let x = round(max(column.minX, min(table.maxX, column.maxX) - size.width))
+        func at(_ y: CGFloat) -> NSRect { NSRect(x: x, y: round(y), width: size.width, height: size.height) }
+        // The page fades out over its top 46 points (DocumentWindowController); the bar
+        // stays clear of that.
+        var visible = textView.visibleRect.insetBy(dx: 0, dy: 4)
+        visible.origin.y += 40
+        visible.size.height -= 40
+        let range = styler.blockIndex(containing: location).map { styler.blocks[$0].range } ?? NSRange(location: location, length: 0)
+        // Roomy spots first, then the same ones snug against the grid (below, it clears
+        // the add-row strip).
+        let strip = editor.stripRoom.below ? TableEdgeStrip.outset : 0
+        let spots = [(at(table.minY - size.height - 8), 6.0), (at(table.maxY + strip + 6), 6.0),
+                     (at(table.minY - size.height - 3), 1.0), (at(table.maxY + strip + 2), 1.0)]
+        if let spot = spots.first(where: { visible.contains($0.0) && tableToolbarRoomIsFree($0.0.insetBy(dx: 0, dy: -$0.1), table: range) }) {
+            bar.frame = spot.0
+        } else if table.minY < visible.minY + size.height + 8 {
+            bar.frame = at(min(max(visible.minY, table.minY), table.maxY - size.height))
+        } else {
+            bar.frame = spots[2].0
+        }
+    }
+
+    /// True when no text or rendered block other than the edited table lies under `rect`.
+    private func tableToolbarRoomIsFree(_ rect: NSRect, table: NSRange) -> Bool {
+        guard let container = textView.textContainer else { return true }
+        let origin = textView.textContainerOrigin
+        let local = rect.offsetBy(dx: -origin.x, dy: -origin.y)
+        for (location, frame) in layoutManager.floatFrames where !NSLocationInRange(location, table) && frame.intersects(local) { return false }
+        let glyphs = layoutManager.glyphRange(forBoundingRect: local, in: container)
+        var free = true
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphs) { line, used, _, range, stop in
+            guard line.height > 1 else { return }
+            let chars = self.layoutManager.characterRange(forGlyphRange: range, actualGlyphRange: nil)
+            guard NSIntersectionRange(chars, table).length == 0, chars.location < self.storage.length else { return }
+            // Text takes the room it's set in; a rendered block (its source hidden) its whole line.
+            var occupied = NSRect.zero
+            self.storage.enumerateAttributes(in: chars) { attrs, run, _ in
+                if attrs[.mdBlock] != nil { occupied = occupied.union(line) }
+                let text = attrs[.mdHidden] != nil ? "" : self.ns.substring(with: run).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty { occupied = occupied.union(used) }
+            }
+            if occupied.intersects(local) {
+                free = false
+                stop.pointee = true
+            }
+        }
+        return free
     }
 
     /// A table's Markdown, without the line break after it.
@@ -437,14 +524,30 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard location < storage.length else { return }
         styler.restyleBlock(at: location, in: storage)
         refreshTableEditor()
+        DispatchQueue.main.async { [weak self] in self?.revealFocusedCellUnderToolbar() }
+    }
+
+    /// A cell focused under the toolbar pinned over a tall table scrolls clear of it.
+    /// Only on a change of cell: scrolling by hand is left alone.
+    private func revealFocusedCellUnderToolbar() {
+        guard let editor = tableEditor, let bar = tableToolbar,
+              editor.focus.row < editor.render.rowHeights.count, editor.focus.column < editor.render.columnWidths.count else { return }
+        let table = NSRect(origin: editor.frame.origin, size: NSSize(width: editor.render.width, height: editor.render.height))
+        let cell = editor.render.cellRect(row: editor.focus.row, column: editor.focus.column, in: table)
+        guard cell.intersects(bar.frame) else { return }
+        let clip = scrollView.contentView
+        clip.scroll(to: NSPoint(x: clip.bounds.minX, y: max(0, clip.bounds.minY - (bar.frame.maxY + 6 - cell.minY))))
+        scrollView.reflectScrolledClipView(clip)
     }
 
     private func refreshTableEditor() {
         if tableEditor != nil { updateFloats() }
         guard let editor = tableEditor, let location = styler.editingTableLocation,
-              let (render, rect) = tableLayout(at: location) else { return }
+              let (render, rect, columnRect) = tableLayout(at: location) else { return }
         // A change of shape (a column added or removed) lays out afresh; hold that too.
         styler.editingTableWidths = render.columnWidths
+        tableColumnRect = columnRect
+        editor.stripRoom = tableStripRoom(table: rect, column: columnRect, floating: editor.floating)
         editor.update(render: render)
         editor.frame.origin = rect.origin
         positionTableToolbar()
@@ -467,6 +570,9 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         tableToolbar?.removeFromSuperview()
         tableEditor = nil
         tableToolbar = nil
+        tableColumnRect = .zero
+        if let observer = tableScrollObserver { NotificationCenter.default.removeObserver(observer) }
+        tableScrollObserver = nil
         textView.window?.makeFirstResponder(textView)
         if caretAfter, let i = styler.blockIndex(containing: location) {
             let end = NSMaxRange(styler.blocks[i].range)
@@ -1184,28 +1290,99 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     // Object-style image selection: clicking an image selects it without revealing its source.
 
-    func handleClick(at point: NSPoint, clickCount: Int) -> Bool {
-        if let editor = tableEditor, editor.hitTest(point) == nil { endTableEditing() }
-        guard let container = textView.textContainer else { return false }
+    /// Rendered blocks on screen, floating ones first.
+    private func visibleBlocks() -> [(decoration: BlockDecoration, range: NSRange, area: NSRect, content: NSRect)] {
+        guard let container = textView.textContainer else { return [] }
         let origin = textView.textContainerOrigin
         let visible = textView.visibleRect.offsetBy(dx: -origin.x, dy: -origin.y)
         let glyphs = layoutManager.glyphRange(forBoundingRect: visible, in: container)
         let chars = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
-        let blocks = layoutManager.floatBlocks(origin: origin) + layoutManager.blockRects(in: chars, origin: origin)
-        for block in blocks where block.content.insetBy(dx: -4, dy: -4).contains(point) {
+        return layoutManager.floatBlocks(origin: origin) + layoutManager.blockRects(in: chars, origin: origin)
+    }
+
+    /// Where clicks count as aimed at a table: the grid, plus the space beside its rows
+    /// (the page margin on the left, its column's empty space on the right) and the
+    /// padding under it. A floating table has text right beside it, so only its grid.
+    private func tableClickArea(_ block: (decoration: BlockDecoration, range: NSRange, area: NSRect, content: NSRect)) -> NSRect {
+        if case .float = block.decoration.placement { return block.content.insetBy(dx: -4, dy: -4) }
+        let column = tableColumn(of: block)
+        let minX = abs(column.minX - pageColumn.minX) < 1 ? textView.bounds.minX : column.minX - 8
+        return NSRect(x: minX, y: block.content.minY - 4, width: column.maxX - minX, height: max(block.area.maxY, block.content.maxY + 4) - block.content.minY + 4)
+    }
+
+    private var tableStrips: [TableEdgeStrip] = []
+
+    /// Shows the add-column and add-row strips of the table under the pointer, so a
+    /// table grows without opening it first. An open table shows its own.
+    func hoverTables(at point: NSPoint) {
+        guard tableEditor == nil, textView.isEditable, AppSettings.shared.syntax != .always else { return hideTableStrips() }
+        for block in visibleBlocks() {
+            guard case let .table(table) = block.decoration.content, block.decoration.placement != .below else { continue }
+            var floating = false
+            if case .float = block.decoration.placement { floating = true }
+            let room = tableStripRoom(table: block.content, column: tableColumn(of: block), floating: floating)
+            let frames = TableEdgeStrip.frames(table: block.content, room: room)
+            guard block.content.union(frames.column).union(frames.row).contains(point) else { continue }
+            if tableStrips.isEmpty {
+                tableStrips = [TableEdgeStrip(adds: .column), TableEdgeStrip(adds: .row)]
+                tableStrips.forEach { textView.addSubview($0) }
+            }
+            let location = lineRange(at: block.range.location).content.location
+            let rows = table.rowHeights.count, columns = table.columnWidths.count
+            tableStrips[0].frame = frames.column
+            tableStrips[0].inside = !room.right
+            tableStrips[0].onClick = { [weak self] in
+                self?.beginTableEditing(at: location, row: 0, column: columns - 1)
+                self?.tableEditor?.addColumnAtEnd()
+            }
+            tableStrips[1].frame = frames.row
+            tableStrips[1].inside = !room.below
+            tableStrips[1].onClick = { [weak self] in
+                self?.beginTableEditing(at: location, row: rows - 1, column: 0)
+                self?.tableEditor?.addRowAtEnd()
+            }
+            return
+        }
+        hideTableStrips()
+    }
+
+    func hideTableStrips() {
+        tableStrips.forEach { $0.removeFromSuperview() }
+        tableStrips = []
+    }
+
+    func handleClick(at point: NSPoint, clickCount: Int) -> Bool {
+        if let editor = tableEditor, editor.hitTest(point) == nil { endTableEditing() }
+        for block in visibleBlocks() {
+            if case let .table(table) = block.decoration.content {
+                guard block.decoration.placement != .below, tableClickArea(block).contains(point) else { continue }
+                let location = lineRange(at: block.range.location).content.location
+                // Under the grid (its bottom padding): the line after the table, as if
+                // the click had landed there.
+                if point.y > block.content.maxY + 4, let i = styler.blockIndex(containing: location) {
+                    textView.window?.makeFirstResponder(textView)
+                    textView.setSelectedRange(NSRange(location: min(NSMaxRange(styler.blocks[i].range), storage.length), length: 0))
+                    return true
+                }
+                // Beside a row: into that row, at the start of its first cell from the left,
+                // the end of its last cell from the right (Notion's way; there's no caret
+                // beside a table, so the grid is the nearest place to type).
+                let local = NSPoint(x: point.x - block.content.minX, y: point.y - block.content.minY)
+                let inside = NSPoint(x: min(max(local.x, 0), table.width - 1), y: min(max(local.y, 0), table.height - 1))
+                let cell = table.cell(at: inside) ?? (0, 0)
+                beginTableEditing(at: location, row: cell.row, column: cell.column)
+                if local.x < 0 { tableEditor?.focusCell(row: cell.row, column: cell.column, caretAtStart: true) }
+                return true
+            }
+            guard block.content.insetBy(dx: -4, dy: -4).contains(point) else { continue }
             switch block.decoration.content {
             case .image:
                 if block.decoration.placement != .below || clickCount == 1 {
                     selectImage(at: block.range.location)
                     return true
                 }
-            case let .table(table):
-                if block.decoration.placement != .below {
-                    let local = NSPoint(x: point.x - block.content.minX, y: point.y - block.content.minY)
-                    let cell = table.cell(at: local) ?? (0, 0)
-                    beginTableEditing(at: lineRange(at: block.range.location).content.location, row: cell.row, column: cell.column)
-                    return true
-                }
+            case .table:
+                break
             case .math:
                 if block.decoration.placement == .replace {
                     textView.window?.makeFirstResponder(textView)
