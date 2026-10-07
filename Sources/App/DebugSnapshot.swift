@@ -696,7 +696,7 @@ enum DebugSnapshot {
                 for step in steps {
                     // Steps that only look (and Tab, as a real key) open no explicit undo group: an empty
                     // explicit group stays on the stack, where a real key event's empty group is dropped.
-                    let isUndo = ["undo", "redo", "noteundo", "tab", "text", "caption", "fprint", "shot", "focus", "done", "notesel", "selectAll", "select", "pb"].contains(step.split(separator: ":").first.map(String.init) ?? "")
+                    let isUndo = ["undo", "redo", "noteundo", "tab", "text", "caption", "fprint", "shot", "focus", "done", "notesel", "selectAll", "select", "pb", "keyev", "cmdev", "switchto", "idle", "cat"].contains(step.split(separator: ":").first.map(String.init) ?? "")
                     if !isUndo { undo?.beginUndoGrouping() }
                     defer { if !isUndo { undo?.endUndoGrouping() } }
                     let e = target.editor.tableEditor
@@ -710,6 +710,62 @@ enum DebugSnapshot {
                         NSPasteboard.general.setString(arg.replacingOccurrences(of: "\\t", with: "\t").replacingOccurrences(of: "\\n", with: "\n"), forType: .string)
                     case "type":
                         window.firstResponder?.insertText(arg)
+                    case "captionclick":
+                        // A click on the first caption offering Recalculate, through the note's mouseDown.
+                        let tv = target.editor.textView, lm = target.editor.layoutManager, st = target.editor.storage
+                        var spot: NSPoint?
+                        st.enumerateAttribute(.mdCaption, in: NSRange(location: 0, length: st.length)) { v, r, stop in
+                            guard let c = v as? CaptionDecoration, c.action != nil else { return }
+                            let frag = lm.lineFragmentRect(forGlyphAt: lm.glyphIndexForCharacter(at: r.location), effectiveRange: nil)
+                            // On the word Recalculate, or (`captionclick:text`) on the caption's own words.
+                            let font: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11)]
+                            let col = lm.contentColumn(glyph: lm.glyphIndexForCharacter(at: r.location), container: tv.textContainer!, origin: tv.textContainerOrigin).x
+                            let word = col + ((c.text + " · ") as NSString).size(withAttributes: font).width + 20
+                            spot = NSPoint(x: arg == "text" ? col + 20 : word, y: tv.textContainerOrigin.y + frag.midY)
+                            stop.pointee = true
+                        }
+                        if let spot {
+                            func mouse(_ type: NSEvent.EventType) -> NSEvent {
+                                NSEvent.mouseEvent(with: type, location: tv.convert(spot, to: nil), modifierFlags: [], timestamp: 0,
+                                                   windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+                            }
+                            NSApp.postEvent(mouse(.leftMouseUp), atStart: false)
+                            tv.mouseDown(with: mouse(.leftMouseDown))
+                        } else { print("  no caption offers Recalculate") }
+                    case "idle":
+                        // `idle:1.5`: nothing happens for that long (timers such as autosave fire).
+                        RunLoop.current.run(until: Date().addingTimeInterval(Double(arg) ?? 1))
+                    case "cat":
+                        print("FILE \(arg):\n" + ((try? String(contentsOfFile: arg, encoding: .utf8)) ?? "-"))
+                    case "switchto":
+                        // `switchto:/path.md`: opens another note in this editor, as the sidebar would,
+                        // printing any change made to the note being left on the way out.
+                        let editor = target.editor, old = editor.note
+                        let watch = NotificationCenter.default.addObserver(forName: NSText.didChangeNotification, object: editor.textView, queue: nil) { _ in
+                            print("CHANGED ON THE WAY OUT:\n" + editor.text)
+                        }
+                        if let next = try? Note(url: URL(fileURLWithPath: arg)) { editor.load(next) }
+                        NotificationCenter.default.removeObserver(watch)
+                        print("  left note undo level:", old?.undoManager.groupingLevel ?? -1, "registration on:", old?.undoManager.isUndoRegistrationEnabled ?? false,
+                              "now showing:", editor.note?.url?.lastPathComponent ?? "-")
+                    case "cmdev":
+                        // `cmdev:deleteBackward:`: a command as its own key event, grouped as `keyev`.
+                        target.editor.textView.undoManager?.groupsByEvent = true
+                        window.firstResponder?.doCommand(by: NSSelectorFromString(arg))
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+                        if let u = target.editor.textView.undoManager, u.groupingLevel > 0 { u.endUndoGrouping() }
+                        target.editor.textView.undoManager?.groupsByEvent = false
+                    case "keyev":
+                        // `keyev:abc`: each character as its own event, grouped by the run loop as a real
+                        // key press is (a press that records no undo leaves no group behind).
+                        target.editor.textView.undoManager?.groupsByEvent = true
+                        for ch in arg {
+                            window.firstResponder?.insertText(String(ch))
+                            RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+                            // A nested run loop doesn't reach the end-of-event observer: close the press's group.
+                            if let u = target.editor.textView.undoManager, u.groupingLevel > 0 { u.endUndoGrouping() }
+                        }
+                        target.editor.textView.undoManager?.groupsByEvent = false
                     case "key":
                         window.firstResponder?.doCommand(by: NSSelectorFromString(arg))
                     case "click", "drag":
