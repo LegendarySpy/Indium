@@ -346,28 +346,37 @@ extension EditorController {
             grip.removeFromSuperview()
         }
 
-        // A lifted picture of the table follows the pointer.
-        let snapshotRect = lifted.insetBy(dx: -6, dy: -4)
-        let ghost = NSImageView(frame: snapshotRect)
+        // A lifted picture of the table follows the pointer: a wide one shrunk to under
+        // half the view, so it never hides where it's going.
+        hideTableStrips()
+        let snapshotRect = lifted
+        let scale = min(1, max(200, textView.visibleRect.width * 0.4) / snapshotRect.width)
+        let size = NSSize(width: round(snapshotRect.width * scale), height: round(snapshotRect.height * scale))
+        // The picture is clipped to the table's rounded frame; its holder casts the shadow.
+        let picture = NSImageView(frame: NSRect(origin: .zero, size: size))
+        picture.imageScaling = .scaleProportionallyUpOrDown
         if let rep = textView.bitmapImageRepForCachingDisplay(in: snapshotRect) {
             textView.cacheDisplay(in: snapshotRect, to: rep)
             let image = NSImage(size: snapshotRect.size)
             image.addRepresentation(rep)
-            ghost.image = image
+            picture.image = image
         }
+        picture.wantsLayer = true
+        picture.layer?.cornerRadius = 8 * scale
+        picture.layer?.masksToBounds = true
+        let ghost = NSView(frame: NSRect(origin: snapshotRect.origin, size: size))
         ghost.wantsLayer = true
-        ghost.layer?.cornerRadius = 10
-        ghost.layer?.backgroundColor = Palette.background.cgColor
-        ghost.alphaValue = 0.85
+        ghost.addSubview(picture)
+        ghost.alphaValue = 0.9
         ghost.shadow = {
             let s = NSShadow()
-            s.shadowBlurRadius = 18
-            s.shadowOffset = NSSize(width: 0, height: -6)
-            s.shadowColor = NSColor.black.withAlphaComponent(0.2)
+            s.shadowBlurRadius = 16
+            s.shadowOffset = NSSize(width: 0, height: -5)
+            s.shadowColor = NSColor.black.withAlphaComponent(0.22)
             return s
         }()
         // The table stays put, faded, until it's dropped.
-        let veil = NSView(frame: snapshotRect)
+        let veil = NSView(frame: snapshotRect.insetBy(dx: -2, dy: -2))
         veil.wantsLayer = true
         veil.layer?.backgroundColor = Palette.background.withAlphaComponent(0.65).cgColor
         let indicator = DropIndicatorView()
@@ -377,7 +386,18 @@ extension EditorController {
         textView.addSubview(ghost)
 
         let start = textView.convert(event.locationInWindow, from: nil)
-        let offset = NSPoint(x: start.x - snapshotRect.minX, y: start.y - snapshotRect.minY)
+        // Where it was picked up, kept under the pointer (scaled with the picture).
+        let offset = NSPoint(x: (start.x - snapshotRect.minX) * scale, y: (start.y - snapshotRect.minY) * scale)
+        // Inside the visible page; near its right edge it hangs left of the pointer
+        // instead, clear of a spot beside the block there.
+        func place(at p: NSPoint) {
+            let visible = textView.visibleRect.insetBy(dx: 8, dy: 8)
+            var x = p.x - offset.x
+            if x + size.width > visible.maxX { x = p.x - size.width - 16 }
+            ghost.setFrameOrigin(NSPoint(x: min(max(x, visible.minX), max(visible.minX, visible.maxX - size.width)),
+                                         y: min(max(p.y - offset.y, visible.minY), max(visible.minY, visible.maxY - size.height))))
+        }
+        place(at: start)
         var target: DropTarget?
         NSCursor.closedHand.push()
         while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .keyDown]) {
@@ -388,7 +408,7 @@ extension EditorController {
             }
             textView.autoscroll(with: next)
             let p = textView.convert(next.locationInWindow, from: nil)
-            ghost.setFrameOrigin(NSPoint(x: p.x - offset.x, y: p.y - offset.y))
+            place(at: p)
             target = dropTarget(at: p, dragging: source)
             showIndicator(indicator, for: target)
             #if DEBUG
