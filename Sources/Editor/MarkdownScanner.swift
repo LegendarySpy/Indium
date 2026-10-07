@@ -392,6 +392,8 @@ enum MarkdownScanner {
             case escape
             /// `%%…%%` inside a line. Its delimiters aren't markers: the whole span hides.
             case comment
+            /// `#tag`, without its `#`.
+            case tag(String)
         }
         var kind: Kind
         /// Whole span, absolute.
@@ -480,12 +482,14 @@ enum MarkdownScanner {
         }
 
         // Standard links and inline images.
+        var linkTexts: [NSRange] = []
         for m in Regex.link.matches(in: line as String, range: full) where free(m.range) {
             let textRange = m.range(at: 2)
             let open = NSRange(location: m.range.location, length: textRange.location - m.range.location)
             let tail = NSRange(location: NSMaxRange(textRange), length: NSMaxRange(m.range) - NSMaxRange(textRange))
             consume(open)
             consume(tail)
+            linkTexts.append(textRange)
             var url = line.substring(with: m.range(at: 3))
             if url.hasPrefix("<"), url.hasSuffix(">") { url = String(url.dropFirst().dropLast()) }
             spans.append(Span(kind: .link(url), range: abs(m.range), markers: [abs(open), abs(tail)], content: abs(textRange)))
@@ -501,6 +505,16 @@ enum MarkdownScanner {
         for m in Regex.bareURL.matches(in: line as String, range: full) where free(m.range) {
             consume(m.range)
             spans.append(Span(kind: .link(line.substring(with: m.range)), range: abs(m.range), markers: [], content: abs(m.range)))
+        }
+
+        // Tags, by Obsidian's rules: `#` at the start or after whitespace, then letters,
+        // digits, `_`, `-` or `/`, not all digits; never inside code, links or URLs.
+        for m in Regex.tag.matches(in: line as String, range: full) where free(m.range) {
+            let name = line.substring(with: m.range(at: 1))
+            guard !name.allSatisfy(\.isNumber),
+                  !linkTexts.contains(where: { NSIntersectionRange($0, m.range).length > 0 }) else { continue }
+            consume(m.range)
+            spans.append(Span(kind: .tag(name), range: abs(m.range), markers: [], content: abs(m.range)))
         }
 
         // Emphasis family. Only the markers are consumed so spans can nest.
@@ -541,6 +555,7 @@ enum MarkdownScanner {
         static let wikiImageLine = make(#"^[ \t]*!\[\[([^\[\]\n]+)\]\][ \t]*$"#)
 
         static let comment = make(#"%%.*?%%"#)
+        static let tag = make(#"(?<![^\s])#([\p{L}\p{N}_/\-]+)"#)
         static let escape = make(#"\\[!-/:-@\[-`{-~]"#)
         static let codeSpan = make(#"(`+)(?!`)(.+?)(?<!`)\1(?!`)"#)
         static let displayMathInline = make(#"\$\$(.+?)\$\$"#)
