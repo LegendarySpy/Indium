@@ -2,8 +2,9 @@ import AppKit
 import QuickLookUI
 
 /// Finder's Quick Look (Space on a note): the note drawn by the editor's own styler
-/// and layout, read only, with every bit of Markdown syntax tucked away.
-final class PreviewViewController: NSViewController, QLPreviewingController, ImageResolving {
+/// and layout, read only, with every bit of Markdown syntax tucked away. `![[Note]]`
+/// embeds are drawn when the note they name is nearby and readable here.
+final class PreviewViewController: NSViewController, QLPreviewingController, ImageResolving, NoteEmbedResolving {
     private let storage = NSTextStorage()
     private let layout = MarkdownLayoutManager()
     private let styler = MarkdownStyler(config: .current)
@@ -96,7 +97,9 @@ final class PreviewViewController: NSViewController, QLPreviewingController, Ima
     /// (the App Store preview has no exception to read the rest of the disk), and only
     /// then does the image become a placeholder that says so. An image that simply
     /// isn't there stays missing, as in the editor.
-    func image(for ref: ImageRef) -> NSImage? {
+    func image(for ref: ImageRef) -> NSImage? { image(for: ref, from: noteURL) }
+
+    func image(for ref: ImageRef, from noteURL: URL?) -> NSImage? {
         guard let noteURL else { return nil }
         let source = ref.source.removingPercentEncoding ?? ref.source
         guard !source.hasPrefix("http://"), !source.hasPrefix("https://") else { return nil }
@@ -129,6 +132,38 @@ final class PreviewViewController: NSViewController, QLPreviewingController, Ima
             folder = parent
         }
         return denied ? Self.unreadablePlaceholder(source) : nil
+    }
+
+    // MARK: Embedded notes
+
+    var embeddingNoteURL: URL? { noteURL }
+
+    /// A note Quick Look can't find or read stays a link: it searches only nearby, and
+    /// the sandbox may keep it from the rest of the vault.
+    var showsMissingEmbeds: Bool { false }
+
+    /// Looks for `![[Note]]` beside the note doing the embedding, then in the folders above
+    /// it up to the vault's root (where `![[folder/Note]]` paths start). Only a note this
+    /// extension can actually read counts; nothing asks for more access.
+    func noteURL(forEmbed target: String, from note: URL?) -> URL? {
+        guard let note = note ?? noteURL else { return nil }
+        var name = target.components(separatedBy: "#")[0].trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return nil }
+        if !["md", "markdown"].contains((name as NSString).pathExtension.lowercased()) { name += ".md" }
+        var folder = note.deletingLastPathComponent()
+        var found: URL?
+        for _ in 0..<4 {
+            let candidate = folder.appendingPathComponent(name).standardizedFileURL
+            if (try? FileHandle(forReadingFrom: candidate))?.closeFile() != nil { found = candidate; break }
+            if FileManager.default.fileExists(atPath: folder.appendingPathComponent(".obsidian").path) { break }
+            let parent = folder.deletingLastPathComponent()
+            if parent.path == folder.path { break }
+            folder = parent
+        }
+        #if DEBUG
+        NSLog("IndiumQL %@ embed %@: %@", Bundle.main.bundleIdentifier ?? "-", target, found?.path ?? "link (not readable here)")
+        #endif
+        return found
     }
 
     private static func isPermissionError(_ error: Error) -> Bool {
