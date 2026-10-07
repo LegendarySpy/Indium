@@ -614,7 +614,12 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         // The caption sits on the line's hidden source, whose glyphs take no room: the line's first.
         let index = layoutManager.characterIndexForGlyph(at: line.location)
         guard index < storage.length, let caption = storage.attribute(.mdCaption, at: index, effectiveRange: nil) as? CaptionDecoration,
-              caption.action != nil, let i = styler.blockIndex(containing: index) else { return nil }
+              let action = caption.action, let i = styler.blockIndex(containing: index) else { return nil }
+        // Only the link itself, drawn after the caption's text (as MarkdownLayoutManager does).
+        let font: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11)]
+        let x = layoutManager.contentColumn(glyph: line.location, container: container, origin: textView.textContainerOrigin).x
+            + ((caption.text + " · ") as NSString).size(withAttributes: font).width
+        guard point.x >= x - 2, point.x <= x + (action as NSString).size(withAttributes: font).width + 2 else { return nil }
         return styler.blocks[i].range.location
     }
 
@@ -785,8 +790,6 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func load(_ newNote: Note?, discardingEdits: Bool = false) -> Bool {
         if !discardingEdits {
             // Pending table results and frontmatter land in the text before it's saved.
-            recalculateEditedTable()
-            endFrontmatterSession()
             if !canLeaveNote() { return false }
         } else {
             frontmatterSession = nil
@@ -869,7 +872,6 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// `interactive: false` (autosave) doesn't ask again after you chose Keep Editing.
     @discardableResult
     func saveNow(interactive: Bool = true) -> Bool {
-        endFrontmatterSession()
         saveTimer?.invalidate()
         saveTimer = nil
         guard let note, !note.isTemporary, hasUnsavedEdits else { return true }
@@ -897,7 +899,16 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// when it's saved. Otherwise the note stays, with a sheet offering to try again,
     /// save a copy elsewhere or discard the edits.
     func canLeaveNote() -> Bool {
-        saveNow()
+        finishPendingEdits()
+        return saveNow()
+    }
+
+    /// Edits still gathering into one step (a cell typed in, the frontmatter) are done:
+    /// their tables are recalculated. For leaving a note and the Save command; autosave
+    /// writes the text as it is and leaves them open.
+    func finishPendingEdits() {
+        recalculateEditedTable()
+        endFrontmatterSession()
     }
 
     /// The failed-save sheet. Nothing is lost by dismissing it: the edits stay in the
