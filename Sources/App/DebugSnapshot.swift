@@ -452,8 +452,136 @@ enum DebugSnapshot {
         print("MATH CELL CASES: \(total - failed)/\(total) passed")
     }
 
+    /// `-IndiumClipboardCases file`: tables through the pasteboard (a private one) and back.
+    /// A case is `### name`, then `<<< kind [arg]` sections that fill the board and `>>> kind`
+    /// sections that check it; each section's body is the lines under it (`⇥` is a tab, `␠` a space).
+    /// In: `table [r1,c1,r2,c2]` (a note's table copied whole, Copy Table, or a block of its
+    /// cells), `tsv` (as Numbers and Excel put it), `string`, `html`, `cell` (text as typed).
+    /// Out: `grid` (JSON, what a table pastes), `page` (Markdown pasted into the page, `nil`),
+    /// `string`, `tsv`, `html~` (each line found in the HTML), `stored` (a typed cell's
+    /// Markdown), `latex` (what a cell's math typesets), `noformulas`. Pasted cells must
+    /// survive being written into a table and read back.
+    static func runClipboardCases(_ text: String) {
+        let pb = TableClipboard.board
+        var cases: [(name: String, sections: [(kind: String, arg: String, body: [String])])] = []
+        for line in text.components(separatedBy: "\n") {
+            if line.hasPrefix("### ") { cases.append((String(line.dropFirst(4)), [])); continue }
+            guard !cases.isEmpty else { continue }
+            if line.hasPrefix("<<< ") || line.hasPrefix(">>> ") {
+                let rest = line.dropFirst(4).split(separator: " ", maxSplits: 1).map(String.init)
+                cases[cases.count - 1].sections.append((String(line.prefix(1)) + rest[0], rest.count > 1 ? rest[1] : "", []))
+            } else if !cases[cases.count - 1].sections.isEmpty {
+                cases[cases.count - 1].sections[cases[cases.count - 1].sections.count - 1].body.append(line.replacingOccurrences(of: "⇥", with: "\t").replacingOccurrences(of: "␠", with: " "))
+            }
+        }
+        var passed = 0
+        for c in cases {
+            pb.clearContents()
+            var notes: [String] = []
+            var typed: String?
+            func check(_ what: String, _ got: String?, _ want: String) {
+                if (got ?? "nil") != want { notes.append("\(what): got \((got ?? "nil").debugDescription), want \(want.debugDescription)") }
+            }
+            for s in c.sections {
+                var body = s.body
+                while body.last == "" { body.removeLast() }
+                let joined = body.joined(separator: "\n")
+                switch s.kind {
+                case "<table":
+                    guard let block = MarkdownScanner.scan(joined as NSString).first, case let .table(spec) = block.kind else { notes.append("no table"); continue }
+                    let columns = max(spec.alignments.count, spec.rows.map(\.count).max() ?? 0)
+                    let all = spec.rows.map { row in (0..<columns).map { $0 < row.count ? TableSpec.unescapeCell(row[$0].text) : "" } }
+                    let n = s.arg.split(separator: ",").compactMap { Int($0) }
+                    if n.count == 4 {
+                        let cells = all[n[0]...n[2]].map { Array($0[n[1]...n[3]]) }
+                        TableClipboard.write(cells, header: n[0] == 0, markdown: nil, to: pb)
+                    } else {
+                        TableClipboard.write(all, header: true, markdown: joined, to: pb)
+                    }
+                case "<tsv":
+                    pb.addTypes([TableClipboard.tabularType, .string], owner: nil)
+                    pb.setString(joined, forType: TableClipboard.tabularType)
+                    pb.setString(joined, forType: .string)
+                case "<string":
+                    pb.addTypes([.string], owner: nil)
+                    pb.setString(joined, forType: .string)
+                case "<html":
+                    pb.addTypes([.html], owner: nil)
+                    pb.setString(joined, forType: .html)
+                case "<cell":
+                    typed = joined
+                case ">grid":
+                    let grid = TableClipboard.grid(from: pb)
+                    let want = joined == "null" ? nil : (try? JSONDecoder().decode([[String]].self, from: Data(joined.utf8))) ?? [["<bad json>"]]
+                    if grid != want { notes.append("grid: got \(grid.map { "\($0)" } ?? "nil"), want \(want.map { "\($0)" } ?? "nil")") }
+                    // Written into a table and read back, the cells are the same.
+                    if let grid, let first = grid.first {
+                        let md = TableSpec.markdown(header: first.map(TableSpec.escapeCell), body: grid.dropFirst().map { $0.map(TableSpec.escapeCell) },
+                                                    alignments: [], dashes: nil)
+                        if let back = TableClipboard.markdownTable(md), back.map({ $0.map { $0.trimmingCharacters(in: .whitespaces) } })
+                            != grid.map({ $0.map { $0.trimmingCharacters(in: .whitespaces) } }) {
+                            notes.append("table round trip: \(back) from \(md.debugDescription)")
+                        }
+                    }
+                case ">page": check("page", TableClipboard.pageTable(from: pb), joined)
+                case ">cell": check("cell into the page", TableClipboard.singleCell(from: pb), joined)
+                case ">string": check("string", pb.string(forType: .string), joined)
+                case ">tsv": check("tsv", pb.string(forType: TableClipboard.tabularType), joined)
+                case ">html~":
+                    let html = pb.string(forType: .html) ?? ""
+                    for line in body where !html.contains(line) { notes.append("html lacks \(line.debugDescription) in \(html.debugDescription)") }
+                case ">noformulas":
+                    for type in pb.types ?? [] where (pb.string(forType: type) ?? pb.data(forType: type).flatMap { String(data: $0, encoding: .utf8) } ?? "").contains("TBLFM") {
+                        notes.append("formulas in \(type.rawValue)")
+                    }
+                case ">stored":
+                    guard let typed else { notes.append("no <cell"); continue }
+                    let stored = TableSpec.escapeCell(typed)
+                    check("stored", stored, joined)
+                    check("seen again", TableSpec.unescapeCell(stored), typed)
+                    // Through a whole table in a note and back.
+                    let note = TableSpec.markdown(header: ["h"], body: [[stored]], alignments: [], dashes: nil)
+                    if case let .table(spec)? = MarkdownScanner.scan(note as NSString).first?.kind {
+                        check("scanned", spec.body.first?.first, joined)
+                    }
+                case ">latex":
+                    guard let typed else { notes.append("no <cell"); continue }
+                    let seen = typed as NSString
+                    let maths = MarkdownScanner.inlineSpans(in: seen, range: NSRange(location: 0, length: seen.length)).compactMap { span -> String? in
+                        if case let .math(latex, _) = span.kind { return latex }
+                        return nil
+                    }
+                    check("latex", maths.joined(separator: " ; "), joined)
+                    // The table draws stored text the way the cell editor draws what's typed.
+                    let stored = TableSpec.escapeCell(typed)
+                    let render = TableRender(spec: TableSpec(rows: [[.init(text: stored, offset: 0)]], alignments: [0]),
+                                             typography: Typography.current, maxWidth: 600)
+                    let editor = TableRender.render(typed, header: true, alignment: 0, typography: .current, size: round(Typography.current.size * 0.9))
+                    let widths = render.columnWidths.first.map { Int($0) }
+                    let natural = Int(ceil(editor.size().width) + TableRender.padX * 2)
+                    print("  \(c.name): typeset \(maths) table cell width \(widths ?? -1), editor text width \(natural)")
+                default:
+                    notes.append("unknown section \(s.kind)")
+                }
+            }
+            if notes.isEmpty { passed += 1 }
+            print(notes.isEmpty ? "PASS" : "FAIL", c.name, notes.isEmpty ? "" : "\n    " + notes.joined(separator: "\n    "))
+        }
+        print("CLIPBOARD CASES: \(passed)/\(cases.count) passed")
+    }
+
     static func runIfRequested(_ controller: DocumentWindowController) {
         let d = UserDefaults.standard
+        // Harness runs copy and paste on a board of their own, never the real clipboard.
+        if d.object(forKey: "IndiumSnapshot") != nil || d.object(forKey: "IndiumPDF") != nil {
+            TableClipboard.board = NSPasteboard.withUniqueName()
+            atexit { TableClipboard.board.releaseGlobally() }
+        }
+        if let path = d.string(forKey: "IndiumClipboardCases") {
+            guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { print("CLIPBOARD CASES: can't read \(path)"); exit(1) }
+            runClipboardCases(text)
+            exit(0)
+        }
         if let steps = d.string(forKey: "IndiumAccessSteps") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 runAccessSteps(steps.split(separator: ";").map(String.init), controller: controller)
@@ -696,7 +824,7 @@ enum DebugSnapshot {
                 for step in steps {
                     // Steps that only look (and Tab, as a real key) open no explicit undo group: an empty
                     // explicit group stays on the stack, where a real key event's empty group is dropped.
-                    let isUndo = ["undo", "redo", "noteundo", "tab", "text", "caption", "fprint", "shot", "focus", "done", "notesel", "selectAll", "select", "pb", "keyev", "cmdev", "switchto", "idle", "cat"].contains(step.split(separator: ":").first.map(String.init) ?? "")
+                    let isUndo = ["undo", "redo", "noteundo", "tab", "text", "caption", "fprint", "shot", "focus", "done", "notesel", "selectAll", "select", "pb", "pbhtml", "pbtsv", "copy", "copyTable", "keyev", "cmdev", "switchto", "idle", "cat"].contains(step.split(separator: ":").first.map(String.init) ?? "")
                     if !isUndo { undo?.beginUndoGrouping() }
                     defer { if !isUndo { undo?.endUndoGrouping() } }
                     let e = target.editor.tableEditor
@@ -705,9 +833,19 @@ enum DebugSnapshot {
                     case "select":
                         let n = arg.split(separator: ",").compactMap { Int($0) }
                         e?.select(from: (n[0], n[1]), to: (n[2], n[3]))
-                    case "pb":
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(arg.replacingOccurrences(of: "\\t", with: "\t").replacingOccurrences(of: "\\n", with: "\n"), forType: .string)
+                    case "pb", "pbhtml", "pbtsv":
+                        // `pb:text` plain text, `pbhtml:<table>…` a web page's HTML only, `pbtsv:a\tb`
+                        // a spreadsheet's cells; on the harness's private board.
+                        let board = TableClipboard.board
+                        let value = arg.replacingOccurrences(of: "\\t", with: "\t").replacingOccurrences(of: "\\n", with: "\n")
+                        board.clearContents()
+                        switch step.split(separator: ":").first {
+                        case "pbhtml": board.setString(value, forType: .html)
+                        case "pbtsv":
+                            board.setString(value, forType: TableClipboard.tabularType)
+                            board.setString(value, forType: .string)
+                        default: board.setString(value, forType: .string)
+                        }
                     case "type":
                         window.firstResponder?.insertText(arg)
                     case "captionclick":
@@ -790,6 +928,7 @@ enum DebugSnapshot {
                         let hit = window.contentView?.superview?.hitTest(window.contentView!.superview!.convert(from, from: nil))
                         print("  hit:", hit.map { String(describing: type(of: $0)) } ?? "nil")
                         hit?.mouseDown(with: mouse(.leftMouseDown, from, clicks: clicks))
+                    case "copyTable": e?.copyTable()
                     case "done":
                         target.editor.endTableEditing(caretAfter: true)
                     // Table formulas: `formula` opens Formula… for the focused cell; `fpick:2,−,3`
@@ -861,16 +1000,17 @@ enum DebugSnapshot {
                     }
                     // Each step its own event, so undo groups fall as they would with real keys.
                     RunLoop.current.run(until: Date().addingTimeInterval(0.02))
-                    let pb = NSPasteboard.general
+                    let pb = TableClipboard.board
                     print("STEP \(step) responder:", window.firstResponder.map { String(describing: type(of: $0)) } ?? "-",
                           "focus:", e.map { "\($0.focus)" } ?? "-", "selection:", e?.selection.map { "\($0.anchor)->\($0.head)" } ?? "none",
                           "cell:", e?.cellEditor.map { "\($0.string.debugDescription) sel \(NSStringFromRange($0.selectedRange()))" } ?? "-")
                     if let i = target.editor.styler.blocks.firstIndex(where: { if case .table = $0.kind { return true }; return false }) {
                         print("  NOTE TABLE:", (target.editor.text as NSString).substring(with: target.editor.styler.blocks[i].range).components(separatedBy: "\n").enumerated().filter { $0.offset != 1 }.map { $0.element.replacingOccurrences(of: " ", with: "") }.joined(separator: " "))
                     }
-                    if step == "copy" || step == "cut" {
+                    if step == "copy" || step == "cut" || step == "copyTable" {
                         print("  PB string:", (pb.string(forType: .string) ?? "nil").debugDescription)
                         print("  PB html:", pb.string(forType: .html) ?? "nil")
+                        print("  PB cells:", TableClipboard.payload(pb).map { "\($0.cells) source: \(($0.source ?? "nil").debugDescription)" } ?? "nil")
                     }
                 }
                 if let side = d.string(forKey: "IndiumPlaceTable") {

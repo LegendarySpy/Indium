@@ -469,11 +469,16 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
 
     // MARK: Clipboard
 
+    /// The table's Markdown in the note with its formula lines, for Copy Table.
+    var noteSource: (() -> String?)?
+
+    /// Selected cells only, never the formulas: Markdown for Indium, plain text and
+    /// HTML for other apps. All of them selected also go out as a Markdown table.
     @objc func copy(_ sender: Any?) {
         let b = targetBounds
         let rows = b.rows.map { r in b.columns.map { c in text(row: r, column: c) } }
         let whole = b.rows == 0..<rowCount && b.columns == 0..<columns
-        TableClipboard.write(rows, header: b.rows.lowerBound == 0, markdown: whole ? markdown : nil, to: .general)
+        TableClipboard.write(rows, header: b.rows.lowerBound == 0, markdown: whole ? markdown : nil, to: TableClipboard.board)
     }
 
     @objc func cut(_ sender: Any?) {
@@ -482,13 +487,14 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     }
 
     @objc func paste(_ sender: Any?) {
-        _ = pasteGrid(from: .general, intoText: false)
+        _ = pasteGrid(from: TableClipboard.board, intoText: false)
     }
 
+    /// The whole table as it is in the note, formula lines included.
     func copyTable() {
         TableClipboard.write([header + Array(repeating: "", count: max(0, columns - header.count))]
                              + body.map { $0 + Array(repeating: "", count: max(0, columns - $0.count)) },
-                             header: true, markdown: markdown, to: .general)
+                             header: true, markdown: noteSource?() ?? markdown, to: TableClipboard.board)
     }
 
     /// Pastes cells copied from a spreadsheet, a web page or another table, starting at
@@ -507,7 +513,8 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
             while rowCount < origin.row + grid.count { body.append(Array(repeating: "", count: columns)) }
             while columns < origin.column + width { insertColumn(at: columns) }
             for (i, row) in grid.enumerated() {
-                for (j, value) in row.enumerated() { setText(value.replacingOccurrences(of: "\n", with: " "), row: origin.row + i, column: origin.column + j) }
+                // Line breaks stay (written as `<br>`).
+                for (j, value) in row.enumerated() { setText(value, row: origin.row + i, column: origin.column + j) }
             }
         }
         commitStructure()
@@ -520,7 +527,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         switch item.action {
         case #selector(copy(_:)), #selector(cut(_:)), #selector(delete(_:)), #selector(selectAll(_:)): return true
-        case #selector(paste(_:)): return NSPasteboard.general.string(forType: .string) != nil
+        case #selector(paste(_:)): return TableClipboard.canPaste(TableClipboard.board)
         default: return responds(to: item.action)
         }
     }
@@ -923,9 +930,29 @@ final class CellTextView: NSTextView, MathEditingHost {
         }
     }
 
+    /// Text selected in a cell copies as just that text, as it's seen (a line break
+    /// as a newline, not `<br>`).
+    override func copy(_ sender: Any?) {
+        let sel = selectedRange()
+        guard sel.length > 0 else { return }
+        let pb = TableClipboard.board
+        pb.clearContents()
+        pb.setString((string as NSString).substring(with: sel), forType: .string)
+    }
+
+    override func cut(_ sender: Any?) {
+        guard selectedRange().length > 0 else { return }
+        copy(sender)
+        delete(sender)
+    }
+
+    /// Cells pasted while typing fill the table from here; text goes in as typed (its
+    /// line breaks kept, as `<br>`), without expanding math shortcuts.
     override func paste(_ sender: Any?) {
-        if table?.pasteGrid(from: .general, intoText: true) == true { return }
-        pasteAsPlainText(sender)
+        let pb = TableClipboard.board
+        if table?.pasteGrid(from: pb, intoText: true) == true { return }
+        guard let text = TableClipboard.grid(from: pb, lines: false)?.first?.first ?? pb.string(forType: .string), !text.isEmpty else { return }
+        insertTypedText(text.replacingOccurrences(of: "\r\n", with: "\n"))
     }
 
     override func pasteAsRichText(_ sender: Any?) { paste(sender) }
