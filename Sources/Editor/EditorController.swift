@@ -42,26 +42,9 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// A computed answer offered after an `=` at the caret.
     var answer: (location: Int, result: MathAnswer.Result)?
     var answerDismissedAt: Int?
-    /// Blanks a math shortcut left to fill in, in the order Tab visits them.
-    var mathStops: [NSRange] = [] { didSet { if mathStops != oldValue { textView.needsDisplay = true } } }
-    /// The bracket at the caret and its partner, highlighted in math source.
-    var mathBracketMarks: [NSRect] = []
-    /// The text the pending blanks belong to; leaving it forgets them.
-    var mathStopBounds: NSRange?
-    /// Copies of each pending blank (a tabstop number used twice), parallel to `mathStops`.
-    var mathStopCopies: [[NSRange]] = []
-    /// The blank being filled in, and its copies that follow what's typed in it.
-    var mathActiveStop: (range: NSRange, copies: [NSRange])?
-    /// The exact edit about to happen, so blanks move by it (the text storage reports a wider range).
-    var pendingMathEdit: (range: NSRange, length: Int)?
-    /// The rest of a command a shortcut completed (`ome` → `\omega`: `ga`), absorbed if typed next.
-    var mathWordTail: (location: Int, rest: String)?
-    var syncingMathCopies = false
-    var applyingMathEdit = false
-    /// Where a `$` typed on an empty line was just closed for you: `$‸$`.
-    var pairedDollarAt: Int?
+    /// Math shortcuts, blanks to Tab through and the preview, for the note's text.
+    lazy var math = MathEditor(host: self)
     private var relayout: NSRange?
-    var mathPreview: MathPreviewView?
     private var captionPopover: NSPopover?
     private var observers: [Any] = []
     private var cancellables = Set<AnyCancellable>()
@@ -186,7 +169,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
         frontmatterWillChange(range)
         finder.noteClientStringWillChange()
-        pendingMathEdit = replacementString.map { (range, ($0 as NSString).length) }
+        math.pendingEdit = replacementString.map { (range, ($0 as NSString).length) }
         return true
     }
 
@@ -250,7 +233,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             guard let self else { return }
             self.refreshTableEditor()
             self.positionImageControls()
-            self.updateMathPreview()
+            self.math.updatePreview()
             self.completeLayoutSoon()
         }
     }
@@ -351,7 +334,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func beginTableEditing(at location: Int, row: Int, column: Int) {
         endTableEditing()
-        mathPreview?.hide()
+        math.hidePreview()
         styler.editingTableLocation = location
         styler.restyleBlock(at: location, in: storage)
         updateFloats()
@@ -755,8 +738,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         clearImageSelection()
         endTableEditing()
-        clearMathStops()
-        mathPreview?.hide()
+        math.clearStops()
+        math.hidePreview()
         note = newNote
         setText(newNote?.savedText ?? "")
         hasUnsavedEdits = false
@@ -987,7 +970,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                      range editedRange: NSRange, changeInLength delta: Int) {
         guard editedMask.contains(.editedCharacters) else { return }
         textVersion += 1
-        shiftMathStops(editedRange: editedRange, delta: delta)
+        math.shiftStops(editedRange: editedRange, delta: delta)
         guard !isLoading else { return }
         if let fm = frontmatterRange, editedRange.location <= NSMaxRange(fm) { frontmatterEdited = true }
         let caret = NSRange(location: NSMaxRange(editedRange), length: 0)
@@ -1041,8 +1024,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         updateFloats()
         completeLayoutSoon(delay: 0.4)
         updatePageLines()
-        syncMathCopies()
-        updateMathPreview()
+        math.syncCopies()
+        math.updatePreview()
         if note?.isTemporary == false { scheduleSave() }
     }
 
@@ -1059,8 +1042,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         updateSelectionBar()
         updateSlashSuggestion()
         updateAnswerSuggestion()
-        mathSelectionChanged()
-        updateMathPreview()
+        math.selectionChanged()
+        math.updatePreview()
     }
 
     private func applySelectionStyling() {
@@ -1083,8 +1066,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func mouseTrackingEnded() {
         applySelectionStyling()
         updateSelectionBar()
-        mathSelectionChanged()
-        updateMathPreview()
+        math.selectionChanged()
+        math.updatePreview()
     }
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {

@@ -1,0 +1,10 @@
+[
+    {trigger: "ce", replacement: "\\mathrm{$0}$1", options: "mA"},
+    {trigger: /([A-Za-z])(\d)/, replacement: (match) => match[1] + "_" + match[2], options: "rmA"},
+    {trigger: "U", replacement: "\\underbrace{ ${VISUAL} }_{ $0 }", options: "mA v"},
+    {trigger: /([a-z]/, replacement: "x", options: "rmA"},
+    {trigger: "zz", replacement: "z", options: "mQ"},
+    {trigger: /${PLANETS}x/, replacement: "x", options: "rmA"},
+    {replacement: "nothing to type", options: "mA"},
+    {trigger: "dg", replacement: "^{\\circ}", options: "m"},
+]

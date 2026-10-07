@@ -4,7 +4,11 @@ import AppKit
 /// (see `MathSnippet`), `/` that builds a fraction from what's before it, Tab to move
 /// through the blanks a shortcut left (or out of a bracket or the equation), `&` and
 /// `\\` on Tab and Return inside a matrix, and a live preview under inline math.
-extension EditorController {
+///
+/// One `MathEditor` drives one text view: the note's (through `EditorController`) or the
+/// field editor of a table's cells (`CellTextView`), so math in a cell is written exactly
+/// as it is in the page around it.
+final class MathEditor {
     /// The LaTeX of the equation around a position, between its `$` or `$$` delimiters.
     struct MathSpan {
         let content: NSRange
@@ -15,28 +19,91 @@ extension EditorController {
         var delimiter: Int { display ? 2 : 1 }
     }
 
-    private var source: NSString { storage.string as NSString }
+    /// What the text holds at a position, as far as math is concerned.
+    enum Block {
+        /// Ordinary Markdown, where `$…$` can be written.
+        case text
+        /// Code, frontmatter, a table's source: no math.
+        case excluded
+        /// A display equation on lines of its own; `range` is its whole block.
+        case display(NSRange)
+    }
+
+    unowned let host: MathEditingHost
+    private var textView: NSTextView { host.mathTextView }
+    private var layoutManager: NSLayoutManager { textView.layoutManager! }
+
+    init(host: MathEditingHost) {
+        self.host = host
+    }
+
+    /// Blanks a math shortcut left to fill in, in the order Tab visits them.
+    var mathStops: [NSRange] = [] { didSet { if mathStops != oldValue { textView.needsDisplay = true } } }
+    /// Blanks already left with Tab, the latest last, so Shift-Tab can go back to them.
+    private var mathPastStops: [(range: NSRange, copies: [NSRange])] = []
+    /// The blank the caret was put in last (it grows as it's filled in).
+    private var mathCurrentStop: (range: NSRange, copies: [NSRange])?
+    /// The bracket at the caret and its partner, highlighted in math source.
+    private var mathBracketMarks: [NSRect] = []
+    /// The text the pending blanks belong to; leaving it forgets them.
+    private var mathStopBounds: NSRange?
+    /// Copies of each pending blank (a tabstop number used twice), parallel to `mathStops`.
+    private var mathStopCopies: [[NSRange]] = []
+    /// The blank being filled in, and its copies that follow what's typed in it.
+    private var mathActiveStop: (range: NSRange, copies: [NSRange])?
+    /// The exact edit about to happen, so blanks move by it (the text storage reports a wider range).
+    var pendingEdit: (range: NSRange, length: Int)?
+    /// The rest of a command a shortcut completed (`ome` → `\omega`: `ga`), absorbed if typed next.
+    private var mathWordTail: (location: Int, rest: String)?
+    private var syncingMathCopies = false
+    private var applyingMathEdit = false
+    /// Where a `$` typed on an empty line was just closed for you: `$‸$`.
+    private var pairedDollarAt: Int?
+    private var mathPreview: MathPreviewView?
+
+    /// Whether a shortcut's blanks are waiting to be filled in.
+    var hasStops: Bool { !mathStops.isEmpty || mathActiveStop != nil || !mathPastStops.isEmpty }
+
+    private var enabled: Bool { AppSettings.shared.mathShortcuts && textView.isEditable && host.mathEnabled }
+    private var source: NSString { textView.string as NSString }
+
+    /// Replaces text as typing would (undoable, with the usual change notifications).
+    @discardableResult
+    private func replace(_ range: NSRange, with string: String, select: NSRange? = nil, actionName: String? = nil) -> Bool {
+        guard textView.isEditable, textView.shouldChangeText(in: range, replacementString: string) else { return false }
+        textView.textStorage?.replaceCharacters(in: range, with: string)
+        textView.didChangeText()
+        if let actionName { host.mathUndoManager?.setActionName(actionName) }
+        if let select { textView.setSelectedRange(select) }
+        return true
+    }
+
+    /// The shortcut ending `before`, as this text can hold it: a table cell is one line of a
+    /// pipe table, so nothing that needs lines of its own, and no bare `|` (see `MathSnippet`).
+    private func snippet(before: String, context: MathSnippet.Context, auto: Bool) -> MathSnippet.Expansion? {
+        MathSnippetConfig.shared.refresh()
+        let single = host.mathSingleLine
+        guard let expansion = MathSnippet.expansion(before: before, context: context, auto: auto, pipes: !single) else { return nil }
+        return single && expansion.text.contains("\n") ? nil : expansion
+    }
 
     /// The equation `location` sits in (between its delimiters, inclusive), if any.
     func mathSpan(at location: Int) -> MathSpan? {
         let text = source
         guard location <= text.length else { return nil }
-        if let i = styler.blockIndex(containing: location) {
-            switch styler.blocks[i].kind {
-            case .code, .frontmatter, .table:
-                return nil
-            case .math:
-                let range = styler.blocks[i].range
-                let source = text.substring(with: range) as NSString
-                let open = source.range(of: "$$")
-                let close = source.range(of: "$$", options: .backwards)
-                guard open.location != NSNotFound, close.location >= NSMaxRange(open) else { return nil }
-                let content = NSRange(location: range.location + NSMaxRange(open), length: close.location - NSMaxRange(open))
-                guard location >= content.location, location <= NSMaxRange(content) else { return nil }
-                return MathSpan(content: content, display: true, block: true)
-            default:
-                break
-            }
+        switch host.mathBlock(at: location) {
+        case .excluded:
+            return nil
+        case let .display(range):
+            let source = text.substring(with: range) as NSString
+            let open = source.range(of: "$$")
+            let close = source.range(of: "$$", options: .backwards)
+            guard open.location != NSNotFound, close.location >= NSMaxRange(open) else { return nil }
+            let content = NSRange(location: range.location + NSMaxRange(open), length: close.location - NSMaxRange(open))
+            guard location >= content.location, location <= NSMaxRange(content) else { return nil }
+            return MathSpan(content: content, display: true, block: true)
+        case .text:
+            break
         }
         var s = 0, e = 0, ce = 0
         text.getLineStart(&s, end: &e, contentsEnd: &ce, for: NSRange(location: location, length: 0))
@@ -145,8 +212,8 @@ extension EditorController {
     // MARK: Typing
 
     /// A key typed into the note. Returns true if a shortcut handled it.
-    func handleMathInput(_ typed: String) -> Bool {
-        guard AppSettings.shared.mathShortcuts, textView.isEditable, tableEditor == nil, typed.count == 1,
+    func handleInput(_ typed: String) -> Bool {
+        guard enabled, typed.count == 1,
               let ch = typed.first, !ch.isNewline else { return false }
         let sel = textView.selectedRange()
         let paired = pairedDollarAt
@@ -161,14 +228,14 @@ extension EditorController {
             if !rest.isEmpty { mathWordTail = (caret, rest) }
             return true
         }
-        // Right after `$‸$` was closed for you: a second `$` makes `$$`, and a space
-        // means it wasn't an equation after all.
+        // Right after `$‸$` was closed for you: a second `$` makes `$$`, and a space or a
+        // digit means it wasn't an equation after all (`$5` is a price).
         if paired == caret, caret < source.length, source.character(at: caret) == 0x24 {
             if ch == "$" {
                 textView.setSelectedRange(NSRange(location: caret + 1, length: 0))
                 return true
             }
-            if ch.isWhitespace {
+            if ch.isWhitespace || ch.isNumber {
                 replace(NSRange(location: caret, length: 1), with: typed, select: NSRange(location: caret + 1, length: 0), actionName: "Typing")
                 return true
             }
@@ -194,7 +261,7 @@ extension EditorController {
         // Brackets pair up only where nothing follows them.
         if "([{".contains(ch), let next, let u = UnicodeScalar(next),
            CharacterSet.alphanumerics.contains(u) || next == 0x5C { return false }
-        if let expansion = MathSnippet.expansion(before: before + typed, context: .math(display: span.display), auto: true) {
+        if let expansion = snippet(before: before + typed, context: .math(display: span.display), auto: true) {
             expand(expansion, typed: typed, at: caret)
             return true
         }
@@ -207,7 +274,7 @@ extension EditorController {
         // `\alpha` then a letter: a new word, not `\alphax`.
         if ch.isLetter, let m = before.range(of: #"\\([A-Za-z]+)$"#, options: .regularExpression),
            MathSnippet.wantsSpace(after: String(before[m].dropFirst()), before: ch) {
-            textView.insertTypedText(" " + typed)
+            host.insertTypedText(" " + typed)
             return true
         }
         return false
@@ -217,12 +284,7 @@ extension EditorController {
     /// a digit or a space gets its closing `$` (so `$5` stays a price).
     private func typeInProse(_ ch: Character, at caret: Int) -> Bool {
         let text = source
-        if let i = styler.blockIndex(containing: caret) {
-            switch styler.blocks[i].kind {
-            case .code, .frontmatter, .table, .math: return false
-            default: break
-            }
-        }
+        guard case .text = host.mathBlock(at: caret) else { return false }
         var s = 0, e = 0, ce = 0
         text.getLineStart(&s, end: &e, contentsEnd: &ce, for: NSRange(location: caret, length: 0))
         let before = text.substring(with: NSRange(location: s, length: caret - s))
@@ -231,7 +293,7 @@ extension EditorController {
 
         // `$` on an otherwise empty line is an equation starting: close it right away.
         if ch == "$", before.trimmingCharacters(in: .whitespaces).isEmpty, after.trimmingCharacters(in: .whitespaces).isEmpty {
-            textView.insertTypedText("$$")
+            host.insertTypedText("$$")
             textView.setSelectedRange(NSRange(location: caret + 1, length: 0))
             pairedDollarAt = caret + 1
             return true
@@ -242,11 +304,11 @@ extension EditorController {
            !after.contains("$"), !(after.first.map { $0.isLetter || $0.isNumber } ?? false),
            opensMath(dollarAt: caret - 1, lineStart: s) {
             replace(NSRange(location: caret, length: 0), with: "$", select: NSRange(location: caret, length: 0))
-            if handleMathInput(String(ch)) { return true }
-            textView.insertTypedText(String(ch))
+            if handleInput(String(ch)) { return true }
+            host.insertTypedText(String(ch))
             return true
         }
-        guard var expansion = MathSnippet.expansion(before: before + String(ch), context: .text, auto: true) else { return false }
+        guard var expansion = snippet(before: before + String(ch), context: .text, auto: true) else { return false }
         if expansion.text.hasPrefix("$$\n") {
             // A display equation gets lines of its own.
             let lead = before.dropLast(expansion.length - 1).trimmingCharacters(in: .whitespaces).isEmpty ? "" : "\n"
@@ -341,7 +403,7 @@ extension EditorController {
         let expanded = head + "}"
         let length = (expanded as NSString).length
         let stops = [NSRange(location: (head as NSString).length, length: 0), NSRange(location: length, length: 0)]
-        textView.insertTypedText("/")
+        host.insertTypedText("/")
         separateUndo()
         applyExpansion(expanded, stops: stops, replacing: NSRange(location: numStart, length: caret + 1 - numStart),
                        undoSelection: NSRange(location: caret + 1, length: 0))
@@ -367,7 +429,7 @@ extension EditorController {
 
     /// Types the key as usual (so Undo brings back what was typed), then expands it.
     private func expand(_ expansion: MathSnippet.Expansion, typed: String, at caret: Int) {
-        textView.insertTypedText(typed)
+        host.insertTypedText(typed)
         separateUndo()
         let end = caret + (typed as NSString).length
         let start = end - expansion.length
@@ -382,22 +444,28 @@ extension EditorController {
     /// typing on doesn't replace it), and Redo puts it where the shortcut left it. Call
     /// `before` ahead of the edit and `after` once it's done.
     private func registerUndoSelection(before: NSRange) {
-        guard let undo = textView.undoManager else { return }
-        undo.registerUndo(withTarget: textView) { $0.setSelectedRange(before) }
+        guard let undo = host.mathUndoManager else { return }
+        undo.registerUndo(withTarget: textView) { Self.select(before, in: $0) }
+    }
+
+    /// (A cell's text may have been put back whole by the time this runs.)
+    private static func select(_ range: NSRange, in textView: NSTextView) {
+        if NSMaxRange(range) <= (textView.string as NSString).length { textView.setSelectedRange(range) }
     }
 
     private func registerRedoSelection(after: NSRange) {
-        guard let undo = textView.undoManager else { return }
+        guard let undo = host.mathUndoManager else { return }
         // Runs first while undoing, so what it registers runs last while redoing.
         undo.registerUndo(withTarget: textView) { tv in
-            undo.registerUndo(withTarget: tv) { $0.setSelectedRange(after) }
+            undo.registerUndo(withTarget: tv) { Self.select(after, in: $0) }
         }
     }
 
     /// What comes next is its own Undo step, even within the same key press.
     private func separateUndo() {
         textView.breakUndoCoalescing()
-        if let undo = textView.undoManager, undo.groupingLevel > 0 {
+        host.mathSeparateUndo()
+        if let undo = host.mathUndoManager, undo.groupingLevel > 0 {
             undo.endUndoGrouping()
             undo.beginUndoGrouping()
         }
@@ -453,7 +521,9 @@ extension EditorController {
             mathStopCopies = Array(placedCopies.dropFirst()) + mathStopCopies
             mathStopBounds = mathStopBounds.map { NSUnionRange($0, bounds) } ?? bounds
             if !placedCopies[0].isEmpty { mathActiveStop = (caret, placedCopies[0]) }
-            if mathStops.isEmpty, mathActiveStop == nil { mathStopBounds = nil }
+            if let current = mathCurrentStop, placed.count > 1 { mathPastStops.append(current) }
+            mathCurrentStop = placed.count > 1 ? (caret, placedCopies[0]) : nil
+            if mathStops.isEmpty, mathActiveStop == nil { forgetStops() }
         }
         if expanded.range(of: #"\\(?:[a-z]*frac|[a-z]*sum|[a-z]*int|prod|bigcup|bigcap)(?![A-Za-z])"#, options: .regularExpression) != nil {
             enlargeEnclosingBrackets(around: NSRange(location: range.location, length: length))
@@ -513,28 +583,28 @@ extension EditorController {
 
     /// Tab: the next blank a shortcut left, a Tab-triggered shortcut (`\sum`, `par`),
     /// a column in a matrix, or out past the next closing bracket or the equation's end.
-    func handleMathTab() -> Bool {
-        guard AppSettings.shared.mathShortcuts, tableEditor == nil else { return false }
+    func handleTab() -> Bool {
+        guard enabled else { return false }
         mathWordTail = nil
         if let next = mathStops.first {
             mathStops.removeFirst()
             let copies = mathStopCopies.isEmpty ? [] : mathStopCopies.removeFirst()
             mathActiveStop = copies.isEmpty ? nil : (next, copies)
-            if mathStops.isEmpty, mathActiveStop == nil { mathStopBounds = nil }
+            if let current = mathCurrentStop { mathPastStops.append(current) }
+            mathCurrentStop = (next, copies)
             applyingMathEdit = true
             textView.setSelectedRange(next)
             applyingMathEdit = false
             return true
         }
-        mathActiveStop = nil
-        mathStopBounds = nil
+        forgetStops()
         let sel = textView.selectedRange()
         guard sel.length == 0, let span = mathSpan(at: sel.location) else { return false }
         let caret = sel.location
         let text = source
         let before = text.substring(with: NSRange(location: span.content.location, length: caret - span.content.location))
         if !argument(in: span, at: caret).words,
-           let expansion = MathSnippet.expansion(before: before, context: .math(display: span.display), auto: false) {
+           let expansion = snippet(before: before, context: .math(display: span.display), auto: false) {
             textView.breakUndoCoalescing()
             separateUndo()
             applyExpansion(expansion.text, stops: expansion.stops, copies: expansion.copies,
@@ -546,6 +616,22 @@ extension EditorController {
             return true
         }
         tabOut(of: span, from: caret)
+        return true
+    }
+
+    /// Shift-Tab: back to the blank before, while a shortcut's blanks are being filled in.
+    func handleBacktab() -> Bool {
+        guard enabled, let previous = mathPastStops.popLast() else { return false }
+        mathWordTail = nil
+        if let current = mathCurrentStop {
+            mathStops.insert(current.range, at: 0)
+            mathStopCopies.insert(current.copies, at: 0)
+        }
+        mathCurrentStop = previous
+        mathActiveStop = previous.copies.isEmpty ? nil : previous
+        applyingMathEdit = true
+        textView.setSelectedRange(previous.range)
+        applyingMathEdit = false
         return true
     }
 
@@ -623,15 +709,15 @@ extension EditorController {
     /// Return: a new row inside a matrix, and a `$$` typed on its own line gets its
     /// closing `$$`. Shift-Return leaves a matrix (to the end of the next line, or past its
     /// `\end{…}` on one line), and otherwise just breaks the line.
-    func handleMathNewline(shift: Bool = NSApp.currentEvent?.modifierFlags.contains(.shift) == true) -> Bool {
-        guard AppSettings.shared.mathShortcuts, tableEditor == nil else { return false }
+    func handleNewline(shift: Bool = NSApp.currentEvent?.modifierFlags.contains(.shift) == true) -> Bool {
+        guard enabled else { return false }
         let sel = textView.selectedRange()
         guard sel.length == 0 else { return false }
         let caret = sel.location
         if shift {
             guard let span = mathSpan(at: caret), let env = matrixEnvironment(in: span, at: caret) else { return false }
             let text = source
-            clearMathStops()
+            clearStops()
             var s = 0, e = 0, ce = 0
             text.getLineStart(&s, end: &e, contentsEnd: &ce, for: NSRange(location: caret, length: 0))
             if span.block, e > ce, e < NSMaxRange(span.content) {
@@ -652,6 +738,8 @@ extension EditorController {
             textView.insertText(span.block ? (ended ? "\n" : " \\\\\n") : (ended ? " " : " \\\\ "), replacementRange: sel)
             return true
         }
+        // A table cell holds no lines of its own for a display equation.
+        guard !host.mathSingleLine else { return false }
         let text = source
         var s = 0, e = 0, ce = 0
         text.getLineStart(&s, end: &e, contentsEnd: &ce, for: NSRange(location: caret, length: 0))
@@ -678,8 +766,8 @@ extension EditorController {
     }
 
     /// Backspace between an empty pair, `(|)` or `$|$`, removes both.
-    func handleMathBackspace() -> Bool {
-        guard AppSettings.shared.mathShortcuts, tableEditor == nil else { return false }
+    func handleBackspace() -> Bool {
+        guard enabled else { return false }
         let sel = textView.selectedRange()
         let text = source
         guard sel.length == 0, sel.location > 0, sel.location < text.length else { return false }
@@ -704,17 +792,17 @@ extension EditorController {
     // MARK: Blanks left by shortcuts
 
     /// Keeps the blanks on their text as the note changes around them.
-    func shiftMathStops(editedRange reported: NSRange, delta: Int) {
+    func shiftStops(editedRange reported: NSRange, delta: Int) {
         // The text storage can report a wider range than what changed (attributes fixed
         // around it); the edit recorded just before is exact.
         var editedRange = reported
-        if let p = pendingMathEdit, p.length - p.range.length == delta, p.range.location >= reported.location,
+        if let p = pendingEdit, p.length - p.range.length == delta, p.range.location >= reported.location,
            p.range.location + p.length <= NSMaxRange(reported) {
             editedRange = NSRange(location: p.range.location, length: p.length)
         }
-        pendingMathEdit = nil
+        pendingEdit = nil
         if let tail = mathWordTail, editedRange.location <= tail.location { mathWordTail = nil }
-        guard !mathStops.isEmpty || mathActiveStop != nil else { return }
+        guard hasStops || mathCurrentStop != nil else { return }
         let oldEnd = NSMaxRange(editedRange) - delta
         func shift(_ r: NSRange, grows: Bool) -> NSRange {
             if grows, editedRange.location >= r.location, oldEnd <= NSMaxRange(r) {
@@ -731,6 +819,8 @@ extension EditorController {
         // Copies take what's put in their place (an empty copy included), so they grow like the blank.
         mathStopCopies = mathStopCopies.map { $0.map { shift($0, grows: true) } }
         mathStopBounds = mathStopBounds.map { shift($0, grows: true) }
+        mathPastStops = mathPastStops.map { (shift($0.range, grows: false), $0.copies.map { shift($0, grows: true) }) }
+        mathCurrentStop = mathCurrentStop.map { (shift($0.range, grows: true), $0.copies.map { shift($0, grows: true) }) }
         if let active = mathActiveStop {
             // Typing in the blank (or at its edges) grows it; an edit elsewhere ends the mirroring.
             let inside = editedRange.location >= active.range.location && oldEnd <= NSMaxRange(active.range)
@@ -740,7 +830,7 @@ extension EditorController {
     }
 
     /// Types what's in the blank being filled into its copies (a repeated tabstop).
-    func syncMathCopies() {
+    func syncCopies() {
         guard !syncingMathCopies, let active = mathActiveStop, !active.copies.isEmpty else { return }
         let text = source
         guard NSMaxRange(active.range) <= text.length else { mathActiveStop = nil; return }
@@ -765,25 +855,31 @@ extension EditorController {
     }
 
     /// The caret left the shortcut: its blanks are forgotten.
-    func mathSelectionChanged() {
-        guard !applyingMathEdit, !mathStops.isEmpty || mathActiveStop != nil, let bounds = mathStopBounds else { return }
+    func selectionChanged() {
+        guard !applyingMathEdit, hasStops, let bounds = mathStopBounds else { return }
         let sel = textView.selectedRange()
-        if sel.location < bounds.location || NSMaxRange(sel) > NSMaxRange(bounds) { clearMathStops() }
+        if sel.location < bounds.location || NSMaxRange(sel) > NSMaxRange(bounds) { clearStops() }
     }
 
-    func clearMathStops() {
+    func clearStops() {
+        forgetStops()
+        mathWordTail = nil
+    }
+
+    private func forgetStops() {
         mathStops = []
         mathStopCopies = []
         mathActiveStop = nil
         mathStopBounds = nil
-        mathWordTail = nil
+        mathPastStops = []
+        mathCurrentStop = nil
     }
 
     // MARK: Marks
 
     /// Where the pending blanks are (a thin bar, or a tint over placeholder text), and
     /// the pair of brackets around the caret.
-    func drawMathMarks() {
+    func drawMarks() {
         for rect in mathBracketMarks {
             let path = NSBezierPath(roundedRect: rect.insetBy(dx: -0.5, dy: 2), xRadius: 3, yRadius: 3)
             Palette.hoverFill.setFill()
@@ -854,11 +950,12 @@ extension EditorController {
     // MARK: Preview
 
     /// Inline math being edited shows its source; the typeset result floats just below.
-    func updateMathPreview() {
+    func updatePreview() {
         let sel = textView.selectedRange()
         let text = source
         var span: MathSpan?
-        if sel.length == 0, tableEditor == nil, textView.window != nil {
+        let showing = host.mathEnabled && textView.window != nil
+        if sel.length == 0, showing {
             let caret = sel.location
             span = mathSpan(at: caret)
             // Right beside a delimiter counts too: the source is showing.
@@ -868,24 +965,23 @@ extension EditorController {
             if span == nil, caret < text.length, text.character(at: caret) == 0x24 {
                 span = mathSpan(at: caret + 1) ?? mathSpan(at: min(caret + 2, text.length))
             }
-        } else if tableEditor == nil, textView.window != nil, let inside = mathSpan(at: sel.location),
-                  NSMaxRange(sel) <= NSMaxRange(inside.content) {
+        } else if showing, let inside = mathSpan(at: sel.location), NSMaxRange(sel) <= NSMaxRange(inside.content) {
             // A blank selected inside the equation (a shortcut's placeholder).
             span = inside
         }
-        updateBracketMarks(span: sel.length == 0 ? mathSpan(at: sel.location) : nil, caret: sel.location)
+        updateBracketMarks(span: sel.length == 0 && showing ? mathSpan(at: sel.location) : nil, caret: sel.location)
         let latex = span.map { text.substring(with: $0.content) } ?? ""
-        guard let span, !span.block, !latex.trimmingCharacters(in: .whitespaces).isEmpty else {
-            mathPreview?.hide()
+        guard let span, !span.block, !latex.trimmingCharacters(in: .whitespaces).isEmpty, let parent = host.mathPreviewParent else {
+            hidePreview()
             return
         }
-        let size = round(styler.config.typography.size * (span.display ? 1.12 : 1.06))
-        let preview = mathPreview ?? {
-            let v = MathPreviewView(frame: .zero)
-            textView.addSubview(v)
-            mathPreview = v
-            return v
-        }()
+        let size = round(host.mathFontSize * (span.display ? 1.12 : 1.06))
+        let preview = mathPreview ?? MathPreviewView(frame: .zero)
+        mathPreview = preview
+        // On top of everything in the page (a table being edited included), so nothing clips it.
+        if preview.superview !== parent || parent.subviews.last !== preview {
+            parent.addSubview(preview, positioned: .above, relativeTo: nil)
+        }
         if let render = MathRenderer.renderWhileTyping(latex, size: size, display: span.display) {
             preview.render = render
         } else if preview.isHidden {
@@ -897,16 +993,44 @@ extension EditorController {
         layoutManager.ensureLayout(forCharacterRange: NSRange(location: start, length: span.content.length + span.delimiter * 2))
         let startGlyph = layoutManager.glyphIndexForCharacter(at: start)
         let caretGlyph = layoutManager.glyphIndexForCharacter(at: max(0, min(sel.location, text.length - 1)))
-        let startRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: startGlyph, length: 1), in: container)
-        let line = layoutManager.lineFragmentRect(forGlyphAt: caretGlyph, effectiveRange: nil)
-        let cardSize = preview.fittingSize(maxWidth: container.size.width)
-        var x = origin.x + startRect.minX - MathPreviewView.inset.width
-        x = max(origin.x, min(x, origin.x + container.size.width - cardSize.width))
-        var y = origin.y + line.maxY + 4
-        if y + cardSize.height > textView.visibleRect.maxY - 8 { y = origin.y + line.minY - cardSize.height - 4 }
+        let startRect = parent.convert(layoutManager.boundingRect(forGlyphRange: NSRange(location: startGlyph, length: 1), in: container)
+            .offsetBy(dx: origin.x, dy: origin.y), from: textView)
+        let line = parent.convert(layoutManager.lineFragmentRect(forGlyphAt: caretGlyph, effectiveRange: nil)
+            .offsetBy(dx: origin.x, dy: origin.y), from: textView)
+        let column = host.mathPreviewColumn
+        let cardSize = preview.fittingSize(maxWidth: column.width)
+        var x = startRect.minX - MathPreviewView.inset.width
+        x = max(column.minX, min(x, column.maxX - cardSize.width))
+        var y = line.maxY + 4
+        if y + cardSize.height > parent.visibleRect.maxY - 8 { y = line.minY - cardSize.height - 4 }
         preview.frame = NSRect(x: round(x), y: round(y), width: cardSize.width, height: cardSize.height)
         preview.show()
     }
+
+    func hidePreview() {
+        mathPreview?.hide()
+    }
+}
+
+/// What a `MathEditor` needs from the text it edits, beyond the text view itself.
+protocol MathEditingHost: AnyObject {
+    var mathTextView: NSTextView { get }
+    /// Math is written here just now (the note isn't handing its keys to a table).
+    var mathEnabled: Bool { get }
+    /// One line of a pipe table: no display equations on lines of their own, no bare `|`.
+    var mathSingleLine: Bool { get }
+    func mathBlock(at location: Int) -> MathEditor.Block
+    /// Types at the selection as a key would, without the math shortcuts.
+    func insertTypedText(_ s: String)
+    /// Where this text's edits are undone.
+    var mathUndoManager: UndoManager? { get }
+    /// The next edit is its own Undo step, even within the same key press.
+    func mathSeparateUndo()
+    /// The view the preview card floats in, and the column it stays inside (in its coordinates).
+    var mathPreviewParent: NSView? { get }
+    var mathPreviewColumn: NSRect { get }
+    /// The size of the text around the equation.
+    var mathFontSize: CGFloat { get }
 }
 
 /// The typeset form of the equation being edited, on a small card below its line.
@@ -965,4 +1089,33 @@ final class MathPreviewView: NSView {
         layer?.shadowColor = Palette.shadow.cgColor
         needsDisplay = true
     }
+}
+
+/// The note's text: math anywhere but code, frontmatter and tables (their cells have
+/// their own `MathEditor`, in `CellTextView`).
+extension EditorController: MathEditingHost {
+    var mathTextView: NSTextView { textView }
+    var mathEnabled: Bool { tableEditor == nil }
+    var mathSingleLine: Bool { false }
+    var mathUndoManager: UndoManager? { textView.undoManager }
+    func mathSeparateUndo() {}
+    func insertTypedText(_ s: String) { textView.insertTypedText(s) }
+    var mathPreviewParent: NSView? { textView }
+    var mathPreviewColumn: NSRect {
+        NSRect(origin: textView.textContainerOrigin, size: textView.textContainer?.size ?? textView.bounds.size)
+    }
+    var mathFontSize: CGFloat { styler.config.typography.size }
+
+    func mathBlock(at location: Int) -> MathEditor.Block {
+        guard let i = styler.blockIndex(containing: location) else { return .text }
+        switch styler.blocks[i].kind {
+        case .code, .frontmatter, .table: return .excluded
+        case .math: return .display(styler.blocks[i].range)
+        default: return .text
+        }
+    }
+
+    func mathSpan(at location: Int) -> MathEditor.MathSpan? { math.mathSpan(at: location) }
+    func clearMathStops() { math.clearStops() }
+    func handleMathNewline(shift: Bool) -> Bool { math.handleNewline(shift: shift) }
 }

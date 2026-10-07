@@ -1,0 +1,5 @@
+# Shortcuts read from LaTeX Suite's own data.json, used as it is: Tests/MathCases/snippets/datajson.json.
+# Run: Indium -IndiumTemp YES -IndiumMathSnippetsFile Tests/MathCases/snippets/datajson.json -IndiumMathCases Tests/MathCases/datajson.tsv -IndiumSnapshot /tmp/x.png
+$a‸$	qqb	$a\quad b‸$
+$‸$	avv	$\vec{a}‸$
+$‸$	@a	$\alpha‸$

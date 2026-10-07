@@ -1,0 +1,5 @@
+{
+  "snippets": "[\n\t// Math mode\n\t{trigger: \"qq\", replacement: \"\\\\quad \", options: \"mA\"},\n\t{trigger: /([a-z])vv/, replacement: \"\\\\vec{[[0]]}\", options: \"rmA\"},\n]",
+  "snippetsEnabled": true,
+  "concealEnabled": false
+}

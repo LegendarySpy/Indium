@@ -228,6 +228,119 @@ enum DebugSnapshot {
         print("  shot:", path)
     }
 
+    /// Math typed in a table cell. Each case starts from a fresh note holding
+    ///
+    ///     | H1 | H2 |      the cell typed in is c1 (row 1, column 0), its text and
+    ///     | -- | -- |      caret set from `before`. The result is that cell's text with
+    ///     | c1 | c2 |      the caret (`‸`) or selection (`«»`); `@r,c:` in front when the
+    ///     | d1 | d2 |      keys moved to another cell, `exited` when they left the table.
+    ///
+    /// An optional fourth column is the row as stored in the note, spaces squeezed. Every
+    /// case also checks the table still has two columns in every row (a bare `|` splits one).
+    /// Keys as for `-IndiumMathCases`, plus ⇤ Shift-Tab and ⎋ Escape.
+    static func runMathCellCases(_ cases: String, editor: EditorController, window: NSWindow, realKeys: Bool) {
+        let undo = editor.textView.undoManager
+        func spin() { RunLoop.current.run(until: Date().addingTimeInterval(0.03)) }
+        func send(_ chars: String, _ flags: NSEvent.ModifierFlags = [], code: UInt16 = 0) {
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                                            windowNumber: window.windowNumber, context: nil, characters: chars,
+                                            charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code) {
+                    window.sendEvent(e)
+                }
+            }
+            spin()
+        }
+        func unmark(_ s: String) -> (String, NSRange) {
+            let ns = s as NSString
+            let caret = ns.range(of: "‸")
+            if caret.location != NSNotFound { return (ns.replacingCharacters(in: caret, with: ""), NSRange(location: caret.location, length: 0)) }
+            let a = ns.range(of: "«"), b = ns.range(of: "»")
+            let plain = ns.replacingOccurrences(of: "«", with: "").replacingOccurrences(of: "»", with: "")
+            return (plain, a.location == NSNotFound ? NSRange(location: (plain as NSString).length, length: 0)
+                                                       : NSRange(location: a.location, length: b.location - a.location - 1))
+        }
+        if !realKeys {
+            if let undo, undo.groupingLevel > 0 { undo.endUndoGrouping() }
+            undo?.groupsByEvent = false
+        }
+        let note = "| H1 | H2 |\n| --- | --- |\n| c1 | c2 |\n| d1 | d2 |\n\nAfter the table.\n"
+        var failed = 0, total = 0
+        for line in cases.components(separatedBy: "\n") where !line.isEmpty && !line.hasPrefix("#") {
+            let parts = line.components(separatedBy: "\t")
+            guard parts.count == 3 || parts.count == 4 else { continue }
+            total += 1
+            let (start, sel) = unmark(parts[0])
+            if !realKeys { undo?.beginUndoGrouping() }
+            editor.endTableEditing()
+            editor.replace(NSRange(location: 0, length: editor.storage.length), with: note)
+            editor.beginTableEditing(at: 0, row: 1, column: 0)
+            guard let cell = editor.tableEditor?.cellEditor as? CellTextView else {
+                if !realKeys { undo?.endUndoGrouping() }
+                failed += 1
+                print("FAIL", parts[0], "· no cell editor")
+                continue
+            }
+            let all = NSRange(location: 0, length: (cell.string as NSString).length)
+            if cell.shouldChangeText(in: all, replacementString: start) {
+                cell.textStorage?.replaceCharacters(in: all, with: start)
+                cell.didChangeText()
+            }
+            cell.setSelectedRange(sel)
+            cell.math.clearStops()
+            if !realKeys { undo?.endUndoGrouping() }
+            spin()
+            // Each case starts with nothing to undo, so ↶ can't reach into the one before.
+            undo?.removeAllActions()
+            for key in parts[1] {
+                if realKeys {
+                    switch key {
+                    case "⇥": send("\t", code: 48)
+                    case "⇤": send("\u{19}", .shift, code: 48)
+                    case "⏎": send("\r", code: 36)
+                    case "⌫": send("\u{7f}", code: 51)
+                    case "⎋": send("\u{1b}", code: 53)
+                    case "↶": undo?.undo(); spin()
+                    case "↷": undo?.redo(); spin()
+                    default: send(String(key))
+                    }
+                    continue
+                }
+                guard let tv = editor.tableEditor?.cellEditor else { break }
+                let isUndo = key == "↶" || key == "↷"
+                if !isUndo { undo?.beginUndoGrouping() }
+                switch key {
+                case "⇥": tv.doCommand(by: #selector(NSResponder.insertTab(_:)))
+                case "⇤": tv.doCommand(by: #selector(NSResponder.insertBacktab(_:)))
+                case "⏎": tv.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+                case "⌫": tv.doCommand(by: #selector(NSResponder.deleteBackward(_:)))
+                case "⎋": tv.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+                case "↶": undo?.undo()
+                case "↷": undo?.redo()
+                default: tv.insertText(String(key), replacementRange: NSRange(location: NSNotFound, length: 0))
+                }
+                if !isUndo { undo?.endUndoGrouping() }
+                spin()
+            }
+            var result = "exited"
+            if let table = editor.tableEditor, let tv = table.cellEditor {
+                let text = tv.string as NSString
+                let r = tv.selectedRange()
+                result = text.replacingCharacters(in: r, with: r.length == 0 ? "‸" : "«" + text.substring(with: r) + "»")
+                if table.focus.row != 1 || table.focus.column != 0 { result = "@\(table.focus.row),\(table.focus.column):" + result }
+            }
+            var ok = result == parts[2]
+            let rows = editor.text.components(separatedBy: "\n").filter { $0.hasPrefix("|") }
+            let stored = rows.count > 2 ? rows[2].replacingOccurrences(of: #" {2,}"#, with: " ", options: .regularExpression) : ""
+            var notes: [String] = []
+            if parts.count == 4, stored != parts[3] { ok = false; notes.append("stored \(stored.debugDescription), expected \(parts[3].debugDescription)") }
+            if let broken = rows.first(where: { MarkdownScanner.splitRow($0).count != 2 }) { ok = false; notes.append("row split: \(broken)") }
+            if !ok { failed += 1 }
+            print(ok ? "PASS" : "FAIL", parts[0], "·", parts[1], "→", result, ok ? "" : "(expected \(parts[2])) " + notes.joined(separator: "; "))
+        }
+        print("MATH CELL CASES: \(total - failed)/\(total) passed")
+    }
+
     static func runIfRequested(_ controller: DocumentWindowController) {
         let d = UserDefaults.standard
         if let steps = d.string(forKey: "IndiumSidebarSteps") {
@@ -319,6 +432,76 @@ enum DebugSnapshot {
                 if MathRenderer.render(doc, size: 17, display: false) == nil { failed += 1; print("FAIL visual", key, "→", doc) }
             }
             print("SNIPPETS: \(total - failed)/\(total) typeset")
+            exit(0)
+        }
+        // `-IndiumMathSnippetsFile path`: your math shortcuts from this file instead of the folder's.
+        if let path = d.string(forKey: "IndiumMathSnippetsFile") {
+            let config = MathSnippetConfig.shared
+            config.overrideURL = URL(fileURLWithPath: path)
+            config.refresh(force: true)
+            print("SNIPPET CONFIG: \(config.loadedCount) loaded")
+            for problem in config.problems { print("SNIPPET PROBLEM:", problem) }
+            // `-IndiumMathSnippetsCreate YES`: what Edit Math Shortcuts… does before opening the file
+            // (the alert it would show, printed instead).
+            if d.bool(forKey: "IndiumMathSnippetsCreate") {
+                print("SNIPPET CREATE:", config.prepareFile().map { "failed: " + $0.replacingOccurrences(of: "\n", with: " ") } ?? "ok")
+                exit(0)
+            }
+            // `-IndiumMathSnippetsReference out.md`: the Math Shortcuts note, written out.
+            if let out = d.string(forKey: "IndiumMathSnippetsReference") {
+                try? config.reference.write(toFile: out, atomically: true, encoding: .utf8)
+                exit(0)
+            }
+        }
+        // `-IndiumMathSnippetConfigCases cases.tsv`: `file<TAB>shortcuts loaded<TAB>problems`, the
+        // problems as `¦`-separated pieces of text each one must contain (files relative to the cases).
+        if let path = d.string(forKey: "IndiumMathSnippetConfigCases"), let cases = try? String(contentsOfFile: path, encoding: .utf8) {
+            let dir = URL(fileURLWithPath: path).deletingLastPathComponent()
+            var failed = 0, total = 0
+            for line in cases.components(separatedBy: "\n") where !line.isEmpty && !line.hasPrefix("#") {
+                let parts = line.components(separatedBy: "\t")
+                guard parts.count >= 2 else { continue }
+                total += 1
+                let text = (try? String(contentsOf: dir.appendingPathComponent(parts[0]), encoding: .utf8)) ?? ""
+                let result = MathSnippetConfig.parse(text)
+                let expected = parts.count < 3 || parts[2].isEmpty ? [] : parts[2].components(separatedBy: "¦").map { $0.trimmingCharacters(in: .whitespaces) }
+                let ok = String(result.snippets.count) == parts[1] && result.problems.count == expected.count
+                    && zip(result.problems, expected).allSatisfy { $0.contains($1) }
+                if !ok { failed += 1 }
+                print(ok ? "PASS" : "FAIL", parts[0], "→", result.snippets.count, "loaded;", result.problems.isEmpty ? "no problems" : result.problems.joined(separator: " ¦ "))
+            }
+            print("SNIPPET CONFIG CASES: \(total - failed)/\(total) passed")
+            exit(0)
+        }
+        // `-IndiumMathCellSnippets YES`: every math shortcut as a table cell writes it: one line,
+        // no bare `|` (it would split the row), and it still typesets.
+        if d.bool(forKey: "IndiumMathCellSnippets") {
+            var samples = MathSnippet.all.compactMap { s -> String? in if case let .literal(t) = s.trigger { return t }; return nil }
+            samples += ["x1", "CO2", "x_{1}2", "\\hat{x}1", "beg", "\\alpha sr"]
+            var failed = 0, total = 0, declined = 0
+            for sample in samples {
+                for display in [false, true] {
+                    for auto in [true, false] {
+                        let before = "z " + sample
+                        guard let e = MathSnippet.expansion(before: before, context: .math(display: display), auto: auto, pipes: false) else { continue }
+                        if e.text.contains("\n") { declined += 1; continue }
+                        var text = e.text as NSString
+                        for b in (e.stops + e.copies.flatMap { $0 }).filter({ $0.length == 0 }).sorted(by: { $0.location > $1.location }) {
+                            let env = ["\\begin{", "\\end{"].contains { text.substring(to: b.location).hasSuffix($0) }
+                            let afterCommand = text.substring(to: b.location).range(of: #"\\[A-Za-z]+$"#, options: .regularExpression) != nil
+                            text = text.replacingCharacters(in: b, with: env ? "matrix" : afterCommand ? " a" : "a") as NSString
+                        }
+                        let doc = String((before as NSString).substring(to: (before as NSString).length - e.length)) + (text as String)
+                        total += 1
+                        let piped = (text as String).contains("|")
+                        if piped || MathRenderer.render(doc, size: 17, display: display) == nil {
+                            failed += 1
+                            print("FAIL", sample, display ? "display" : "inline", auto ? "auto" : "tab", piped ? "pipe" : "typeset", "→", doc.debugDescription)
+                        }
+                    }
+                }
+            }
+            print("CELL SNIPPETS: \(total - failed)/\(total) fit a cell (\(declined) multi-line declined)")
             exit(0)
         }
         // `-IndiumEvalCases a.tsv,b.tsv,c.md`: formula regression cases (quick answers, evaluator,
@@ -736,6 +919,10 @@ enum DebugSnapshot {
                     print(ok ? "PASS" : "FAIL", parts[0], "·", parts[1], "→", result, ok ? "" : "(expected \(parts[2]))")
                 }
                 print("MATH CASES: \(total - failed)/\(total) passed")
+            }
+            // `-IndiumMathCellCases /path`: the same kind of cases, typed into a table cell (see runMathCellCases).
+            if let path = d.string(forKey: "IndiumMathCellCases"), let cases = try? String(contentsOfFile: path, encoding: .utf8) {
+                runMathCellCases(cases, editor: target.editor, window: window, realKeys: d.bool(forKey: "IndiumMathRealKeys"))
             }
             if d.bool(forKey: "IndiumSlashAccept") {
                 _ = target.editor.handleSlashKey(#selector(NSResponder.insertTab(_:)))
