@@ -62,8 +62,9 @@ struct MathSnippet {
         case math(display: Bool)
     }
 
-    /// The snippet whose trigger ends `before` (the text up to the caret), if any.
-    static func expansion(before: String, context: Context, auto: Bool) -> Expansion? {
+    /// The snippet whose trigger ends `before` (the text up to the caret), if any. Without
+    /// `pipes` (in a table cell) its bars are written as commands; see `withoutPipes`.
+    static func expansion(before: String, context: Context, auto: Bool, pipes: Bool = true) -> Expansion? {
         let ns = before as NSString
         // Triggers are short; regexes only need the tail.
         let tailStart = max(0, ns.length - 64)
@@ -108,7 +109,7 @@ struct MathSnippet {
         var display = false
         if case let .math(d) = context { display = d }
         let template = best.snippet.compute?(best.captures, display) ?? best.snippet.replacement
-        let r = render(template, captures: best.captures, visual: "")
+        let r = render(pipes ? template : withoutPipes(template), captures: best.captures, visual: "")
         var completes: String?
         if case let .literal(t) = best.snippet.trigger, t.first?.isLetter == true, r.text.hasPrefix("\\"),
            r.stops.isEmpty, r.text.dropFirst().allSatisfy(\.isLetter) {
@@ -116,6 +117,29 @@ struct MathSnippet {
             if name.count > t.count, name.hasPrefix(t) { completes = String(name.dropFirst(t.count)) }
         }
         return Expansion(length: best.length, text: r.text, stops: r.stops, copies: r.copies, completes: completes)
+    }
+
+    /// A `|` ends a cell in a Markdown table, and an escaped `\|` reads as `‖` to some
+    /// renderers, so in a cell the bars are written as commands that typeset the same:
+    /// `|x|` → `\lvert x\rvert`, `\left|` → `\left\lvert`, `\braket{a | b}` → `\langle a \mid b \rangle`.
+    static func withoutPipes(_ template: String) -> String {
+        guard template.contains("|") else { return template }
+        var t = template.replacingOccurrences(of: #"\\braket\{([^{}|]*)\|([^{}]*)\}"#, with: #"\\langle$1\\mid$2\\rangle"#,
+                                              options: .regularExpression)
+        t = t.replacingOccurrences(of: "\\left|", with: "\\left\\lvert").replacingOccurrences(of: "\\right|", with: "\\right\\rvert")
+        t = t.replacingOccurrences(of: "\\|", with: "\\Vert ")
+        // What's left pairs up: opening, closing, opening…
+        var out = ""
+        var opening = true
+        for c in t {
+            if c == "|" {
+                out += opening ? "\\lvert " : "\\rvert "
+                opening.toggle()
+            } else {
+                out.append(c)
+            }
+        }
+        return out
     }
 
     private func applies(in context: Context) -> Bool {
