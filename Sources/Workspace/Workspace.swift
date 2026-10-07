@@ -29,6 +29,9 @@ final class Workspace {
     static let markdownExtensions: Set<String> = ["md", "markdown", "mdown"]
 
     let root: URL
+    /// Keeps the folder reachable for as long as the workspace, its watcher, a scan
+    /// still running in the background, or a note opened from it needs it.
+    let access: FolderAccess.Lease
     private(set) var tree: FileNode
     private(set) var notes: [URL] = []
     private var filesByName: [String: [URL]] = [:]
@@ -41,16 +44,20 @@ final class Workspace {
     /// True until the first scan lands.
     private(set) var isScanning = true
 
-    init(root: URL) {
+    /// `access` is the lease taken when the folder was granted or its bookmark resolved;
+    /// without one the workspace takes its own (enough outside the sandbox).
+    init(root: URL, access: FolderAccess.Lease? = nil) {
         self.root = root.standardizedFileURL
+        self.access = access ?? FolderAccess.lease(root)
         tree = FileNode(url: self.root, isFolder: true)
         watcher = FileWatcher(url: self.root) { [weak self] paths in self?.filesChanged(paths) }
         // Listing a folder in iCloud Drive can wait on iCloud for seconds (folders and
         // files may not be downloaded yet), so the first scan never runs on the main
         // thread; windows fill in when it lands.
         let root = self.root
+        let access = self.access
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let scan = Workspace.scan(root)
+            let scan = withExtendedLifetime(access) { Workspace.scan(root) }
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.tree = scan.tree
@@ -117,8 +124,9 @@ final class Workspace {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self else { return }
             let root = self.root
+            let access = self.access
             DispatchQueue.global(qos: .userInitiated).async {
-                let scan = Workspace.scan(root)
+                let scan = withExtendedLifetime(access) { Workspace.scan(root) }
                 DispatchQueue.main.async {
                     self.rescanPending = false
                     self.tree = scan.tree
@@ -237,7 +245,7 @@ final class Workspace {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let base = preferredName.map { ($0 as NSString).deletingPathExtension } ?? Workspace.imageBaseName()
         let url = Workspace.uniqueURL(in: folder, base: base, ext: ext)
-        try data.write(to: url, options: .atomic)
+        try Note.safeWrite(data, to: url)
         return url
     }
 
@@ -246,7 +254,7 @@ final class Workspace {
     func createNote(in folder: URL?, name: String = "Untitled", contents: String = "") throws -> URL {
         let dir = folder ?? root
         let url = Workspace.uniqueURL(in: dir, base: Workspace.sanitize(name), ext: "md")
-        try Data(contents.utf8).write(to: url, options: .withoutOverwriting)
+        try Workspace.coordinate(writing: url, options: []) { try Data(contents.utf8).write(to: $0, options: .withoutOverwriting) }
         rescanNow()
         return url
     }
@@ -279,7 +287,20 @@ final class Workspace {
         if !caseOnly, FileManager.default.fileExists(atPath: target.path) {
             throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: target.path])
         }
-        try FileManager.default.moveItem(at: url, to: target)
+        // Coordinated, so iCloud Drive and other apps holding the file see a move, not a
+        // deletion followed by a new file.
+        var coordinationError: NSError?
+        var moveError: Error?
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        coordinator.coordinate(writingItemAt: url, options: .forMoving, writingItemAt: target, options: .forReplacing,
+                               error: &coordinationError) { from, to in
+            do {
+                coordinator.item(at: from, willMoveTo: to)
+                try FileManager.default.moveItem(at: from, to: to)
+                coordinator.item(at: from, didMoveTo: to)
+            } catch { moveError = error }
+        }
+        if let error = coordinationError ?? moveError { throw error }
         NoteIcons.shared.moved(from: url, to: target, in: self)
         NotificationCenter.default.post(name: Workspace.didMoveItem, object: self, userInfo: ["from": url, "to": target])
         rescanNow()
@@ -287,8 +308,18 @@ final class Workspace {
     }
 
     func trash(_ url: URL) throws {
-        try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        try Workspace.coordinate(writing: url, options: .forDeleting) { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
         rescanNow()
+    }
+
+    /// Runs `body` under a coordinated write of `url`, rethrowing whichever error came up.
+    static func coordinate(writing url: URL, options: NSFileCoordinator.WritingOptions, _ body: (URL) throws -> Void) throws {
+        var coordinationError: NSError?
+        var bodyError: Error?
+        NSFileCoordinator(filePresenter: nil).coordinate(writingItemAt: url, options: options, error: &coordinationError) { target in
+            do { try body(target) } catch { bodyError = error }
+        }
+        if let error = coordinationError ?? bodyError { throw error }
     }
 
     static func sanitize(_ name: String) -> String {
