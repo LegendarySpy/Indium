@@ -579,7 +579,7 @@ enum DebugSnapshot {
                 for step in steps {
                     // Steps that only look (and Tab, as a real key) open no explicit undo group: an empty
                     // explicit group stays on the stack, where a real key event's empty group is dropped.
-                    let isUndo = ["undo", "redo", "noteundo", "tab", "text", "caption", "fprint", "shot", "focus", "done", "notesel", "selectAll", "select", "pb"].contains(step.split(separator: ":").first.map(String.init) ?? "")
+                    let isUndo = ["undo", "redo", "noteundo", "tab", "text", "caption", "fprint", "shot", "focus", "done", "notesel", "selectAll", "select", "pb", "keyev", "cmdev", "switchto"].contains(step.split(separator: ":").first.map(String.init) ?? "")
                     if !isUndo { undo?.beginUndoGrouping() }
                     defer { if !isUndo { undo?.endUndoGrouping() } }
                     let e = target.editor.tableEditor
@@ -593,6 +593,35 @@ enum DebugSnapshot {
                         NSPasteboard.general.setString(arg.replacingOccurrences(of: "\\t", with: "\t").replacingOccurrences(of: "\\n", with: "\n"), forType: .string)
                     case "type":
                         window.firstResponder?.insertText(arg)
+                    case "switchto":
+                        // `switchto:/path.md`: opens another note in this editor, as the sidebar would,
+                        // printing any change made to the note being left on the way out.
+                        let editor = target.editor, old = editor.note
+                        let watch = NotificationCenter.default.addObserver(forName: NSText.didChangeNotification, object: editor.textView, queue: nil) { _ in
+                            print("CHANGED ON THE WAY OUT:\n" + editor.text)
+                        }
+                        if let next = try? Note(url: URL(fileURLWithPath: arg)) { editor.load(next) }
+                        NotificationCenter.default.removeObserver(watch)
+                        print("  left note undo level:", old?.undoManager.groupingLevel ?? -1, "registration on:", old?.undoManager.isUndoRegistrationEnabled ?? false,
+                              "now showing:", editor.note?.url?.lastPathComponent ?? "-")
+                    case "cmdev":
+                        // `cmdev:deleteBackward:`: a command as its own key event, grouped as `keyev`.
+                        undo?.groupsByEvent = true
+                        window.firstResponder?.doCommand(by: NSSelectorFromString(arg))
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+                        if let u = undo, u.groupingLevel > 0 { u.endUndoGrouping() }
+                        undo?.groupsByEvent = false
+                    case "keyev":
+                        // `keyev:abc`: each character as its own event, grouped by the run loop as a real
+                        // key press is (a press that records no undo leaves no group behind).
+                        undo?.groupsByEvent = true
+                        for ch in arg {
+                            window.firstResponder?.insertText(String(ch))
+                            RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+                            // A nested run loop doesn't reach the end-of-event observer: close the press's group.
+                            if let u = undo, u.groupingLevel > 0 { u.endUndoGrouping() }
+                        }
+                        undo?.groupsByEvent = false
                     case "key":
                         window.firstResponder?.doCommand(by: NSSelectorFromString(arg))
                     case "click", "drag":

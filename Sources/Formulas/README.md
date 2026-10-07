@@ -67,10 +67,13 @@ columns is up to the UI. Formula lines are never rewritten.
   same undo step as the edit, so one Undo restores the inputs and the outputs. On any issue
   nothing changes (the engine is atomic) and the caption shows why. Only real `.table`
   blocks are touched, never fenced code. Typing in the Markdown source doesn't recalculate.
-- **Frontmatter variables are inputs too.** When the caret leaves the frontmatter after an
-  edit (or the note is closed), tables whose formulas name a variable whose value changed
-  are recalculated. The frontmatter edit and the new results become one undo step (the
-  typing is undone and done again together with the tables). Not on every keystroke.
+- **Frontmatter variables are inputs too.** A run of edits inside the frontmatter is one
+  edit session: its first edit registers a single undo step that restores the frontmatter as
+  it started, and the edits after it record nothing. When the session ends (the caret leaves
+  the frontmatter, the note is saved, switched or closed), tables whose formulas name a
+  variable whose value changed are recalculated, and that same undo step grows to restore
+  them too. An edit outside the frontmatter ends the session without recalculating (the
+  caption then says "values out of date"). Never on every keystroke.
 - **Formula…** (table toolbar's More menu, or a cell's menu) edits the focused row's or
   column's formula: two operands and − + × ÷ "% of", or the formula typed in upstream syntax,
   with a live preview. Row formulas leave out a label column (`@4$2..@4$>=(@2-@3)`), column
