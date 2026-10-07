@@ -10,6 +10,26 @@ struct ImageRef: Hashable {
     var altRange: NSRange
 }
 
+/// A note shown inside another, on a line of its own: `![[Note]]`, `![[Note#Heading]]`,
+/// `![[Note#^block]]`.
+struct EmbedRef: Hashable {
+    /// The note's name or path, as wiki links write it.
+    var note: String
+    /// After the `#`: a heading, or `^id` for a block.
+    var subpath: String?
+}
+
+struct CalloutHeader: Hashable {
+    enum Fold: Hashable { case none, open, folded }
+    /// As written, lowercased (`note`, `tip`, `faq`…).
+    var type: String
+    var fold: Fold
+    /// The `> [!type]- ` prefix, before the title.
+    var markerLength: Int
+    /// Just the `> `.
+    var quoteLength: Int
+}
+
 /// A GitHub-style pipe table. Offsets are relative to the start of the block.
 struct TableSpec: Hashable {
     struct Cell: Hashable {
@@ -99,10 +119,18 @@ enum BlockKind: Hashable {
     /// Advanced Tables `<!-- TBLFM: … -->` lines directly below a table (no blank line
     /// between). They belong to the table: drawn as a caption under it, never as text.
     case tableFormulas
+    case embed(EmbedRef)
+    /// The first line of an Obsidian callout, `> [!type]± Title`; the quote lines after
+    /// it are its body.
+    case callout(CalloutHeader)
+    /// A footnote's text, `[^label]: text`; `markerLength` covers `[^label]:`.
+    case footnote(label: String, markerLength: Int)
+    /// An Obsidian comment, `%% … %%`, on lines of its own (it may span several).
+    case comment
 
     var isMultiLine: Bool {
         switch self {
-        case .frontmatter, .code, .math: true
+        case .frontmatter, .code, .math, .comment: true
         default: false
         }
     }
@@ -155,6 +183,14 @@ enum MarkdownScanner {
 
         while i < lines.count {
             let line = text.substring(with: lines[i].content)
+
+            // A comment opening a line runs to the next `%%`, wherever it is; unclosed,
+            // it runs to the end of the note, as in Obsidian.
+            if let end = commentEnd(text, lines: lines, from: i) {
+                blocks.append(MDBlock(range: span(i, end), kind: .comment))
+                i = end + 1
+                continue
+            }
 
             if let fence = fenceOpening(line) {
                 var j = i + 1
@@ -215,10 +251,37 @@ enum MarkdownScanner {
                 }
             }
 
-            blocks.append(MDBlock(range: lines[i].full, kind: classify(line: line)))
+            var kind = classify(line: line)
+            // `[!type]` only starts a callout on a quote's first line; further down it's text.
+            if case let .callout(header) = kind, let previous = blocks.last?.kind {
+                switch previous {
+                case .quote, .callout: kind = .quote(depth: 1, markerLength: header.quoteLength)
+                default: break
+                }
+            }
+            blocks.append(MDBlock(range: lines[i].full, kind: kind))
             i += 1
         }
         return blocks
+    }
+
+    /// Last line of a block comment starting at line `i`: the line must begin with `%%`
+    /// and the comment must take the whole line (or continue onto later lines).
+    private static func commentEnd(_ text: NSString, lines: [(content: NSRange, full: NSRange)], from i: Int) -> Int? {
+        let first = text.substring(with: lines[i].content).trimmingCharacters(in: .whitespaces) as NSString
+        guard first.hasPrefix("%%") else { return nil }
+        let rest = first.substring(from: 2) as NSString
+        let close = rest.range(of: "%%")
+        if close.location != NSNotFound {
+            // Closed on the same line: a block only when nothing follows the comment.
+            return NSMaxRange(close) == rest.length ? i : nil
+        }
+        var j = i + 1
+        while j < lines.count {
+            if text.substring(with: lines[j].content).contains("%%") { return j }
+            j += 1
+        }
+        return lines.count - 1
     }
 
     private static func fenceOpening(_ line: String) -> (marker: String, language: String)? {
@@ -250,6 +313,12 @@ enum MarkdownScanner {
         if Regex.hr.firstMatch(in: line, range: full) != nil { return .hr }
         if let m = Regex.quote.firstMatch(in: line, range: full) {
             let depth = ns.substring(with: m.range).filter { $0 == ">" }.count
+            if depth == 1, let c = Regex.calloutHeader.firstMatch(in: line, options: .anchored, range: NSRange(location: m.range.length, length: ns.length - m.range.length)) {
+                let fold = ns.substring(with: c.range(at: 2))
+                return .callout(CalloutHeader(type: ns.substring(with: c.range(at: 1)).lowercased(),
+                                              fold: fold == "-" ? .folded : (fold == "+" ? .open : .none),
+                                              markerLength: NSMaxRange(c.range), quoteLength: m.range.length))
+            }
             return .quote(depth: depth, markerLength: m.range.length)
         }
         if let m = Regex.list.firstMatch(in: line, range: full) {
@@ -261,7 +330,11 @@ enum MarkdownScanner {
             return .list(indentLength: m.range(at: 1).length, markerLength: m.range.length,
                          ordered: marker.first?.isNumber == true, task: task)
         }
+        if let m = Regex.footnoteDefinition.firstMatch(in: line, range: full) {
+            return .footnote(label: ns.substring(with: m.range(at: 1)), markerLength: m.range.length)
+        }
         if let image = imageLine(line) { return .image(image) }
+        if let embed = embedLine(line) { return .embed(embed) }
         return .paragraph
     }
 
@@ -367,6 +440,22 @@ enum MarkdownScanner {
         return nil
     }
 
+    static let attachmentExtensions: Set<String> = ["pdf", "mp3", "mp4", "m4a", "wav", "ogg", "flac", "webm", "mov", "mkv", "3gp", "canvas", "base"]
+
+    /// `![[Note]]` alone on a line, naming a note (not an image or another file).
+    static func embedLine(_ line: String) -> EmbedRef? {
+        let ns = line as NSString
+        guard let m = Regex.wikiImageLine.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) else { return nil }
+        let target = ns.substring(with: m.range(at: 1)).components(separatedBy: "|")[0]
+        let parts = target.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+        let note = parts[0].trimmingCharacters(in: .whitespaces)
+        let ext = (note as NSString).pathExtension.lowercased()
+        // Names may hold dots ("Release 1.2"), so only known attachment types are left out.
+        guard !note.isEmpty, !attachmentExtensions.contains(ext) else { return nil }
+        let sub = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : ""
+        return EmbedRef(note: note, subpath: sub.isEmpty ? nil : sub)
+    }
+
     // MARK: Inline
 
     struct Span {
@@ -376,6 +465,21 @@ enum MarkdownScanner {
             case link(String)
             case wiki(String)
             case escape
+            /// `%%…%%` inside a line. Its delimiters aren't markers: the whole span hides.
+            case comment
+            /// `#tag`, without its `#`.
+            case tag(String)
+            /// The few HTML tags notes use: `<br>`, `<sup>`, `<sub>`, `<u>`, `<mark>`, `<kbd>`.
+            /// The tags aren't listed as markers (they're the span's range around its
+            /// content), so renderers that don't know HTML, like table cells, leave them as written.
+            case html(HTMLTag)
+            /// `[^label]`, a reference to a footnote; the content is the label.
+            case footnoteRef(String)
+            /// `^[text]`, a footnote written where it's referenced.
+            case inlineFootnote
+        }
+        enum HTMLTag: String {
+            case br, sup, sub, u, mark, kbd
         }
         var kind: Kind
         /// Whole span, absolute.
@@ -421,6 +525,12 @@ enum MarkdownScanner {
                               content: abs(NSRange(location: m.range.location + tick, length: m.range.length - 2 * tick))))
         }
 
+        // Comments hide everything inside them, so nothing else may match there.
+        for m in Regex.comment.matches(in: line as String, range: full) where free(m.range) {
+            consume(m.range)
+            spans.append(Span(kind: .comment, range: abs(m.range), markers: [], content: abs(m.range)))
+        }
+
         // Math.
         for (regex, display) in [(Regex.displayMathInline, true), (Regex.inlineMath, false)] {
             for m in regex.matches(in: line as String, range: full) where free(m.range) {
@@ -440,6 +550,22 @@ enum MarkdownScanner {
                               content: abs(NSRange(location: m.range.location + 1, length: 1))))
         }
 
+        // Inline HTML: only the tags notes actually use; anything else stays as written.
+        for m in Regex.lineBreakTag.matches(in: line as String, range: full) where free(m.range) {
+            consume(m.range)
+            spans.append(Span(kind: .html(.br), range: abs(m.range), markers: [], content: abs(m.range)))
+        }
+        for m in Regex.htmlTag.matches(in: line as String, range: full) {
+            guard let tag = Span.HTMLTag(rawValue: line.substring(with: m.range(at: 1)).lowercased()) else { continue }
+            let inner = m.range(at: 2)
+            let open = NSRange(location: m.range.location, length: inner.location - m.range.location)
+            let close = NSRange(location: NSMaxRange(inner), length: NSMaxRange(m.range) - NSMaxRange(inner))
+            guard free(open), free(close) else { continue }
+            consume(open)
+            consume(close)
+            spans.append(Span(kind: .html(tag), range: abs(m.range), markers: [], content: abs(inner)))
+        }
+
         // Wiki links and embeds.
         for m in Regex.wikiLink.matches(in: line as String, range: full) where free(m.range) {
             consume(m.range)
@@ -457,13 +583,32 @@ enum MarkdownScanner {
                               content: abs(visible)))
         }
 
+        // Footnote references, and footnotes written inline.
+        for m in Regex.footnoteRef.matches(in: line as String, range: full) where free(m.range) {
+            consume(m.range)
+            let label = m.range(at: 1)
+            spans.append(Span(kind: .footnoteRef(line.substring(with: label)), range: abs(m.range),
+                              markers: [abs(NSRange(location: m.range.location, length: 2)), abs(NSRange(location: NSMaxRange(label), length: 1))],
+                              content: abs(label)))
+        }
+        for m in Regex.inlineFootnote.matches(in: line as String, range: full) {
+            let open = NSRange(location: m.range.location, length: 2)
+            let close = NSRange(location: NSMaxRange(m.range) - 1, length: 1)
+            guard free(open), free(close) else { continue }
+            consume(open)
+            consume(close)
+            spans.append(Span(kind: .inlineFootnote, range: abs(m.range), markers: [abs(open), abs(close)], content: abs(m.range(at: 1))))
+        }
+
         // Standard links and inline images.
+        var linkTexts: [NSRange] = []
         for m in Regex.link.matches(in: line as String, range: full) where free(m.range) {
             let textRange = m.range(at: 2)
             let open = NSRange(location: m.range.location, length: textRange.location - m.range.location)
             let tail = NSRange(location: NSMaxRange(textRange), length: NSMaxRange(m.range) - NSMaxRange(textRange))
             consume(open)
             consume(tail)
+            linkTexts.append(textRange)
             var url = line.substring(with: m.range(at: 3))
             if url.hasPrefix("<"), url.hasSuffix(">") { url = String(url.dropFirst().dropLast()) }
             spans.append(Span(kind: .link(url), range: abs(m.range), markers: [abs(open), abs(tail)], content: abs(textRange)))
@@ -479,6 +624,16 @@ enum MarkdownScanner {
         for m in Regex.bareURL.matches(in: line as String, range: full) where free(m.range) {
             consume(m.range)
             spans.append(Span(kind: .link(line.substring(with: m.range)), range: abs(m.range), markers: [], content: abs(m.range)))
+        }
+
+        // Tags, by Obsidian's rules: `#` at the start or after whitespace, then letters,
+        // digits, `_`, `-` or `/`, not all digits; never inside code, links or URLs.
+        for m in Regex.tag.matches(in: line as String, range: full) where free(m.range) {
+            let name = line.substring(with: m.range(at: 1))
+            guard !name.allSatisfy(\.isNumber),
+                  !linkTexts.contains(where: { NSIntersectionRange($0, m.range).length > 0 }) else { continue }
+            consume(m.range)
+            spans.append(Span(kind: .tag(name), range: abs(m.range), markers: [], content: abs(m.range)))
         }
 
         // Emphasis family. Only the markers are consumed so spans can nest.
@@ -514,10 +669,18 @@ enum MarkdownScanner {
         static let heading = make(#"^ {0,3}(#{1,6})(?:[ \t]+|$)"#)
         static let hr = make(#"^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$"#)
         static let quote = make(#"^ {0,3}(?:>[ \t]?)+"#)
+        static let calloutHeader = make(#"\[!([A-Za-z][\w-]*)\]([+-]?)[ \t]*"#)
         static let list = make(#"^([ \t]*)([-*+]|\d{1,9}[.)])(?:[ \t]+|$)(?:(\[([ xX])\])(?:[ \t]+|$))?"#)
         static let imageLine = make(#"^[ \t]*!\[((?:\\.|[^\[\]\\])*)\]\((<[^>\n]*>|[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)(?:[ \t]+"[^"]*")?\)[ \t]*$"#)
         static let wikiImageLine = make(#"^[ \t]*!\[\[([^\[\]\n]+)\]\][ \t]*$"#)
 
+        static let comment = make(#"%%.*?%%"#)
+        static let footnoteDefinition = make(#"^\[\^([^\]\s]+)\]:"#)
+        static let footnoteRef = make(#"\[\^([^\]\s]+)\](?!:)"#)
+        static let inlineFootnote = make(#"\^\[((?:[^\[\]\n]|\[\[[^\[\]\n]*\]\]|\[[^\[\]\n]*\])+)\]"#)
+        static let lineBreakTag = make(#"<br\s*/?>"#, .caseInsensitive)
+        static let htmlTag = make(#"<(sup|sub|u|mark|kbd)>(.+?)</\1>"#, .caseInsensitive)
+        static let tag = make(#"(?<![^\s])#([\p{L}\p{N}_/\-]+)"#)
         static let escape = make(#"\\[!-/:-@\[-`{-~]"#)
         static let codeSpan = make(#"(`+)(?!`)(.+?)(?<!`)\1(?!`)"#)
         static let displayMathInline = make(#"\$\$(.+?)\$\$"#)
