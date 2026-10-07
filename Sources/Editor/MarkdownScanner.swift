@@ -10,6 +10,15 @@ struct ImageRef: Hashable {
     var altRange: NSRange
 }
 
+/// A note shown inside another, on a line of its own: `![[Note]]`, `![[Note#Heading]]`,
+/// `![[Note#^block]]`.
+struct EmbedRef: Hashable {
+    /// The note's name or path, as wiki links write it.
+    var note: String
+    /// After the `#`: a heading, or `^id` for a block.
+    var subpath: String?
+}
+
 /// A GitHub-style pipe table. Offsets are relative to the start of the block.
 struct TableSpec: Hashable {
     struct Cell: Hashable {
@@ -96,6 +105,7 @@ enum BlockKind: Hashable {
     case code(language: String)
     case math(latex: String)
     case image(ImageRef)
+    case embed(EmbedRef)
     /// An Obsidian comment, `%% … %%`, on lines of its own (it may span several).
     case comment
 
@@ -281,6 +291,7 @@ enum MarkdownScanner {
                          ordered: marker.first?.isNumber == true, task: task)
         }
         if let image = imageLine(line) { return .image(image) }
+        if let embed = embedLine(line) { return .embed(embed) }
         return .paragraph
     }
 
@@ -379,6 +390,22 @@ enum MarkdownScanner {
             return ImageRef(source: target, alt: "", width: width, isWiki: true, altRange: NSRange(location: NSNotFound, length: 0))
         }
         return nil
+    }
+
+    static let attachmentExtensions: Set<String> = ["pdf", "mp3", "mp4", "m4a", "wav", "ogg", "flac", "webm", "mov", "mkv", "3gp", "canvas", "base"]
+
+    /// `![[Note]]` alone on a line, naming a note (not an image or another file).
+    static func embedLine(_ line: String) -> EmbedRef? {
+        let ns = line as NSString
+        guard let m = Regex.wikiImageLine.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) else { return nil }
+        let target = ns.substring(with: m.range(at: 1)).components(separatedBy: "|")[0]
+        let parts = target.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+        let note = parts[0].trimmingCharacters(in: .whitespaces)
+        let ext = (note as NSString).pathExtension.lowercased()
+        // Names may hold dots ("Release 1.2"), so only known attachment types are left out.
+        guard !note.isEmpty, !attachmentExtensions.contains(ext) else { return nil }
+        let sub = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : ""
+        return EmbedRef(note: note, subpath: sub.isEmpty ? nil : sub)
     }
 
     // MARK: Inline

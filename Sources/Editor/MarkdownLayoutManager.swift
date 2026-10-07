@@ -202,6 +202,60 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         drawPageBreaks(in: chars, storage: storage, origin: origin)
         drawInlineMath(in: chars, storage: storage, origin: origin)
         drawBlocks(in: chars, storage: storage, origin: origin)
+        drawEmbeds(in: chars, storage: storage, origin: origin)
+    }
+
+    /// Where an embedded note's box sits (its title line included) and where the note
+    /// is drawn inside it, in view coordinates.
+    func embedRects(in chars: NSRange, origin: NSPoint) -> [(embed: NoteEmbed, range: NSRange, box: NSRect, content: NSRect)] {
+        guard let storage = textStorage else { return [] }
+        var result: [(NoteEmbed, NSRange, NSRect, NSRect)] = []
+        storage.enumerateAttribute(.mdEmbed, in: chars) { value, range, _ in
+            guard let embed = value as? NoteEmbed else { return }
+            var full = range
+            _ = storage.attribute(.mdEmbed, at: range.location, longestEffectiveRange: &full, in: NSRange(location: 0, length: storage.length))
+            guard full.location == range.location || !result.contains(where: { $0.1 == full }) else { return }
+            let first = glyphIndexForCharacter(at: full.location)
+            let last = glyphIndexForCharacter(at: max(full.location, NSMaxRange(full) - 1))
+            guard let container = textContainer(forGlyphAt: first, effectiveRange: nil) else { return }
+            let top = lineFragmentUsedRect(forGlyphAt: first, effectiveRange: nil)
+            let bottom = lineFragmentRect(forGlyphAt: last, effectiveRange: nil)
+            let used = lineFragmentUsedRect(forGlyphAt: last, effectiveRange: nil)
+            let col = contentColumn(glyph: first, container: container, origin: origin)
+            let pad = embed.padding
+            let box = NSRect(x: col.x, y: origin.y + top.minY - round(pad * 0.6), width: col.width,
+                             height: used.maxY - top.minY + round(pad * 0.6) + embed.contentHeight + pad * 1.4)
+            let content = NSRect(x: col.x + pad, y: origin.y + used.maxY + round(pad * 0.7), width: col.width - pad * 2,
+                                 height: embed.contentHeight)
+            result.append((embed, full, box.integral, content))
+        }
+        return result
+    }
+
+    private func drawEmbeds(in chars: NSRange, storage: NSTextStorage, origin: NSPoint) {
+        for (embed, _, box, content) in embedRects(in: chars, origin: origin) {
+            let border = NSBezierPath(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
+            border.lineWidth = 1
+            Palette.separator.setStroke()
+            border.stroke()
+            switch embed.content {
+            case let .note(render):
+                render.draw(at: content.origin, clip: content.insetBy(dx: -4, dy: 0))
+                if render.height > embed.contentHeight + 1 {
+                    // A long note is cut off: fade it out rather than slicing a line in half.
+                    let fade = NSRect(x: box.minX + 1, y: content.maxY - 36, width: box.width - 2, height: 36)
+                    NSGradient(starting: Palette.background.withAlphaComponent(0), ending: Palette.background)?.draw(in: fade, angle: 90)
+                }
+            case let .message(title, detail):
+                let font = NSFont.systemFont(ofSize: 12)
+                let label = NSMutableAttributedString(string: title, attributes: [.font: font, .foregroundColor: Palette.secondaryText])
+                if !detail.isEmpty {
+                    label.append(NSAttributedString(string: " · " + detail, attributes: [.font: font, .foregroundColor: Palette.tertiaryText]))
+                }
+                let size = label.size()
+                label.draw(at: NSPoint(x: content.minX, y: content.midY - size.height / 2))
+            }
+        }
     }
 
     private func drawGroups(in chars: NSRange, storage: NSTextStorage, origin: NSPoint) {
