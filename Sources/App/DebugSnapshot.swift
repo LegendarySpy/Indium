@@ -258,8 +258,7 @@ enum DebugSnapshot {
             case "savetemp": target.saveTemporaryToVault(closeAfter: false)
             case "iconstore":
                 // What the note-icon store looks like from inside (the container, when sandboxed).
-                let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Indium")
-                let file = dir.appendingPathComponent("icons.json")
+                let file = FileManager.indiumSupport.appendingPathComponent("icons.json")
                 print("  icon store:", file.path, "exists:", FileManager.default.fileExists(atPath: file.path))
                 print("  contents:", (try? String(contentsOf: file, encoding: .utf8)) ?? "-")
             case "external":

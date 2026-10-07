@@ -35,7 +35,7 @@ final class NoteIcons {
         // `-IndiumIconStore /tmp/icons.json`: test runs keep their icons out of the real store.
         if let path = UserDefaults.standard.string(forKey: "IndiumIconStore") { return URL(fileURLWithPath: path) }
         #endif
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Indium")
+        let dir = FileManager.indiumSupport
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("icons.json")
     }()
@@ -408,5 +408,18 @@ final class NoteIcons {
             }
         }
         return nil
+    }
+}
+
+extension FileManager {
+    /// Indium's folder in Application Support. Debug builds keep their own, so test runs
+    /// never touch the icons and shortcuts of the Indium you use.
+    static var indiumSupport: URL {
+        #if DEBUG
+        let name = "Indium Debug"
+        #else
+        let name = "Indium"
+        #endif
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(name, isDirectory: true)
     }
 }

@@ -39,8 +39,7 @@ final class MathSnippetConfig: NSObject {
         if let root = AppDelegate.shared.workspace?.root {
             return root.appendingPathComponent(".indium", isDirectory: true).appendingPathComponent("snippets.json")
         }
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return support.appendingPathComponent("Indium", isDirectory: true).appendingPathComponent("snippets.json")
+        return FileManager.indiumSupport.appendingPathComponent("snippets.json")
     }
 
     /// Reads the file again if it changed (looked at no more than once a second while typing).
