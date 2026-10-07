@@ -442,6 +442,9 @@ final class MarkdownStyler {
 
     // MARK: Columns
 
+    /// Footnote texts by label, shown when the pointer rests on a reference.
+    private var footnotes: [String: String] = [:]
+
     // MARK: Callouts
 
     /// Callout membership: each line's header block, and each header's last line.
@@ -530,6 +533,12 @@ final class MarkdownStyler {
 
     private func computeRegions() {
         computeCallouts()
+        footnotes = [:]
+        for b in blocks {
+            guard case let .footnote(label, markerLength) = b.kind else { continue }
+            let line = text.substring(with: b.range) as NSString
+            footnotes[label] = line.substring(from: min(markerLength, line.length)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         regions = []
         cellOfBlock = [:]
         markerSignature = []
@@ -780,6 +789,23 @@ final class MarkdownStyler {
 
         case let .image(ref):
             styleImage(ref, line: first, block: block, in: s)
+
+        case let .footnote(_, markerLength):
+            // A footnote's text, quieter than the note: its label stands in front, the
+            // brackets and colon tucked away until the caret is on the line.
+            let font = typo.small(0.88)
+            let marker = NSRange(location: first.location, length: min(markerLength, first.length))
+            let hide = hides(active: touches(first))
+            s.addAttributes([.font: font, .paragraphStyle: paragraph(after: round(typo.paragraphSpacing * 0.5))], range: r)
+            s.addAttribute(.foregroundColor, value: hide ? Palette.tertiaryText : Palette.syntax, range: marker)
+            if hide, marker.length >= 4 {
+                s.addAttribute(.mdHidden, value: true, range: NSRange(location: marker.location, length: 2))
+                s.addAttribute(.mdHidden, value: true, range: NSRange(location: NSMaxRange(marker) - 2, length: 2))
+                // The colon's place goes to a gap, so the label doesn't run into the text.
+                s.addAttribute(.kern, value: round(font.pointSize * 0.5), range: NSRange(location: NSMaxRange(marker) - 3, length: 1))
+            }
+            let content = NSRange(location: NSMaxRange(marker), length: first.length - marker.length)
+            inline(content, in: s, font: { self.typo.text(bold: $0, italic: $1, size: font.pointSize) }, color: Palette.secondaryText)
 
         case let .embed(ref):
             styleEmbed(ref, line: first, block: block, in: s)
@@ -1060,7 +1086,7 @@ final class MarkdownStyler {
             if lo < hi { for i in lo..<hi { traits[i] |= bit } }
         }
         var deferred: [(NSRange, [NSAttributedString.Key: Any])] = []
-        var scripts: [(NSRange, Bool)] = []
+        var scripts: [(range: NSRange, raise: CGFloat, scale: CGFloat)] = []
 
         for span in spans {
             // Selecting text to format it leaves the markers hidden; only a caret reveals them.
@@ -1101,6 +1127,21 @@ final class MarkdownStyler {
                 deferred.append((span.range, hide ? [.mdHidden: true] : [.foregroundColor: Palette.syntax]))
             case .tag:
                 deferred.append((span.range, [.foregroundColor: Palette.link, .mdInlineBox: InlineBox(.tag)]))
+            case let .footnoteRef(label):
+                // A small raised label, like a printed footnote mark; its text shows on hover.
+                scripts.append((span.content, 0.36, 0.72))
+                var attrs: [NSAttributedString.Key: Any] = [.foregroundColor: Palette.link]
+                if let note = footnotes[label] { attrs[.toolTip] = note }
+                deferred.append((span.range, attrs))
+                styleMarkers()
+            case .inlineFootnote:
+                // Smaller and dimmed, set a little apart from the sentence it annotates.
+                deferred.append((span.content, [.foregroundColor: Palette.secondaryText]))
+                scripts.append((span.content, 0, 0.86))
+                if hide, span.range.location > range.location {
+                    deferred.append((NSRange(location: span.range.location - 1, length: 1), [.kern: round(typo.size * 0.4)]))
+                }
+                styleMarkers()
             case let .html(tag):
                 switch tag {
                 case .br:
@@ -1112,7 +1153,7 @@ final class MarkdownStyler {
                         deferred.append((span.range, [.foregroundColor: Palette.syntax]))
                     }
                 case .sup, .sub:
-                    scripts.append((span.content, tag == .sup))
+                    scripts.append((span.content, tag == .sup ? 0.36 : -0.14, 0.72))
                 case .u:
                     deferred.append((span.content, [.underlineStyle: NSUnderlineStyle.single.rawValue]))
                 case .mark:
@@ -1177,12 +1218,13 @@ final class MarkdownStyler {
             }
         }
         for (r, attrs) in deferred { s.addAttributes(attrs, range: r) }
-        // Superscript and subscript: the text's own font, smaller, raised or lowered.
-        for (r, up) in scripts where r.length > 0 {
+        // Superscripts, subscripts and inline footnotes: the text's own font, smaller,
+        // raised or lowered.
+        for (r, raise, scale) in scripts where r.length > 0 {
             s.enumerateAttribute(.font, in: r) { value, run, _ in
                 guard let f = value as? NSFont else { return }
-                let small = NSFont(descriptor: f.fontDescriptor, size: round(f.pointSize * 0.72)) ?? f
-                s.addAttributes([.font: small, .baselineOffset: round(f.pointSize * (up ? 0.36 : -0.14))], range: run)
+                let small = NSFont(descriptor: f.fontDescriptor, size: round(f.pointSize * scale)) ?? f
+                s.addAttributes([.font: small, .baselineOffset: round(f.pointSize * raise)], range: run)
             }
         }
     }
