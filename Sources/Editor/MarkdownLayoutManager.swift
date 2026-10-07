@@ -69,6 +69,7 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         guard let storage = textStorage else { return action }
         let attrs = storage.attributes(at: charIndex, effectiveRange: nil)
         if attrs[.mdInlineMath] != nil { return .whitespace }
+        if attrs[.mdLineBreak] != nil { return .whitespace }
         if attrs[.mdHidden] != nil {
             let c = (storage.string as NSString).character(at: charIndex)
             if c != 0x0A && c != 0x0D { return .zeroAdvancement }
@@ -79,6 +80,13 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     func layoutManager(_ layoutManager: NSLayoutManager, boundingBoxForControlGlyphAt glyphIndex: Int,
                        for textContainer: NSTextContainer, proposedLineFragment proposedRect: NSRect,
                        glyphPosition: NSPoint, characterIndex charIndex: Int) -> NSRect {
+        if textStorage?.attribute(.mdLineBreak, at: charIndex, effectiveRange: nil) != nil {
+            // A `<br>`: a space as wide as the rest of the line, so what follows wraps
+            // onto the next one (the typesetter won't break a line at an arbitrary glyph).
+            let tail = (textStorage?.attribute(.paragraphStyle, at: charIndex, effectiveRange: nil) as? NSParagraphStyle)?.tailIndent ?? 0
+            let lineEnd = tail < 0 ? proposedRect.width + tail : (tail > 0 ? tail : proposedRect.width)
+            return NSRect(x: glyphPosition.x, y: glyphPosition.y - 1, width: max(0, lineEnd - glyphPosition.x - 1), height: 1)
+        }
         guard let math = textStorage?.attribute(.mdInlineMath, at: charIndex, effectiveRange: nil) as? InlineMath else {
             return .zero
         }
@@ -347,6 +355,15 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
                     let r = NSRect(x: origin.x + bounds.minX - 2, y: origin.y + top + 1, width: bounds.width + 4, height: bottom - top - 2)
                     (Palette.link.usingColorSpace(.sRGB) ?? Palette.link).withAlphaComponent(0.11).setFill()
                     NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2).fill()
+                case .key:
+                    // A keycap: a filled key with a firmer edge along its bottom.
+                    let r = NSRect(x: origin.x + bounds.minX - 4, y: origin.y + top, width: bounds.width + 8, height: bottom - top)
+                    Palette.fill.setFill()
+                    NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4).fill()
+                    let edge = NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: 4, yRadius: 4)
+                    edge.lineWidth = 1
+                    Palette.quoteBar.setStroke()
+                    edge.stroke()
                 default:
                     let r = NSRect(x: origin.x + bounds.minX - 3, y: origin.y + top, width: bounds.width + 6, height: bottom - top)
                     (box.kind == .code ? Palette.fill : Palette.highlight).setFill()

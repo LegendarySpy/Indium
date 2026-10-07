@@ -19,6 +19,8 @@ extension NSAttributedString.Key {
     static let mdPageBreak = NSAttributedString.Key("indium.pageBreak")
     /// Another note shown under an `![[Note]]` line, drawn in a bordered box.
     static let mdEmbed = NSAttributedString.Key("indium.embed")
+    /// A hidden `<br>` whose first character breaks the line.
+    static let mdLineBreak = NSAttributedString.Key("indium.lineBreak")
 }
 
 final class InlineMath: NSObject {
@@ -69,7 +71,7 @@ final class GroupDecoration: NSObject {
     init(_ kind: Kind) { self.kind = kind }
 }
 
-enum InlineBoxKind { case code, highlight, tag }
+enum InlineBoxKind { case code, highlight, tag, key }
 
 final class InlineBox: NSObject {
     let kind: InlineBoxKind
@@ -888,6 +890,7 @@ final class MarkdownStyler {
             if lo < hi { for i in lo..<hi { traits[i] |= bit } }
         }
         var deferred: [(NSRange, [NSAttributedString.Key: Any])] = []
+        var scripts: [(NSRange, Bool)] = []
 
         for span in spans {
             // Selecting text to format it leaves the markers hidden; only a caret reveals them.
@@ -928,6 +931,31 @@ final class MarkdownStyler {
                 deferred.append((span.range, hide ? [.mdHidden: true] : [.foregroundColor: Palette.syntax]))
             case .tag:
                 deferred.append((span.range, [.foregroundColor: Palette.link, .mdInlineBox: InlineBox(.tag)]))
+            case let .html(tag):
+                switch tag {
+                case .br:
+                    // The tag folds into a line break; with the caret on it, it shows as written.
+                    if hide {
+                        deferred.append((span.range, [.mdHidden: true]))
+                        deferred.append((NSRange(location: span.range.location, length: 1), [.mdLineBreak: true]))
+                    } else {
+                        deferred.append((span.range, [.foregroundColor: Palette.syntax]))
+                    }
+                case .sup, .sub:
+                    scripts.append((span.content, tag == .sup))
+                case .u:
+                    deferred.append((span.content, [.underlineStyle: NSUnderlineStyle.single.rawValue]))
+                case .mark:
+                    deferred.append((span.content, [.mdInlineBox: InlineBox(.highlight)]))
+                case .kbd:
+                    mark(span.content, 4)
+                    deferred.append((span.content, [.mdInlineBox: InlineBox(.key)]))
+                }
+                if tag != .br {
+                    let open = NSRange(location: span.range.location, length: span.content.location - span.range.location)
+                    let close = NSRange(location: NSMaxRange(span.content), length: NSMaxRange(span.range) - NSMaxRange(span.content))
+                    for m in [open, close] { deferred.append((m, hide ? [.mdHidden: true] : [.foregroundColor: Palette.syntax])) }
+                }
             case let .math(latex, display):
                 mark(span.range, 4)
                 let size = round(typo.size * (display ? 1.12 : 1.06))
@@ -979,6 +1007,14 @@ final class MarkdownStyler {
             }
         }
         for (r, attrs) in deferred { s.addAttributes(attrs, range: r) }
+        // Superscript and subscript: the text's own font, smaller, raised or lowered.
+        for (r, up) in scripts where r.length > 0 {
+            s.enumerateAttribute(.font, in: r) { value, run, _ in
+                guard let f = value as? NSFont else { return }
+                let small = NSFont(descriptor: f.fontDescriptor, size: round(f.pointSize * 0.72)) ?? f
+                s.addAttributes([.font: small, .baselineOffset: round(f.pointSize * (up ? 0.36 : -0.14))], range: run)
+            }
+        }
     }
 
     static func linkURL(_ raw: String) -> URL? {
