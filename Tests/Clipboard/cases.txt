@@ -1,0 +1,247 @@
+Tables through the pasteboard and back: `-IndiumClipboardCases Tests/Clipboard/cases.txt`.
+Format in DebugSnapshot.runClipboardCases. `⇥` is a tab, `␠` a space.
+
+### Indium whole table: bold, link, code, math, pipes, line break
+<<< table
+| Name     | Note                       |
+| -------- | -------------------------- |
+| **bold** | [link](https://example.com) |
+| `a|b` code | $\|x\|$ and $\\|v\\|$ |
+| a \| b   | first<br>second            |
+>>> grid
+[["Name","Note"],["**bold**","[link](https://example.com)"],["`a|b` code","$|x|$ and $\\|v\\|$"],["a | b","first\nsecond"]]
+>>> string
+| Name     | Note                       |
+| -------- | -------------------------- |
+| **bold** | [link](https://example.com) |
+| `a|b` code | $\|x\|$ and $\\|v\\|$ |
+| a \| b   | first<br>second            |
+>>> page
+| Name     | Note                       |
+| -------- | -------------------------- |
+| **bold** | [link](https://example.com) |
+| `a|b` code | $\|x\|$ and $\\|v\\|$ |
+| a \| b   | first<br>second            |
+>>> tsv
+Name⇥Note
+bold⇥link
+a|b code⇥$|x|$ and $\|v\|$
+a | b⇥"first
+second"
+>>> html~
+<th style="border:1px solid #ccc;padding:4px 8px;text-align:left">Name</th>
+<b>bold</b>
+<a href="https://example.com">link</a>
+<code>a|b</code> code
+a | b
+first<br>second
+
+### Indium whole table with its formulas (Copy Table)
+<<< table
+| Item | Qty | Total |
+| ---- | --- | ----- |
+| a    | 2   | 4     |
+| b    | 3   | 6     |
+<!-- TBLFM: $3=$2*2 -->
+>>> grid
+[["Item","Qty","Total"],["a","2","4"],["b","3","6"]]
+>>> string
+| Item | Qty | Total |
+| ---- | --- | ----- |
+| a    | 2   | 4     |
+| b    | 3   | 6     |
+<!-- TBLFM: $3=$2*2 -->
+>>> page
+| Item | Qty | Total |
+| ---- | --- | ----- |
+| a    | 2   | 4     |
+| b    | 3   | 6     |
+<!-- TBLFM: $3=$2*2 -->
+
+### Indium cell range: only those cells, no formulas
+<<< table 1,0,2,1
+| Item | Qty | Total |
+| ---- | --- | ----- |
+| **a** | 2   | 4     |
+| b \| c | 3   | 6     |
+<!-- TBLFM: $3=$2*2 -->
+>>> grid
+[["**a**","2"],["b | c","3"]]
+>>> noformulas
+>>> string
+a⇥2
+b | c⇥3
+>>> page
+| **a**  | 2   |
+| --- | --- |
+| b \| c | 3   |
+
+### Indium single cell keeps its Markdown
+<<< table 1,1,1,1
+| A | B |
+| - | - |
+| x | **y** [z](https://z.org) |
+>>> grid
+[["**y** [z](https://z.org)"]]
+>>> string
+y z
+>>> page
+nil
+>>> cell
+**y** [z](https://z.org)
+
+### Typed single bar in math is stored escaped and typeset as |x|
+<<< cell
+$|x|$
+>>> stored
+$\|x\|$
+>>> latex
+|x|
+
+### Typed LaTeX norm keeps its double bar
+<<< cell
+$\|x\|$
+>>> stored
+$\\|x\\|$
+>>> latex
+\|x\|
+
+### Typed pipe and line break
+<<< cell
+a|b
+second line
+>>> stored
+a\|b<br>second line
+
+### Numbers TSV: quoted spaces, tabs, line breaks, quotes
+<<< tsv
+Name⇥Note
+"  A  "⇥"tab⇥inside"
+"line1
+line2"⇥"say ""hi"""
+␠lead⇥trail␠
+>>> grid
+[["Name","Note"],["  A  ","tab\tinside"],["line1\nline2","say \"hi\""],[" lead","trail "]]
+>>> page
+| Name           | Note       |
+| --- | --- |
+|   A            | tab	inside |
+| line1<br>line2 | say "hi"   |
+|  lead          | trail      |
+
+### Excel plain text: empty cells and ragged rows
+<<< string
+a⇥⇥c
+d
+⇥e
+>>> grid
+[["a","","c"],["d","",""],["","e",""]]
+
+### Markdown table as text: Obsidian line breaks, escaped pipes, ragged rows
+<<< string
+| a | b<br/>c | |
+| - | - | - |
+| x \| y | | z |
+| only |
+>>> grid
+[["a","b\nc",""],["x | y","","z"],["only","",""]]
+>>> page
+| a | b<br/>c | |
+| - | - | - |
+| x \| y | | z |
+| only |
+
+### Table copied from the page with its formulas pastes as it was
+<<< string
+
+| Q | A |
+| - | - |
+| x | 2 |
+<!-- TBLFM: @2$2=1+1 -->
+
+>>> grid
+[["Q","A"],["x","2"]]
+>>> page
+| Q | A |
+| - | - |
+| x | 2 |
+<!-- TBLFM: @2$2=1+1 -->
+
+### Safari: a table copied from a web page (HTML only)
+<<< html
+<meta charset="utf-8"><table class="wikitable sortable jquery-tablesorter" style="box-sizing: inherit; background-color: rgb(248, 249, 250); color: rgb(32, 33, 34); margin: 1em 0px; border: 1px solid rgb(162, 169, 177); border-collapse: collapse; font-family: sans-serif; font-size: 14px;"><thead style="box-sizing: inherit;"><tr style="box-sizing: inherit;"><th class="headerSort" tabindex="0" role="columnheader button" title="Sort ascending" style="box-sizing: inherit; border: 1px solid rgb(162, 169, 177); padding: 0.2em 21px 0.2em 0.4em;">Element</th><th class="headerSort" tabindex="0" role="columnheader button" title="Sort ascending" style="box-sizing: inherit; border: 1px solid rgb(162, 169, 177);">Symbol</th><th style="box-sizing: inherit;">Note</th></tr></thead><tbody style="box-sizing: inherit;"><tr style="box-sizing: inherit;"><td style="box-sizing: inherit; border: 1px solid rgb(162, 169, 177);"><a href="https://en.wikipedia.org/wiki/Copper" title="Copper" style="box-sizing: inherit; color: rgb(51, 102, 204);">Copper</a><sup id="cite_ref-1" class="reference" style="box-sizing: inherit;"><a href="#cite_note-1" style="box-sizing: inherit;">[1]</a></sup></td><td style="box-sizing: inherit;"><b style="box-sizing: inherit;">Cu</b></td><td style="box-sizing: inherit;">Used in <i>wires</i>,<br style="box-sizing: inherit;">pipes &amp; coins</td></tr><tr style="box-sizing: inherit;"><td style="box-sizing: inherit;">Iron</td><td style="box-sizing: inherit;"><code style="box-sizing: inherit;">Fe</code></td><td style="box-sizing: inherit;">a | b&nbsp;</td></tr></tbody></table>
+>>> grid
+[["Element","Symbol","Note"],["[Copper](https://en.wikipedia.org/wiki/Copper)[1]","**Cu**","Used in *wires*,\npipes & coins"],["Iron","`Fe`","a | b"]]
+>>> page
+| Element                                           | Symbol | Note                              |
+| --- | --- | --- |
+| [Copper](https://en.wikipedia.org/wiki/Copper)[1] | **Cu** | Used in *wires*,<br>pipes & coins |
+| Iron                                              | `Fe`   | a \| b                            |
+
+### Chrome: fragment markers, spaces inside bold, spans, colspan
+<<< html
+<html>
+<body>
+<!--StartFragment--><table>
+  <tr><th colspan="2">Both</th><th>Third</th></tr>
+  <tr>
+    <td><strong> spaced bold </strong>and <em>em</em></td>
+    <td><span style="font-weight:700;font-style:italic">styled</span></td>
+    <td><p>para one</p><p>para two</p></td>
+  </tr>
+</table><!--EndFragment-->
+</body>
+</html>
+>>> grid
+[["Both","","Third"],["**spaced bold** and *em*","***styled***","para one\npara two"]]
+
+### Excel: head, styles, unquoted attributes, same-cell line break
+<<< html
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
+<head><meta http-equiv=Content-Type content="text/html; charset=utf-8"><style>
+<!--table {mso-displayed-decimal-separator:"\.";}
+td {padding-top:1px; mso-ignore:padding;}
+.xl65 {white-space:normal;}
+-->
+</style></head>
+<body link="#0563C1" vlink="#954F72">
+<table border=0 cellpadding=0 cellspacing=0 width=128 style='border-collapse:collapse;width:96pt'>
+<!--StartFragment-->
+ <col width=64 span=2 style='width:48pt'>
+ <tr height=20 style='height:15.0pt'>
+  <td height=20 width=64 style='height:15.0pt;width:48pt'>Mass</td>
+  <td class=xl65 width=64 style='width:48pt'>Line one<br style='mso-data-placement:same-cell;'>Line two</td>
+ </tr>
+ <tr height=20 style='height:15.0pt'>
+  <td height=20 align=right style='height:15.0pt'>1.25</td>
+  <td></td>
+ </tr>
+<!--EndFragment-->
+</table>
+</body>
+</html>
+>>> grid
+[["Mass","Line one\nLine two"],["1.25",""]]
+
+### Google Sheets HTML
+<<< html
+<google-sheets-html-origin><style type="text/css"><!--td {border: 1px solid #cccccc;}br {mso-data-placement:same-cell;}--></style><table xmlns="http://www.w3.org/1999/xhtml" cellspacing="0" cellpadding="0" dir="ltr" border="1" style="table-layout:fixed;font-size:10pt;font-family:Arial;width:0px;border-collapse:collapse;border:none" data-sheets-root="1"><colgroup><col width="100"/><col width="100"/></colgroup><tbody><tr style="height:21px;"><td style="overflow:hidden;padding:2px 3px 2px 3px;vertical-align:bottom;">x</td><td style="overflow:hidden;padding:2px 3px 2px 3px;vertical-align:bottom;font-weight:bold;" data-sheets-value="{&quot;1&quot;:3,&quot;3&quot;:4}">4</td></tr></tbody></table>
+>>> grid
+[["x","4"]]
+
+### A web page with a table in it is text, not cells
+<<< html
+<p>Intro text</p><table><tr><td>a</td><td>b</td></tr></table><p>More</p>
+>>> grid
+null
+>>> page
+nil
+
+### Web page HTML next to its plain text: the HTML's formatting wins
+<<< string
+Name⇥Link
+x⇥site
+<<< html
+<table><tr><td>Name</td><td>Link</td></tr><tr><td><b>x</b></td><td><a href="https://site.org">site</a></td></tr></table>
+>>> grid
+[["Name","Link"],["**x**","[site](https://site.org)"]]
