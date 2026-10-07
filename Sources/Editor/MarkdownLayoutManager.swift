@@ -287,9 +287,17 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
                 let baseline = rect.minY + self.location(forGlyphAt: part.location).y
                 let top = baseline - font.ascender - 1.5
                 let bottom = baseline - font.descender + 1.5
-                let r = NSRect(x: origin.x + bounds.minX - 3, y: origin.y + top, width: bounds.width + 6, height: bottom - top)
-                (box.kind == .code ? Palette.fill : Palette.highlight).setFill()
-                NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4).fill()
+                switch box.kind {
+                case .tag:
+                    // A soft pill, tinted like links but quieter.
+                    let r = NSRect(x: origin.x + bounds.minX - 2, y: origin.y + top + 1, width: bounds.width + 4, height: bottom - top - 2)
+                    (Palette.link.usingColorSpace(.sRGB) ?? Palette.link).withAlphaComponent(0.11).setFill()
+                    NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2).fill()
+                default:
+                    let r = NSRect(x: origin.x + bounds.minX - 3, y: origin.y + top, width: bounds.width + 6, height: bottom - top)
+                    (box.kind == .code ? Palette.fill : Palette.highlight).setFill()
+                    NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4).fill()
+                }
             }
         }
     }

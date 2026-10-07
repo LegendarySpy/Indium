@@ -67,7 +67,7 @@ final class GroupDecoration: NSObject {
     init(_ kind: Kind) { self.kind = kind }
 }
 
-enum InlineBoxKind { case code, highlight }
+enum InlineBoxKind { case code, highlight, tag }
 
 final class InlineBox: NSObject {
     let kind: InlineBoxKind
@@ -831,6 +831,8 @@ final class MarkdownStyler {
                 styleMarkers()
             case .comment:
                 deferred.append((span.range, hide ? [.mdHidden: true] : [.foregroundColor: Palette.syntax]))
+            case .tag:
+                deferred.append((span.range, [.foregroundColor: Palette.link, .mdInlineBox: InlineBox(.tag)]))
             case let .math(latex, display):
                 mark(span.range, 4)
                 let size = round(typo.size * (display ? 1.12 : 1.06))
