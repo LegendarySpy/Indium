@@ -20,6 +20,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var onOpenNote: ((URL) -> Void)?
     /// The note's file disappeared and there were no unsaved edits.
     var onNoteMissing: (() -> Void)?
+    /// A local image couldn't be read, and the sandbox may be why (see `image(for:)`).
+    var onImageNeedsAccess: (() -> Void)?
     /// Title (file name) changed.
     var onTitleChange: (() -> Void)?
 
@@ -728,10 +730,22 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     // MARK: Loading
 
-    func load(_ newNote: Note?) {
-        recalculateEditedTable()
-        commitFrontmatter()
-        saveNow()
+    /// Shows `newNote` in place of the current one. If the current note's edits can't be
+    /// saved, it stays (the failed-save sheet says why) and this returns false, unless
+    /// `discardingEdits`, for when you've chosen to let them go.
+    @discardableResult
+    func load(_ newNote: Note?, discardingEdits: Bool = false) -> Bool {
+        if !discardingEdits {
+            // Pending table results and frontmatter land in the text before it's saved.
+            recalculateEditedTable()
+            commitFrontmatter()
+            if !canLeaveNote() { return false }
+        }
+        saveTimer?.invalidate()
+        saveTimer = nil
+        saveFailure = nil
+        saveFailureAcknowledged = false
+        firstUnsavedEdit = nil
         if let old = note {
             old.selection = textView.selectedRange()
             old.scrollOffset = scrollView.contentView.bounds.origin.y
@@ -760,6 +774,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         completeLayoutSoon()
         textView.pageStarts = []
         updatePageLines(delay: 0.1)
+        return true
     }
 
     private func setText(_ text: String) {
@@ -788,25 +803,110 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let since = firstUnsavedEdit ?? Date()
         firstUnsavedEdit = since
         let overdue = Date().timeIntervalSince(since) > 2
-        saveTimer = Timer.scheduledTimer(withTimeInterval: overdue ? 0 : 0.6, repeats: false) { [weak self] _ in self?.saveNow() }
+        saveTimer = Timer.scheduledTimer(withTimeInterval: overdue ? 0 : 0.6, repeats: false) { [weak self] _ in self?.saveNow(interactive: false) }
     }
 
-    func saveNow() {
+    /// Why the last save of this note failed; nil once it's saved (or the edits are let go).
+    private(set) var saveFailure: Error?
+    /// You chose Keep Editing after a failed save: autosave stops asking until you next
+    /// save, switch, close or quit.
+    private var saveFailureAcknowledged = false
+
+    /// Writes unsaved edits. Returns true when the note is safely on disk (or there was
+    /// nothing to write); false when the write failed or the disk version conflicts, in
+    /// which case you've been told and the edits are still here.
+    /// `interactive: false` (autosave) doesn't ask again after you chose Keep Editing.
+    @discardableResult
+    func saveNow(interactive: Bool = true) -> Bool {
         saveTimer?.invalidate()
         saveTimer = nil
-        guard let note, !note.isTemporary, hasUnsavedEdits, !resolvingConflict else { return }
+        guard let note, !note.isTemporary, hasUnsavedEdits else { return true }
+        guard !resolvingConflict else { return false }
         if case let .changed(disk) = note.checkDisk() {
             resolveConflict(disk: disk)
-            return
+            return false
         }
         do {
             try note.write(storage.string)
             hasUnsavedEdits = false
             firstUnsavedEdit = nil
+            saveFailure = nil
+            saveFailureAcknowledged = false
             if let url = note.url, let workspace { NoteIcons.shared.suggest(for: url, text: storage.string, in: workspace) }
+            return true
         } catch {
-            showError(error)
+            saveFailure = error
+            if interactive || !saveFailureAcknowledged { presentSaveFailure(error) }
+            return false
         }
+    }
+
+    /// Before this note goes away (another note, a closing window, another folder): true
+    /// when it's saved. Otherwise the note stays, with a sheet offering to try again,
+    /// save a copy elsewhere or discard the edits.
+    func canLeaveNote() -> Bool {
+        saveNow()
+    }
+
+    /// The failed-save sheet. Nothing is lost by dismissing it: the edits stay in the
+    /// window until they're saved, copied elsewhere or explicitly discarded.
+    private func presentSaveFailure(_ error: Error) {
+        guard let note, let window = textView.window, window.attachedSheet == nil else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "“\(note.title)” couldn't be saved."
+        alert.informativeText = (error as NSError).localizedDescription + "\n\nYour changes are still here. Try again, save a copy somewhere else, or discard them."
+        alert.addButton(withTitle: "Try Again")
+        alert.addButton(withTitle: "Save a Copy…")
+        alert.addButton(withTitle: "Keep Editing")
+        alert.addButton(withTitle: "Discard Changes")
+        alert.buttons[3].hasDestructiveAction = true
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, self.note === note else { return }
+            switch response {
+            case .alertFirstButtonReturn:
+                DispatchQueue.main.async { self.saveNow() }
+            case .alertSecondButtonReturn:
+                DispatchQueue.main.async { self.saveCopyAfterFailure() }
+            case .alertThirdButtonReturn:
+                self.saveFailureAcknowledged = true
+            default:
+                self.discardUnsavedEdits()
+            }
+        }
+    }
+
+    /// Puts the edits in a file you pick, then lets this note go back to its disk version
+    /// when you leave it (the copy holds your changes).
+    private func saveCopyAfterFailure() {
+        guard let note, let window = textView.window else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType("net.daringfireball.markdown") ?? .plainText]
+        panel.nameFieldStringValue = note.title + " (copy).md"
+        panel.canCreateDirectories = true
+        panel.message = "Save your unsaved changes to “\(note.title)” as a new file."
+        let text = storage.string
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            do {
+                try Note.safeWrite(Data(text.utf8), to: url)
+                if self.note === note, self.storage.string == text { self.discardUnsavedEdits() }
+            } catch {
+                NSAlert(error: error).beginSheetModal(for: window)
+            }
+        }
+    }
+
+    /// Lets go of edits that couldn't be saved: the window shows the note as it is on disk.
+    func discardUnsavedEdits() {
+        guard let note, !note.isTemporary else { return }
+        saveTimer?.invalidate()
+        saveTimer = nil
+        saveFailure = nil
+        saveFailureAcknowledged = false
+        firstUnsavedEdit = nil
+        let disk = (note.url.flatMap { try? Note.read($0) }) ?? note.savedText
+        reload(from: disk)
     }
 
     private func showError(_ error: Error) {
@@ -939,11 +1039,18 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         alert.beginSheetModal(for: window) { [weak self] response in
             guard let self else { return }
             self.resolvingConflict = false
+            // The window moved on to another note meanwhile (only possible when edits were
+            // explicitly let go): this answer belongs to a note that's no longer here, and
+            // its edits are gone with it, so neither choice may touch the note now showing.
+            guard self.note === note else { return }
             if response == .alertFirstButtonReturn {
                 do {
                     try note.write(self.storage.string)
                     self.hasUnsavedEdits = false
-                } catch { self.showError(error) }
+                } catch {
+                    self.saveFailure = error
+                    DispatchQueue.main.async { self.presentSaveFailure(error) }
+                }
             } else {
                 self.reload(from: disk)
             }
@@ -1332,9 +1439,13 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         if ref.source.hasPrefix("http://") || ref.source.hasPrefix("https://") {
             return URL(string: ref.source).flatMap { ImageCache.shared.remote($0) }
         }
-        if let url = workspace?.resolveImage(ref, from: note?.url) ?? noteRelative(key) {
-            return ImageCache.shared.image(at: url)
+        if let url = workspace?.resolveImage(ref, from: note?.url) ?? noteRelative(key),
+           let image = ImageCache.shared.image(at: url) {
+            return image
         }
+        // A note opened on its own in the App Store build may read only itself, so images
+        // beside it can't be read until you grant its folder (the window offers that).
+        if FolderAccess.isSandboxed, let url = note?.url, workspace?.contains(url) != true { onImageNeedsAccess?() }
         return nil
     }
 

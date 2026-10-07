@@ -15,6 +15,10 @@ final class Note {
     /// Images pasted into a temporary note, keyed by the path used in the Markdown.
     var memoryImages: [String: Data] = [:]
 
+    /// Keeps the note's folder (or the file itself) reachable while the note is open,
+    /// even after the window's workspace has moved on. See `FolderAccess`.
+    var access: FolderAccess.Lease?
+
     var isTemporary: Bool { url == nil }
 
     var title: String {
@@ -75,8 +79,14 @@ final class Note {
     func write(_ text: String) throws {
         guard let url else { return }
         if text == savedText, FileManager.default.fileExists(atPath: url.path) { return }
+        #if DEBUG
+        // `-IndiumFailSaves YES`: every note save fails, to exercise the failed-save paths.
+        if UserDefaults.standard.bool(forKey: "IndiumFailSaves") {
+            throw CocoaError(.fileWriteNoPermission, userInfo: [NSFilePathErrorKey: url.path])
+        }
+        #endif
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(text.utf8).write(to: url, options: .atomic)
+        try Note.safeWrite(Data(text.utf8), to: url)
         savedText = text
         diskDate = Note.modificationDate(url)
     }
@@ -89,10 +99,47 @@ final class Note {
 
     /// A temporary note being saved for the first time.
     func becomePermanent(at newURL: URL, text: String) throws {
+        try Note.safeWrite(Data(text.utf8), to: newURL)
         url = newURL
-        try Data(text.utf8).write(to: newURL, options: .atomic)
         savedText = text
         diskDate = Note.modificationDate(newURL)
         memoryImages = [:]
+    }
+
+    // MARK: Safe writing
+
+    /// Replaces the file's contents without ever leaving it half written: coordinated
+    /// with other apps (iCloud Drive, Obsidian, sync tools) through `NSFileCoordinator`,
+    /// and written to a temporary file that is then swapped in.
+    ///
+    /// The usual temporary file lives beside the note. When Indium may only touch the
+    /// note itself (a single file opened from Finder in the App Store build), it can't
+    /// create that file, so the new contents go to the system's replacement folder on
+    /// the same volume and `replaceItemAt` swaps them in. There is deliberately no
+    /// in-place fallback: if neither works, the error reaches you and the file on disk
+    /// stays exactly as it was.
+    static func safeWrite(_ data: Data, to url: URL) throws {
+        var coordinationError: NSError?
+        var writeError: Error?
+        NSFileCoordinator(filePresenter: nil).coordinate(writingItemAt: url, options: .forReplacing, error: &coordinationError) { target in
+            do {
+                try data.write(to: target, options: .atomic)
+            } catch where FolderAccess.isPermissionError(error) && FileManager.default.fileExists(atPath: target.path) {
+                FolderAccess.log("save beside the note refused; replacing via the system's replacement folder: \(target.path)")
+                do { try replaceViaTemporaryFile(data, at: target) } catch { writeError = error }
+            } catch {
+                writeError = error
+            }
+        }
+        if let error = coordinationError ?? writeError { throw error }
+    }
+
+    private static func replaceViaTemporaryFile(_ data: Data, at url: URL) throws {
+        let fm = FileManager.default
+        let folder = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: url, create: true)
+        defer { try? fm.removeItem(at: folder) }
+        let temp = folder.appendingPathComponent(url.lastPathComponent)
+        try data.write(to: temp)
+        _ = try fm.replaceItemAt(url, withItemAt: temp)
     }
 }

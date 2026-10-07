@@ -4,6 +4,36 @@ options:
   deploymentTarget:
     macOS: "26.0"
   createIntermediateGroups: true
+# Debug-AppStore / Release-AppStore build the Mac App Store target (IndiumMAS) into their
+# own products folder, so it never overwrites the direct-download Indium.app.
+configs:
+  Debug: debug
+  Release: release
+  Debug-AppStore: debug
+  Release-AppStore: release
+schemes:
+  Indium:
+    build:
+      targets:
+        Indium: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+  IndiumMAS:
+    build:
+      targets:
+        IndiumMAS: all
+    run:
+      config: Debug-AppStore
+    test:
+      config: Debug-AppStore
+    profile:
+      config: Release-AppStore
+    analyze:
+      config: Debug-AppStore
+    archive:
+      config: Release-AppStore
 packages:
   SwiftMath:
     path: Vendor/SwiftMath
@@ -15,7 +45,8 @@ targets:
     type: application
     platform: macOS
     sources:
-      - Sources
+      - path: Sources
+        excludes: ["**/README.md"]
     dependencies:
       - package: SwiftMath
       - package: Sparkle
@@ -58,6 +89,8 @@ targets:
       configs:
         # Test builds keep their own settings, so they never touch the installed app's.
         Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: dev.garon.Indium.debug
+        Debug-AppStore:
           PRODUCT_BUNDLE_IDENTIFIER: dev.garon.Indium.debug
   IndiumQuickLook:
     type: app-extension
@@ -106,3 +139,152 @@ targets:
       configs:
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: dev.garon.Indium.debug.QuickLook
+        Debug-AppStore:
+          PRODUCT_BUNDLE_IDENTIFIER: dev.garon.Indium.debug.QuickLook
+
+  # Mac App Store build: the same app without Sparkle (the store updates it), sandboxed,
+  # reaching your notes through security-scoped bookmarks. Products go to their own
+  # `<config>-AppStore` folder so they never overwrite the direct-download Indium.app.
+  #
+  # Bundle id: Debug builds use `dev.garon.Indium.mastest` so a local sandboxed run gets
+  # its own container and never migrates the real app's preferences. Only Release uses
+  # the shipping id `dev.garon.Indium`. Set DEVELOPMENT_TEAM (and switch to automatic or
+  # App Store signing) before archiving; the App Group id is derived from the team.
+  IndiumMAS:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+        excludes: ["**/README.md", "Info.plist"]
+      - path: AppStore/PrivacyInfo.xcprivacy
+        buildPhase: resources
+    dependencies:
+      - package: SwiftMath
+      - target: IndiumMASQuickLook
+    info:
+      path: AppStore/Info.plist
+      properties:
+        CFBundleDisplayName: Indium
+        CFBundleName: Indium
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSApplicationCategoryType: public.app-category.productivity
+        LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
+        NSHumanReadableCopyright: "Plain Markdown, beautifully."
+        NSPrincipalClass: NSApplication
+        IndiumAppGroup: "$(INDIUM_APP_GROUP)"
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Folder
+            CFBundleTypeRole: Editor
+            LSItemContentTypes: [public.folder]
+            LSHandlerRank: Alternate
+          - CFBundleTypeName: Markdown Document
+            CFBundleTypeRole: Editor
+            LSItemContentTypes: [net.daringfireball.markdown]
+            LSHandlerRank: Alternate
+    preBuildScripts:
+      - name: Check configuration
+        basedOnDependencyAnalysis: false
+        script: |
+          if [ "$INDIUM_WRONG_CONFIGURATION" = YES ]; then
+            echo "error: Build IndiumMAS with -configuration Debug-AppStore or Release-AppStore (it would overwrite the direct-download Indium.app)."
+            exit 1
+          fi
+    postBuildScripts:
+      # Moves icons.json from ~/Library/Application Support/Indium into the container on
+      # the first sandboxed launch. Only Release ships it: a test build must never pull
+      # the real app's files into a test container.
+      - name: Container migration manifest
+        basedOnDependencyAnalysis: false
+        script: |
+          dest="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/container-migration.plist"
+          rm -f "$dest"
+          src="$INDIUM_CONTAINER_MIGRATION"
+          case "$src" in ""|/*) ;; *) src="$SRCROOT/$src" ;; esac
+          if [ -n "$src" ]; then cp "$src" "$dest"; fi
+    settings:
+      base:
+        PRODUCT_NAME: Indium
+        PRODUCT_MODULE_NAME: Indium
+        PRODUCT_BUNDLE_IDENTIFIER: "$(INDIUM_MAS_BUNDLE_ID)"
+        INDIUM_MAS_BUNDLE_ID: dev.garon.Indium
+        INDIUM_APP_GROUP: "$(TeamIdentifierPrefix)dev.garon.Indium"
+        INDIUM_CONTAINER_MIGRATION: AppStore/container-migration.plist
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) APPSTORE"
+        CODE_SIGN_ENTITLEMENTS: AppStore/Indium.entitlements
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        ENABLE_HARDENED_RUNTIME: YES
+        COMBINE_HIDPI_IMAGES: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        Debug-AppStore:
+          INDIUM_MAS_BUNDLE_ID: dev.garon.Indium.mastest
+          # No App Group without a real team (an unprovisioned group prompts or fails).
+          INDIUM_APP_GROUP: ""
+          INDIUM_CONTAINER_MIGRATION: ""
+          CODE_SIGN_ENTITLEMENTS: AppStore/Indium-Debug.entitlements
+        # No debugger entitlement in what gets archived for the store.
+        Release-AppStore:
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+        # Built in the plain configurations it would land on top of the direct Indium.app.
+        Debug:
+          INDIUM_WRONG_CONFIGURATION: YES
+        Release:
+          INDIUM_WRONG_CONFIGURATION: YES
+  IndiumMASQuickLook:
+    type: app-extension
+    platform: macOS
+    sources:
+      - QuickLook/PreviewViewController.swift
+      - Sources/App/Settings.swift
+      - Sources/App/Theme.swift
+      - Sources/Editor/MarkdownScanner.swift
+      - Sources/Editor/MarkdownStyler.swift
+      - Sources/Editor/MarkdownLayoutManager.swift
+      - Sources/Editor/MathRenderer.swift
+      - Sources/Editor/TableRender.swift
+      - path: AppStore/QuickLook/PrivacyInfo.xcprivacy
+        buildPhase: resources
+    dependencies:
+      - package: SwiftMath
+      - sdk: QuickLookUI.framework
+    info:
+      path: AppStore/QuickLook/Info.plist
+      properties:
+        CFBundleDisplayName: Indium
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
+        IndiumAppGroup: "$(INDIUM_APP_GROUP)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.quicklook.preview
+          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).PreviewViewController"
+          NSExtensionAttributes:
+            QLSupportedContentTypes: [net.daringfireball.markdown]
+            QLSupportsSearchableItems: false
+    settings:
+      base:
+        PRODUCT_NAME: IndiumQuickLook
+        PRODUCT_MODULE_NAME: IndiumQuickLook
+        PRODUCT_BUNDLE_IDENTIFIER: "$(INDIUM_MAS_BUNDLE_ID).QuickLook"
+        INDIUM_MAS_BUNDLE_ID: dev.garon.Indium
+        INDIUM_APP_GROUP: "$(TeamIdentifierPrefix)dev.garon.Indium"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) APPSTORE"
+        CODE_SIGN_ENTITLEMENTS: AppStore/QuickLook/QuickLook.entitlements
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        ENABLE_HARDENED_RUNTIME: YES
+      configs:
+        Debug-AppStore:
+          INDIUM_MAS_BUNDLE_ID: dev.garon.Indium.mastest
+          INDIUM_APP_GROUP: ""
+          CODE_SIGN_ENTITLEMENTS: AppStore/QuickLook/QuickLook-Debug.entitlements
+        Release-AppStore:
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
