@@ -574,6 +574,15 @@ final class MarkdownStyler {
 
         case let .image(ref):
             styleImage(ref, line: first, block: block, in: s)
+
+        case .comment:
+            // Notes to self: gone from the page (and from print) until the caret is in them.
+            let content = NSRange(location: r.location, length: max(0, NSMaxRange(lineRanges.last!) - r.location))
+            if hides(active: touches(content)) {
+                for line in lineRanges { collapse(lineWithTerminator(line), in: s) }
+            } else {
+                s.addAttribute(.foregroundColor, value: Palette.syntax, range: r)
+            }
         }
     }
 
@@ -820,6 +829,8 @@ final class MarkdownStyler {
                 styleMarkers()
             case .escape:
                 styleMarkers()
+            case .comment:
+                deferred.append((span.range, hide ? [.mdHidden: true] : [.foregroundColor: Palette.syntax]))
             case let .math(latex, display):
                 mark(span.range, 4)
                 let size = round(typo.size * (display ? 1.12 : 1.06))
