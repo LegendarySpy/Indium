@@ -79,8 +79,14 @@ final class EditorTextView: NSTextView {
     override func mouseMoved(with event: NSEvent) {
         editor?.hoverTables(at: convert(event.locationInWindow, from: nil))
         editor?.hoverTableGrip(at: convert(event.locationInWindow, from: nil))
+        editor?.updateCellTips()
         if pointerIsOverChrome(event) {
             NSCursor.arrow.set()
+            return
+        }
+        // A table's formula caption is a button: its list, or Recalculate.
+        if editor?.caption(at: convert(event.locationInWindow, from: nil)) != nil {
+            NSCursor.pointingHand.set()
             return
         }
         super.mouseMoved(with: event)
@@ -95,6 +101,10 @@ final class EditorTextView: NSTextView {
     override func cursorUpdate(with event: NSEvent) {
         if pointerIsOverChrome(event) {
             NSCursor.arrow.set()
+            return
+        }
+        if editor?.caption(at: convert(event.locationInWindow, from: nil)) != nil {
+            NSCursor.pointingHand.set()
             return
         }
         super.cursorUpdate(with: event)
