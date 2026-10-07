@@ -201,7 +201,10 @@ final class NoteIcons {
     func suggest(for url: URL, text: String, in workspace: Workspace, force: Bool = false) -> Suggestion {
         let key = Self.key(url)
         if let own = Self.frontmatterIcon(text) {
-            if icon(for: url, in: workspace) != own { set(own, for: url, in: workspace) }
+            // The note's own icon wins even when it matches the stored one: a suggestion
+            // still running must not land on top of it later.
+            cancelSuggestion(for: key)
+            if icon(for: url, in: workspace) != own { save(own, for: url, in: workspace) }
             if force { setState(.failed(.frontmatter(own)), for: key) }
             return suggestion(for: key)
         }
