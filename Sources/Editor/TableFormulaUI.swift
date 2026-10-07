@@ -138,6 +138,8 @@ enum TableFormulaUI {
             case let .unit(n, u): return words(n).map { "\($0) \(u)" }
             case let .binary(op, a, b):
                 let symbol = ["-": "−", "*": "×", "/": "÷"][String(op)] ?? String(op)
+                // `(@9*1);%.1f` only rounds a copy; say so without the "× 1".
+                if case .number("1") = b, "*/".contains(op) { return words(a, top: top) }
                 guard let a = words(a), let b = words(b) else { return nil }
                 return "\(a) \(symbol) \(b)"
             case let .implicitProduct(a, b):
