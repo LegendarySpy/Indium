@@ -19,6 +19,8 @@ extension NSAttributedString.Key {
     static let mdPageBreak = NSAttributedString.Key("indium.pageBreak")
     /// Another note shown under an `![[Note]]` line, drawn in a bordered box.
     static let mdEmbed = NSAttributedString.Key("indium.embed")
+    /// A callout's icon, default title and fold chevron, on its first character.
+    static let mdCallout = NSAttributedString.Key("indium.callout")
     /// A hidden `<br>` whose first character breaks the line.
     static let mdLineBreak = NSAttributedString.Key("indium.lineBreak")
 }
@@ -66,9 +68,74 @@ final class BlockDecoration: NSObject {
 }
 
 final class GroupDecoration: NSObject {
-    enum Kind { case code, quote(depth: Int) }
+    enum Kind {
+        case code, quote(depth: Int)
+        /// A line of a callout of this type (as written). Lines of one callout compare
+        /// equal, so the box is found as one run however its lines were styled.
+        case callout(String)
+    }
     let kind: Kind
     init(_ kind: Kind) { self.kind = kind }
+
+    override func isEqual(_ object: Any?) -> Bool {
+        if case let .callout(a) = kind, let other = object as? GroupDecoration, case let .callout(b) = other.kind { return a == b }
+        return super.isEqual(object)
+    }
+    override var hash: Int {
+        if case let .callout(type) = kind { return type.hashValue }
+        return super.hash
+    }
+}
+
+/// What a callout's first line shows besides its text: the type's icon, the type's
+/// name when no title is written, and a chevron when it folds.
+final class CalloutMark: NSObject {
+    let look: CalloutLook
+    let defaultTitle: String?
+    let font: NSFont
+    let foldable: Bool
+    let folded: Bool
+    init(look: CalloutLook, defaultTitle: String?, font: NSFont, foldable: Bool, folded: Bool) {
+        self.look = look
+        self.defaultTitle = defaultTitle
+        self.font = font
+        self.foldable = foldable
+        self.folded = folded
+    }
+}
+
+/// Obsidian's callout types and aliases, each with a tint and an icon.
+struct CalloutLook {
+    let title: String
+    let symbol: String
+    let color: NSColor
+
+    static func of(_ type: String) -> CalloutLook {
+        let blue = NSColor.dynamic(light: NSColor(hex: 0x3F72B5), dark: NSColor(hex: 0x7EA8DE))
+        let cyan = NSColor.dynamic(light: NSColor(hex: 0x23919C), dark: NSColor(hex: 0x5EC3CC))
+        let green = NSColor.dynamic(light: NSColor(hex: 0x3A8F55), dark: NSColor(hex: 0x6CC487))
+        let orange = NSColor.dynamic(light: NSColor(hex: 0xC27722), dark: NSColor(hex: 0xE2A35C))
+        let red = NSColor.dynamic(light: NSColor(hex: 0xBF4B44), dark: NSColor(hex: 0xE5807A))
+        let purple = NSColor.dynamic(light: NSColor(hex: 0x7F5BB8), dark: NSColor(hex: 0xB394E3))
+        let gray = NSColor.dynamic(light: NSColor(hex: 0x7D7872), dark: NSColor(hex: 0xA8A39D))
+        let name = type.prefix(1).uppercased() + type.dropFirst()
+        switch type {
+        case "abstract", "summary", "tldr": return CalloutLook(title: name, symbol: "list.bullet.clipboard", color: cyan)
+        case "info": return CalloutLook(title: name, symbol: "info.circle", color: blue)
+        case "todo": return CalloutLook(title: name, symbol: "checkmark.circle", color: blue)
+        case "tip", "hint", "important": return CalloutLook(title: name, symbol: "flame", color: cyan)
+        case "success", "check", "done": return CalloutLook(title: name, symbol: "checkmark", color: green)
+        case "question", "help", "faq": return CalloutLook(title: name, symbol: "questionmark.circle", color: orange)
+        case "warning", "caution", "attention": return CalloutLook(title: name, symbol: "exclamationmark.triangle", color: orange)
+        case "failure", "fail", "missing": return CalloutLook(title: name, symbol: "xmark", color: red)
+        case "danger", "error": return CalloutLook(title: name, symbol: "bolt", color: red)
+        case "bug": return CalloutLook(title: name, symbol: "ladybug", color: red)
+        case "example": return CalloutLook(title: name, symbol: "list.bullet", color: purple)
+        case "quote", "cite": return CalloutLook(title: name, symbol: "quote.opening", color: gray)
+        // `note` and any type Obsidian doesn't know look like a note, keeping their name.
+        default: return CalloutLook(title: name, symbol: "pencil", color: blue)
+        }
+    }
 }
 
 enum InlineBoxKind { case code, highlight, tag, key }
@@ -214,9 +281,12 @@ final class MarkdownStyler {
             }
         }
         var restyled: NSRange?
+        // A callout's lines depend on each other (which one is last, whether a header
+        // above makes them a callout at all), so an edit in a run of quote lines restyles the run.
+        let run = blockIndex(containing: editedRange.location).map(quoteRun)
         for (i, b) in new.enumerated() {
             let touchesEdit = NSMaxRange(b.range) >= editedRange.location && b.range.location <= NSMaxRange(editedRange)
-            if touchesEdit || !unchanged.contains(BlockKey(b.range, b.kind)) {
+            if touchesEdit || run?.contains(i) == true || !unchanged.contains(BlockKey(b.range, b.kind)) {
                 style(at: i, in: storage)
                 restyled = restyled.map { NSUnionRange($0, b.range) } ?? b.range
             }
@@ -238,6 +308,8 @@ final class MarkdownStyler {
             if r.location > 0, let i = blockIndex(containing: r.location - 1) { indices.insert(i) }
         }
         selection = new
+        // Entering or leaving a callout folds or unfolds all of it.
+        for i in indices { if let h = calloutOf[i], let last = calloutLast[h] { indices.formUnion(h...last) } }
         guard !indices.isEmpty else { return }
         storage.beginEditing()
         for i in indices.sorted() where i < blocks.count { style(at: i, in: storage) }
@@ -256,7 +328,8 @@ final class MarkdownStyler {
         for r in ranges {
             if let i = blockIndex(containing: r.location) {
                 switch blocks[i].kind {
-                case .math, .image, .code, .hr, .columnMarker: return true
+                case .math, .image, .code, .hr, .columnMarker, .callout: return true
+                case .quote where calloutOf[i] != nil: return true
                 default:
                     let t = text.length >= NSMaxRange(blocks[i].range) ? text.substring(with: blocks[i].range) : ""
                     if t.contains("$") { return true }
@@ -369,7 +442,94 @@ final class MarkdownStyler {
 
     // MARK: Columns
 
+    // MARK: Callouts
+
+    /// Callout membership: each line's header block, and each header's last line.
+    private(set) var calloutOf: [Int: Int] = [:]
+    private var calloutLast: [Int: Int] = [:]
+
+    private func computeCallouts() {
+        calloutOf = [:]
+        calloutLast = [:]
+        var i = 0
+        while i < blocks.count {
+            guard case .callout = blocks[i].kind else { i += 1; continue }
+            var j = i + 1
+            while j < blocks.count, case .quote = blocks[j].kind { j += 1 }
+            for k in i..<j { calloutOf[k] = i }
+            calloutLast[i] = j - 1
+            i = j
+        }
+    }
+
+    /// The run of quote and callout lines around a block.
+    private func quoteRun(_ index: Int) -> ClosedRange<Int> {
+        func isQuote(_ i: Int) -> Bool {
+            switch blocks[i].kind {
+            case .quote, .callout: true
+            default: false
+            }
+        }
+        guard index < blocks.count, isQuote(index) else { return index...index }
+        var lo = index, hi = index
+        while lo > 0, isQuote(lo - 1) { lo -= 1 }
+        while hi + 1 < blocks.count, isQuote(hi + 1) { hi += 1 }
+        return lo...hi
+    }
+
+    /// Whether a callout is folded right now: written with `-`, and the caret is elsewhere.
+    private func calloutFolded(header h: Int) -> Bool {
+        guard case let .callout(header) = blocks[h].kind, header.fold == .folded, let last = calloutLast[h], last > h else { return false }
+        let start = blocks[h].range.location
+        let span = NSRange(location: start, length: max(0, NSMaxRange(blocks[last].range) - start - 1))
+        return !touches(span)
+    }
+
+    private static let calloutPad: CGFloat = 14
+
+    private func styleCalloutHeader(_ header: CalloutHeader, line first: NSRange, block r: NSRange, in s: NSTextStorage) {
+        let look = CalloutLook.of(header.type)
+        let folded = calloutFolded(header: currentIndex)
+        let isLast = (calloutLast[currentIndex] ?? currentIndex) == currentIndex || folded
+        let pad = Self.calloutPad, icon = round(typo.size * 1.6)
+        let marker = NSRange(location: first.location, length: min(header.markerLength, first.length))
+        let hide = hides(active: touches(first))
+        s.addAttributes([.paragraphStyle: paragraph(indent: pad + icon, first: pad + icon, tail: pad, before: 10,
+                                                    after: isLast ? 12 : typo.paragraphSpacing),
+                         .mdGroup: GroupDecoration(.callout(header.type))], range: r)
+        s.addAttributes(hide ? [.mdHidden: true] : [.foregroundColor: Palette.syntax], range: marker)
+        let title = NSRange(location: NSMaxRange(marker), length: first.length - marker.length)
+        inline(title, in: s, font: { _, italic in self.typo.text(bold: true, italic: italic) }, color: look.color)
+        let mark = CalloutMark(look: look, defaultTitle: title.length == 0 && hide ? look.title : nil,
+                               font: typo.text(bold: true, italic: false), foldable: header.fold != .none, folded: folded)
+        s.addAttribute(.mdCallout, value: mark, range: NSRange(location: first.location, length: 1))
+    }
+
+    private func styleCalloutBody(header h: Int, depth: Int, markerLength: Int, line first: NSRange, block r: NSRange, in s: NSTextStorage) {
+        guard case let .callout(header) = blocks[h].kind else { return }
+        let group = GroupDecoration(.callout(header.type))
+        if calloutFolded(header: h) {
+            collapse(r, in: s)
+            s.addAttribute(.mdGroup, value: group, range: r)
+            return
+        }
+        let pad = Self.calloutPad
+        let marker = NSRange(location: first.location, length: min(markerLength, first.length))
+        let hide = hides(active: touches(first))
+        let markerWidth = hide ? 0 : width(of: text.substring(with: marker), font: typo.body)
+        // Quotes nested in a callout step in, without bars of their own.
+        let indent = pad + CGFloat(depth - 1) * 22
+        let isLast = calloutLast[h] == currentIndex
+        s.addAttributes([.paragraphStyle: paragraph(indent: indent, first: indent - markerWidth, tail: pad,
+                                                    after: isLast ? 12 : typo.paragraphSpacing),
+                         .mdGroup: group], range: r)
+        s.addAttributes(hide ? [.mdHidden: true] : [.foregroundColor: Palette.syntax], range: marker)
+        let content = NSRange(location: NSMaxRange(marker), length: first.length - marker.length)
+        inline(content, in: s, font: { self.typo.text(bold: $0, italic: $1) }, color: Palette.text)
+    }
+
     private func computeRegions() {
+        computeCallouts()
         regions = []
         cellOfBlock = [:]
         markerSignature = []
@@ -459,7 +619,11 @@ final class MarkdownStyler {
         return (cells, widths)
     }
 
+    /// Index of the block being styled.
+    private var currentIndex = 0
+
     private func style(at index: Int, in s: NSTextStorage) {
+        currentIndex = index
         if let c = cellOfBlock[index], c.region < regions.count {
             let info = cells(forRegion: c.region)
             currentCell = info.cells[c.column]
@@ -537,6 +701,12 @@ final class MarkdownStyler {
             }
             let content = NSRange(location: NSMaxRange(marker), length: first.length - marker.length)
             inline(content, in: s, font: { _, italic in self.typo.heading(level, italic: italic) }, color: Palette.text)
+
+        case let .callout(header):
+            styleCalloutHeader(header, line: first, block: r, in: s)
+
+        case let .quote(depth, markerLength) where calloutOf[currentIndex] != nil:
+            styleCalloutBody(header: calloutOf[currentIndex]!, depth: depth, markerLength: markerLength, line: first, block: r, in: s)
 
         case let .quote(depth, markerLength):
             let marker = NSRange(location: first.location, length: min(markerLength, first.length))
