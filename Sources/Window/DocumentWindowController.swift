@@ -287,6 +287,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         guard let url = note?.url, let workspace else { return }
         let picker = IconPickerController()
         picker.current = NoteIcons.shared.icon(for: url, in: workspace)
+        picker.noteURL = url
         picker.onPick = { symbol in NoteIcons.shared.set(symbol, for: url, in: workspace) }
         picker.onSuggest = { [weak self] in
             guard let self else { return }
@@ -295,6 +296,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         let popover = NSPopover()
         popover.behavior = .transient
         popover.contentViewController = picker
+        picker.popover = popover
         popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxY)
     }
 
@@ -319,6 +321,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         guard let note else { return }
         titleBar.title = note.title
         titleBar.setIcon(note.url.flatMap { NoteIcons.shared.icon(for: $0, in: workspace) })
+        titleBar.iconNoteURL = kind == .vault ? note.url : nil
         window?.title = note.title
         window?.representedURL = note.url
         sidebar?.currentURL = note.url
