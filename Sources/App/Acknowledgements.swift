@@ -18,6 +18,9 @@ enum Acknowledgements {
             Credit(name: "Latin Modern Math", use: "The font equations are set in.",
                    copyright: "Copyright © 2012–2014 B. Jackowski, P. Strzelczyk and P. Pianowski, on behalf of TeX users groups.",
                    license: "GUST Font License", link: "https://tug.org/fonts/licenses/GUST-FONT-LICENSE.txt"),
+            Credit(name: "Obsidian LaTeX Suite", use: "Indium's default math shortcuts are adapted from its snippets.",
+                   copyright: "Copyright © 2022 artisticat1.",
+                   license: "MIT License", link: "https://github.com/artisticat1/obsidian-latex-suite/blob/main/LICENSE.md"),
         ]
         #if !APPSTORE
         list.append(Credit(name: "Sparkle", use: "Keeps Indium up to date.",
