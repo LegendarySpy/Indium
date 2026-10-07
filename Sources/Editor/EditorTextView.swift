@@ -77,11 +77,23 @@ final class EditorTextView: NSTextView {
     }
 
     override func mouseMoved(with event: NSEvent) {
+        editor?.hoverTables(at: convert(event.locationInWindow, from: nil))
         if pointerIsOverChrome(event) {
             NSCursor.arrow.set()
             return
         }
         super.mouseMoved(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        editor?.hideTableStrips()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        // Typing hides the pointer; the table strips go with it (the text may move).
+        editor?.hideTableStrips()
+        super.keyDown(with: event)
     }
 
     override func cursorUpdate(with event: NSEvent) {
@@ -323,7 +335,17 @@ final class EditorTextView: NSTextView {
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
         // A selected image is the selection; a caret the height of the image would be noise.
         if editor?.hasSelectedImage == true { return }
-        super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
+        super.drawInsertionPoint(in: caretRect(clamping: rect), color: color, turnedOn: flag)
+    }
+
+    /// A caret beside a rendered block (a table, an equation) would take the height of
+    /// the block's whole line; it's one line of text tall instead, level with the
+    /// block's first line.
+    func caretRect(clamping rect: NSRect) -> NSRect {
+        let font = typingAttributes[.font] as? NSFont ?? NSFont.systemFont(ofSize: 15)
+        let line = ceil(font.ascender - font.descender + font.leading)
+        guard rect.height > line * 2 else { return rect }
+        return NSRect(x: rect.minX, y: rect.minY + TableRender.padY + 2, width: rect.width, height: line)
     }
 
     // MARK: Appearance

@@ -84,19 +84,21 @@ final class TableRender {
             columnWidths = natural.map { $0 + extra * $0 / total }
         } else {
             // Short cells (numbers, units) never wrap; long prose columns absorb the squeeze.
-            var minimum = [CGFloat](repeating: 56, count: columns)
-            for row in cells {
-                for (c, cell) in row.enumerated() {
-                    let whole = ceil(cell.size().width) + pad
-                    let longestWord = cell.string.split(whereSeparator: \.isWhitespace)
-                        .map { ceil(NSAttributedString(string: String($0), attributes: cell.attributes(at: 0, effectiveRange: nil)).size().width) }
-                        .max() ?? 0
-                    minimum[c] = max(minimum[c], whole <= 130 ? whole : longestWord + pad)
-                }
-            }
+            let minimum = noWrapMinimums(least: 56)
             let floor = minimum.reduce(0, +)
             if floor >= maxWidth {
-                columnWidths = minimum.map { $0 * maxWidth / floor }
+                // Too narrow for everything whole: equations shrink before words break
+                // (`fit` scales them to the width they get), and only then does every
+                // column squeeze.
+                let words = noWrapMinimums(least: 56, mathScale: 0)
+                let wordsFloor = words.reduce(0, +)
+                if wordsFloor < maxWidth {
+                    let give = zip(minimum, words).map { $0 - $1 }
+                    let totalGive = max(give.reduce(0, +), 1)
+                    columnWidths = zip(minimum, give).map { $0 - $1 / totalGive * (floor - maxWidth) }
+                } else {
+                    columnWidths = words.map { $0 * maxWidth / wordsFloor }
+                }
             } else {
                 let slack = zip(natural, minimum).map { max($0 - $1, 0) }
                 let totalSlack = max(slack.reduce(0, +), 1)
@@ -108,26 +110,42 @@ final class TableRender {
     }
 
     /// Per column: the width that keeps short cells on one line (long ones may wrap
-    /// at word boundaries).
-    private func noWrapMinimums() -> [CGFloat] {
+    /// at word boundaries). An equation is one unbreakable word, measured at its width.
+    /// `mathScale` measures equations smaller (0: words only), for when they must give way.
+    private func noWrapMinimums(least: CGFloat = 48, mathScale: CGFloat = 1) -> [CGFloat] {
         let pad = Self.padX * 2
-        var minimum = [CGFloat](repeating: 48, count: columns)
+        var minimum = [CGFloat](repeating: least, count: columns)
         for row in cells {
-            for (c, cell) in row.enumerated() {
+            for (c, original) in row.enumerated() {
+                let cell = mathScale < 1 ? Self.scalingMath(original) { _ in mathScale } : original
                 let whole = ceil(cell.size().width) + pad
-                let longestWord = cell.string.split(whereSeparator: \.isWhitespace)
-                    .map { ceil(NSAttributedString(string: String($0), attributes: cell.attributes(at: 0, effectiveRange: nil)).size().width) }
-                    .max() ?? 0
-                minimum[c] = max(minimum[c], whole <= 130 ? whole : longestWord + pad)
+                minimum[c] = max(minimum[c], whole <= 130 ? whole : Self.longestWord(in: cell) + pad)
             }
         }
         return minimum
+    }
+
+    /// Width of the widest run the text can't break inside: a word, or an equation
+    /// together with any letters touching it.
+    private static func longestWord(in cell: NSAttributedString) -> CGFloat {
+        let ns = cell.string as NSString
+        var widest: CGFloat = 0, start = 0
+        for i in 0...ns.length {
+            let breaks = i == ns.length || (UnicodeScalar(ns.character(at: i)).map(CharacterSet.whitespacesAndNewlines.contains) ?? false)
+            guard breaks else { continue }
+            if i > start { widest = max(widest, ceil(cell.attributedSubstring(from: NSRange(location: start, length: i - start)).size().width)) }
+            start = i + 1
+        }
+        return widest
     }
 
     /// Rows sized to their tallest cell at the current column widths.
     func measureRows() {
         let pad = Self.padX * 2
         width = floor(columnWidths.reduce(0, +))
+        for (r, row) in cells.enumerated() {
+            for (c, cell) in row.enumerated() { cells[r][c] = Self.fit(cell, width: columnWidths[c] - pad) }
+        }
         rowHeights = cells.map { row in
             row.enumerated().map { c, cell in
                 ceil(cell.boundingRect(with: NSSize(width: max(columnWidths[c] - pad, 10), height: .greatestFiniteMagnitude),
@@ -170,11 +188,16 @@ final class TableRender {
         }
     }
 
+    /// The rounded frame around a table's grid.
+    static func outline(of frame: NSRect) -> NSBezierPath {
+        NSBezierPath(roundedRect: frame.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
+    }
+
     /// Frame, header shading, row and column rules: everything but the text.
     func drawChrome(in rect: NSRect) {
         guard !rowHeights.isEmpty else { return }
         let frame = NSRect(x: rect.minX, y: rect.minY, width: width, height: height)
-        let outline = NSBezierPath(roundedRect: frame.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
+        let outline = Self.outline(of: frame)
 
         NSGraphicsContext.saveGraphicsState()
         outline.addClip()
@@ -203,6 +226,28 @@ final class TableRender {
 
     // MARK: Cell text
 
+    /// The cell's text with any equation too wide for `width` scaled down to fit, so a
+    /// column the table can't widen shows the whole equation, smaller, instead of
+    /// cutting it off. Equations that fit keep their natural size.
+    static func fit(_ text: NSAttributedString, width: CGFloat) -> NSAttributedString {
+        scalingMath(text) { min(1, max(width, 10) / max($0.natural.width, 1)) }
+    }
+
+    /// The text with each equation drawn at `scale(equation)` of its typeset size.
+    private static func scalingMath(_ text: NSAttributedString, _ scale: (MathCellAttachment) -> CGFloat) -> NSAttributedString {
+        var out: NSMutableAttributedString?
+        text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+            guard let math = value as? MathCellAttachment else { return }
+            let scale = scale(math)
+            guard abs(math.natural.width * scale - math.bounds.width) > 0.25 else { return }
+            let copy = MathCellAttachment(natural: math.natural, image: math.image)
+            copy.bounds = NSRect(x: 0, y: math.natural.minY * scale, width: math.natural.width * scale, height: math.natural.height * scale)
+            if out == nil { out = NSMutableAttributedString(attributedString: text) }
+            out?.addAttribute(.attachment, value: copy, range: range)
+        }
+        return out ?? text
+    }
+
     /// `revealMarkers` keeps the Markdown syntax, dimmed, for the cell being edited.
     static func render(_ text: String, header: Bool, alignment: Int, typography: Typography, size: CGFloat,
                        revealMarkers: Bool = false) -> NSAttributedString {
@@ -214,7 +259,7 @@ final class TableRender {
         func font(bold: Bool, italic: Bool, code: Bool) -> NSFont {
             let base = code ? typography.codeVariant(bold: bold || header, italic: italic)
                             : typography.text(bold: bold || header, italic: italic, size: size)
-            return base.withTabularFigures()
+            return base.withTabularFigures().withSystemFallback()
         }
 
         let ns = text as NSString
@@ -245,13 +290,11 @@ final class TableRender {
         while i < ns.length {
             if let math = maths.first(where: { $0.0.location == i }) {
                 if let render = MathRenderer.render(math.1, size: round(size * 1.05), display: false) {
-                    let attachment = NSTextAttachment()
                     let image = NSImage(size: NSSize(width: render.width, height: render.height), flipped: false) { _ in
                         render.draw(baselineAt: NSPoint(x: 0, y: render.descent), color: color, scale: 1, flippedContext: false)
                         return true
                     }
-                    attachment.image = image
-                    attachment.bounds = NSRect(x: 0, y: -render.descent, width: render.width, height: render.height)
+                    let attachment = MathCellAttachment(natural: NSRect(x: 0, y: -render.descent, width: render.width, height: render.height), image: image)
                     out.append(NSAttributedString(attachment: attachment))
                 } else {
                     out.append(NSAttributedString(string: ns.substring(with: math.0), attributes: [.font: font(bold: false, italic: false, code: true), .foregroundColor: color]))
@@ -287,7 +330,30 @@ final class TableRender {
     }
 }
 
+/// An equation in a cell. Remembers its typeset size so a narrow column can scale it
+/// down, and a wider one back up.
+final class MathCellAttachment: NSTextAttachment {
+    let natural: NSRect
+
+    init(natural: NSRect, image: NSImage?) {
+        self.natural = natural
+        super.init(data: nil, ofType: nil)
+        self.image = image
+        bounds = natural
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+}
+
 extension NSFont {
+    /// Same font, falling back to the system font for characters it lacks (New York has
+    /// no subscript digits), so `H₂O` stays tight instead of borrowing a wide glyph.
+    func withSystemFallback() -> NSFont {
+        let fallback = NSFont.systemFont(ofSize: pointSize, weight: fontDescriptor.symbolicTraits.contains(.bold) ? .bold : .regular)
+        let descriptor = fontDescriptor.addingAttributes([.cascadeList: [fallback.fontDescriptor]])
+        return NSFont(descriptor: descriptor, size: pointSize) ?? self
+    }
+
     /// Same font with tabular (fixed-width) digits so columns of numbers align.
     func withTabularFigures() -> NSFont {
         let descriptor = fontDescriptor.addingAttributes([
