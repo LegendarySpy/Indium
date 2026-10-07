@@ -40,7 +40,7 @@ enum DebugSnapshot {
     /// icon suggestions (pair with `-IndiumIconStub` and `-IndiumIconStore`). Steps: `files` shows
     /// the sidebar, `open:rel` opens a note, `icon` clicks the title bar icon, `suggest` clicks the
     /// picker's Suggest/Try Again, `pick:symbol` picks one, `close` closes popovers, `menu:rel` is the
-    /// sidebar's Suggest New Icon, `retry` presses Try Again in a notice, `suggestAt:/abs/path` asks
+    /// sidebar's Suggest New Icon, `retry` presses Try Again in a notice, `frontmatter:symbol` gives the open note that icon in frontmatter and saves it, `suggestAt:/abs/path` asks
     /// for any file (vault = its folder), `wait:s`, `shot:path` (popovers included), `dump`.
     static func runIconSteps(_ steps: [String], controller: DocumentWindowController) {
         guard let window = controller.window, let frame = window.contentView?.superview else { exit(1) }
@@ -154,6 +154,14 @@ enum DebugSnapshot {
                 delay = 0.05
             case "retry":
                 if let b = button(titled: ["Try Again"]) { b.performClick(nil) } else { print("  no Try Again") }
+                delay = 0.05
+            case "frontmatter":
+                // `frontmatter:symbol`: the open note gains `icon: symbol` and is saved, as if typed.
+                if let u = controller.note?.url, let ws = AppDelegate.shared.workspace {
+                    let text = "---\nicon: \(arg)\n---\n" + ((try? String(contentsOf: u, encoding: .utf8)) ?? "")
+                    try? text.write(to: u, atomically: true, encoding: .utf8)
+                    NoteIcons.shared.suggest(for: u, text: text, in: ws)
+                }
                 delay = 0.05
             case "suggestAt":
                 let u = URL(fileURLWithPath: arg)

@@ -222,6 +222,8 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
         }
     }
     private var iconImage: NSImage?
+    private var suggestionObserver: NSObjectProtocol?
+    deinit { suggestionObserver.map(NotificationCenter.default.removeObserver) }
     private lazy var iconSpinner: IconSpinner = {
         let spinner = IconSpinner()
         addSubview(spinner)
@@ -229,7 +231,7 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
             spinner.centerXAnchor.constraint(equalTo: titleIcon.centerXAnchor),
             spinner.centerYAnchor.constraint(equalTo: titleIcon.centerYAnchor),
         ])
-        NotificationCenter.default.addObserver(forName: NoteIcons.suggestionDidChange, object: nil, queue: .main) { [weak self] n in
+        suggestionObserver = NotificationCenter.default.addObserver(forName: NoteIcons.suggestionDidChange, object: nil, queue: .main) { [weak self] n in
             guard let self, let url = n.object as? URL, url == self.iconNoteURL.map(NoteIcons.key) else { return }
             self.showSuggestion(NoteIcons.shared.suggestion(for: url), announce: true)
         }
