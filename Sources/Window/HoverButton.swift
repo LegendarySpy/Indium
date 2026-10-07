@@ -156,4 +156,25 @@ extension NSView {
         let w = bounds.width / 2, h = bounds.height / 2
         return CGAffineTransform(translationX: w, y: h + dy).scaledBy(x: s, y: s).translatedBy(x: -w, y: -h)
     }
+
+    /// Grows in from `scale` with a small spring, to mark something that just changed.
+    /// With Reduce Motion it simply fades in.
+    func springIn(from scale: CGFloat = 0.6) {
+        wantsLayer = true
+        guard let layer else { return }
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0
+            fade.duration = 0.2
+            layer.add(fade, forKey: "springIn")
+            return
+        }
+        let spring = CASpringAnimation(keyPath: "transform")
+        spring.fromValue = CATransform3DMakeAffineTransform(centeredScale(scale))
+        spring.toValue = CATransform3DIdentity
+        spring.damping = 11
+        spring.initialVelocity = 4
+        spring.duration = spring.settlingDuration
+        layer.add(spring, forKey: "springIn")
+    }
 }
