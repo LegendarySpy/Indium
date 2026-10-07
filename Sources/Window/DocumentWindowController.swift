@@ -26,8 +26,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private var observers: [Any] = []
     private var noteCache: [URL: Note] = [:]
     private var noteOrder: [URL] = []
-    /// File windows watch the file's folder for edits from other apps.
-    private var fileWatcher: FileWatcher?
+    /// File windows watch their file for edits from other apps.
+    private var fileWatcher: SingleFileWatcher?
+    /// A file window's folder, once you've granted it so images beside the note show.
+    private var imageFolderAccess: FolderAccess.Lease?
+    private var folderAccessBar: FolderAccessBar?
+    private var folderAccessBarDismissed = false
 
     var workspace: Workspace? { AppDelegate.shared.workspace }
     var note: Note? { editor.note }
@@ -173,16 +177,65 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         editor.onTyping = { [weak self] in self?.titleBar.setChromeVisible(false) }
         editor.onTitleChange = { [weak self] in self?.updateTitle() }
         editor.onOpenNote = { [weak self] url in self?.open(url) }
+        editor.onImageNeedsAccess = { [weak self] in
+            // Styling is under way; show the offer once it's done.
+            DispatchQueue.main.async { self?.offerFolderAccess() }
+        }
         editor.onNoteMissing = { [weak self] in
             guard let self else { return }
             if self.kind == .file {
                 self.close()
                 return
             }
-            self.editor.load(nil)
+            self.editor.load(nil, discardingEdits: true)
             self.refreshEmptyState()
         }
     }
+
+    // MARK: Folder access for a single file
+
+    private func offerFolderAccess() {
+        guard kind == .file, imageFolderAccess == nil, folderAccessBar == nil, !folderAccessBarDismissed,
+              let folder = note?.url?.deletingLastPathComponent() else { return }
+        let bar = FolderAccessBar(folderName: folder.lastPathComponent)
+        bar.onGrant = { [weak self] in self?.grantFolderAccess() }
+        bar.onDismiss = { [weak self] in
+            self?.folderAccessBarDismissed = true
+            self?.hideFolderAccessBar()
+        }
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(bar)
+        NSLayoutConstraint.activate([
+            bar.centerXAnchor.constraint(equalTo: root.centerXAnchor),
+            bar.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
+            bar.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 16),
+        ])
+        folderAccessBar = bar
+        FolderAccess.log("bar shown \(folder.path)")
+    }
+
+    private func hideFolderAccessBar() {
+        folderAccessBar?.removeFromSuperview()
+        folderAccessBar = nil
+    }
+
+    /// Asks for the note's folder, remembers it (so reopening this note later needs no
+    /// panel) and keeps it open while this window shows the note.
+    @objc func grantFolderAccess() {
+        guard let folder = note?.url?.deletingLastPathComponent() else { return }
+        guard let lease = FolderAccess.requestFolder(
+            folder, message: "Allow Indium to read “\(folder.lastPathComponent)” so the images beside this note show. Click Grant Access.",
+            prompt: "Grant Access") else { return }
+        FolderAccess.remember(lease.url)
+        imageFolderAccess = lease
+        hideFolderAccessBar()
+        editor.restyleAll()
+    }
+
+    #if DEBUG
+    var debugFolderAccessBarShown: Bool { folderAccessBar != nil }
+    func debugGrantFolderAccess() { folderAccessBar?.debugGrant() }
+    #endif
 
     override func showWindow(_ sender: Any?) {
         super.showWindow(sender)
@@ -254,13 +307,19 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     // MARK: Single files
 
     /// Shows a file from outside the folder in this (file) window.
-    func openFile(_ url: URL) throws {
+    /// `access` keeps the file reachable while the window is open (in the App Store
+    /// build Indium may have been granted this file alone).
+    func openFile(_ url: URL, access: FolderAccess.Lease? = nil) throws {
+        let lease = access ?? FolderAccess.lease(url)
         let note = try Note(url: url.standardizedFileURL)
+        note.access = lease
+        // Its folder, if you granted it before, so the images beside it show right away.
+        if FolderAccess.isSandboxed { imageFolderAccess = FolderAccess.reopenFolder(containing: url) }
         editor.load(note)
         refreshEmptyState()
         updateTitle()
         window?.makeFirstResponder(editor.textView)
-        fileWatcher = FileWatcher(url: url.deletingLastPathComponent()) { [weak self] _ in
+        fileWatcher = SingleFileWatcher(url: url.standardizedFileURL) { [weak self] in
             self?.editor.checkForExternalChanges()
         }
     }
@@ -273,7 +332,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         noteOrder.removeAll()
         sidebar?.workspace = workspace
         if kind == .vault {
-            editor.load(nil)
+            // The switch already made sure this note was saved (see `canLeaveNote`).
+            editor.load(nil, discardingEdits: true)
             refreshEmptyState()
             if workspace == nil {
                 setSidebarVisible(false, remember: false)
@@ -346,6 +406,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 if let window { NSAlert(error: error).beginSheetModal(for: window) }
                 return
             }
+            note.access = workspace?.access
             noteCache[key] = note
         }
         noteOrder.removeAll { $0 == key }
@@ -353,7 +414,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         if noteOrder.count > 24 { noteCache.removeValue(forKey: noteOrder.removeFirst()) }
 
         // Switching notes is instant: no transition between pages.
-        if editor.note !== note { editor.load(note) }
+        // A note whose edits couldn't be saved stays until that's resolved (the editor
+        // shows why and what you can do).
+        if editor.note !== note, !editor.load(note) { return }
         refreshEmptyState()
         updateTitle()
         window?.makeFirstResponder(editor.textView)
@@ -622,12 +685,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     @objc func trashNote(_ sender: Any?) {
         guard let url = note?.url, let workspace else { return }
-        editor.saveNow()
-        editor.load(nil)
-        noteCache.removeValue(forKey: url.standardizedFileURL)
+        // The Trash should hold the note as you last saw it; if that can't be saved, the
+        // editor explains and nothing is trashed.
+        guard editor.canLeaveNote() else { return }
         do { try workspace.trash(url) } catch {
+            // Still there: keep it open, with the error.
             if let window { NSAlert(error: error).beginSheetModal(for: window) }
+            return
         }
+        editor.load(nil, discardingEdits: true)
+        noteCache.removeValue(forKey: url.standardizedFileURL)
         refreshEmptyState()
     }
 
@@ -732,8 +799,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             confirmTemporaryClose()
             return false
         }
+        // A note that couldn't be saved keeps its window open until that's resolved.
+        if kind != .temporary { return editor.canLeaveNote() }
         return true
     }
+
+    /// The note is saved (or there's nothing to save), so it's fine to move on.
+    func canLeaveNote() -> Bool { editor.canLeaveNote() }
 
     func windowWillClose(_ notification: Notification) {
         editor.saveNow()
@@ -741,7 +813,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        editor.saveNow()
+        editor.saveNow(interactive: false)
     }
 
     private func confirmTemporaryClose() {
@@ -767,7 +839,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     func discardAndClose() {
-        editor.load(nil)
+        editor.load(nil, discardingEdits: true)
         window?.close()
     }
 
@@ -781,36 +853,65 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         panel.canCreateDirectories = true
         panel.prompt = "Save"
         panel.message = "Save this temporary note as a Markdown file."
+        #if DEBUG
+        // `-IndiumSaveTemporaryTo /path/Note.md`: tests skip the save panel (any folder panel stays).
+        if let path = UserDefaults.standard.string(forKey: "IndiumSaveTemporaryTo") {
+            writeTemporary(note, to: URL(fileURLWithPath: path), window: window, closeAfter: closeAfter)
+            return
+        }
+        #endif
         panel.beginSheetModal(for: window) { [weak self] response in
             guard let self, response == .OK, let url = panel.url else { return }
-            do {
-                var text = self.editor.text
-                let ws = self.workspace.flatMap { $0.contains(url) ? $0 : nil }
-                let root = ws?.root ?? url.deletingLastPathComponent()
-                let folder = ws?.attachmentFolder(for: url) ?? root.appendingPathComponent("attachments")
-                for (path, data) in note.memoryImages {
-                    let name = (path as NSString).lastPathComponent
-                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                    let target = Workspace.uniqueURL(in: folder, base: (name as NSString).deletingPathExtension, ext: (name as NSString).pathExtension)
-                    try data.write(to: target, options: .atomic)
-                    let newRef = Workspace.markdownPath(for: target, from: url, root: root)
-                    let oldRef = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
-                    text = text.replacingOccurrences(of: "](\(oldRef))", with: "](\(newRef))")
-                }
-                try note.becomePermanent(at: url, text: text)
-                if closeAfter {
-                    self.editor.load(nil)
-                    window.close()
-                } else {
-                    window.close()
-                }
-                if let ws, ws.contains(url) {
-                    ws.rescanNow()
-                    AppDelegate.shared.openInMainWindow(url)
-                }
-            } catch {
-                NSAlert(error: error).beginSheetModal(for: window)
+            self.writeTemporary(note, to: url, window: window, closeAfter: closeAfter)
+        }
+    }
+
+    private func writeTemporary(_ note: Note, to url: URL, window: NSWindow, closeAfter: Bool) {
+        // The save panel grants the chosen file. Pasted images go in an attachments
+        // folder beside it, which the App Store build may only write once you allow
+        // that folder too (inside the open vault it already can).
+        var folderAccess: FolderAccess.Lease?
+        let ws = self.workspace.flatMap { $0.contains(url) ? $0 : nil }
+        if FolderAccess.isSandboxed, ws == nil, !note.memoryImages.isEmpty {
+            let parent = url.deletingLastPathComponent()
+            folderAccess = FolderAccess.requestFolder(
+                parent,
+                message: "To save this note's images beside it in “\(parent.lastPathComponent)/attachments”, allow Indium to use “\(parent.lastPathComponent)”.")
+            guard folderAccess != nil else {
+                let alert = NSAlert()
+                alert.messageText = "The note wasn't saved."
+                alert.informativeText = "Its images need a folder beside the note. Save it inside your notes folder, or allow Indium to use the folder you chose."
+                alert.beginSheetModal(for: window)
+                return
             }
+        }
+        do {
+            var text = self.editor.text
+            let root = ws?.root ?? url.deletingLastPathComponent()
+            let folder = ws?.attachmentFolder(for: url) ?? root.appendingPathComponent("attachments")
+            for (path, data) in note.memoryImages {
+                let name = (path as NSString).lastPathComponent
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                let target = Workspace.uniqueURL(in: folder, base: (name as NSString).deletingPathExtension, ext: (name as NSString).pathExtension)
+                try Note.safeWrite(data, to: target)
+                let newRef = Workspace.markdownPath(for: target, from: url, root: root)
+                let oldRef = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
+                text = text.replacingOccurrences(of: "](\(oldRef))", with: "](\(newRef))")
+            }
+            try note.becomePermanent(at: url, text: text)
+            withExtendedLifetime(folderAccess) {}
+            if closeAfter {
+                self.editor.load(nil, discardingEdits: true)
+                window.close()
+            } else {
+                window.close()
+            }
+            if let ws, ws.contains(url) {
+                ws.rescanNow()
+                AppDelegate.shared.openInMainWindow(url)
+            }
+        } catch {
+            NSAlert(error: error).beginSheetModal(for: window)
         }
     }
 

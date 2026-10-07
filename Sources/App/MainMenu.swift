@@ -39,7 +39,9 @@ enum MainMenu {
     private static func appMenu() -> NSMenu {
         let m = NSMenu(title: "Indium")
         add(m, "About Indium", #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
+        #if !APPSTORE
         add(m, "Check for Updates…", #selector(AppDelegate.checkForUpdates(_:)))
+        #endif
         m.addItem(.separator())
         add(m, "Settings…", #selector(AppDelegate.showSettings(_:)), ",")
         m.addItem(.separator())

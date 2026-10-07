@@ -69,6 +69,7 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         guard let storage = textStorage else { return action }
         let attrs = storage.attributes(at: charIndex, effectiveRange: nil)
         if attrs[.mdInlineMath] != nil { return .whitespace }
+        if attrs[.mdLineBreak] != nil { return .whitespace }
         if attrs[.mdHidden] != nil {
             let c = (storage.string as NSString).character(at: charIndex)
             if c != 0x0A && c != 0x0D { return .zeroAdvancement }
@@ -79,6 +80,13 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     func layoutManager(_ layoutManager: NSLayoutManager, boundingBoxForControlGlyphAt glyphIndex: Int,
                        for textContainer: NSTextContainer, proposedLineFragment proposedRect: NSRect,
                        glyphPosition: NSPoint, characterIndex charIndex: Int) -> NSRect {
+        if textStorage?.attribute(.mdLineBreak, at: charIndex, effectiveRange: nil) != nil {
+            // A `<br>`: a space as wide as the rest of the line, so what follows wraps
+            // onto the next one (the typesetter won't break a line at an arbitrary glyph).
+            let tail = (textStorage?.attribute(.paragraphStyle, at: charIndex, effectiveRange: nil) as? NSParagraphStyle)?.tailIndent ?? 0
+            let lineEnd = tail < 0 ? proposedRect.width + tail : (tail > 0 ? tail : proposedRect.width)
+            return NSRect(x: glyphPosition.x, y: glyphPosition.y - 1, width: max(0, lineEnd - glyphPosition.x - 1), height: 1)
+        }
         guard let math = textStorage?.attribute(.mdInlineMath, at: charIndex, effectiveRange: nil) as? InlineMath else {
             return .zero
         }
@@ -203,10 +211,119 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         drawCaptions(in: chars, storage: storage, origin: origin)
         drawInlineMath(in: chars, storage: storage, origin: origin)
         drawBlocks(in: chars, storage: storage, origin: origin)
+        drawEmbeds(in: chars, storage: storage, origin: origin)
+        drawCalloutMarks(in: chars, storage: storage, origin: origin)
+    }
+
+    /// A callout's icon at the start of its first line, the type's name when there's no
+    /// title, and a chevron at the right when it folds.
+    private func drawCalloutMarks(in chars: NSRange, storage: NSTextStorage, origin: NSPoint) {
+        storage.enumerateAttribute(.mdCallout, in: chars) { value, range, _ in
+            guard let mark = value as? CalloutMark else { return }
+            let g = glyphIndexForCharacter(at: range.location)
+            guard let container = textContainer(forGlyphAt: g, effectiveRange: nil) else { return }
+            let frag = lineFragmentRect(forGlyphAt: g, effectiveRange: nil)
+            let loc = location(forGlyphAt: g)
+            let col = contentColumn(glyph: g, container: container, origin: origin)
+            let baseline = origin.y + frag.minY + loc.y
+            let size = round(mark.font.pointSize * 0.95)
+            let mid = baseline - mark.font.capHeight / 2
+            let color = mark.look.color.usingColorSpace(.sRGB) ?? mark.look.color
+            Self.drawSymbol(mark.look.symbol, in: NSRect(x: col.x + 14, y: mid - size / 2, width: size, height: size), color: color)
+            if let title = mark.defaultTitle {
+                let text = NSAttributedString(string: title, attributes: [.font: mark.font, .foregroundColor: mark.look.color])
+                text.draw(at: NSPoint(x: origin.x + frag.minX + loc.x, y: baseline - mark.font.ascender))
+            }
+            if mark.foldable {
+                let s = round(size * 0.7)
+                Self.drawSymbol(mark.folded ? "chevron.right" : "chevron.down",
+                                in: NSRect(x: col.x + col.width - 14 - s, y: mid - s / 2, width: s, height: s),
+                                color: Palette.tertiaryText.usingColorSpace(.sRGB) ?? .gray)
+            }
+        }
+    }
+
+    static func drawSymbol(_ name: String, in rect: NSRect, color: NSColor) {
+        let config = NSImage.SymbolConfiguration(pointSize: rect.height, weight: .semibold)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(config),
+              image.size.width > 0, image.size.height > 0 else { return }
+        let scale = min(rect.width / image.size.width, rect.height / image.size.height)
+        let w = image.size.width * scale, h = image.size.height * scale
+        let target = NSRect(x: rect.midX - w / 2, y: rect.midY - h / 2, width: w, height: h)
+        guard NSGraphicsContext.current?.isDrawingToScreen == false else {
+            image.draw(in: target, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            return
+        }
+        // A PDF context fills a palette-colored symbol's whole box; draw it as pixels.
+        let px = 4
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(ceil(w)) * px, pixelsHigh: Int(ceil(h)) * px,
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return }
+        rep.size = NSSize(width: ceil(w), height: ceil(h))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(in: NSRect(origin: .zero, size: rep.size))
+        NSGraphicsContext.restoreGraphicsState()
+        rep.draw(in: target, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+    }
+
+    /// Where an embedded note's box sits (its title line included) and where the note
+    /// is drawn inside it, in view coordinates.
+    func embedRects(in chars: NSRange, origin: NSPoint) -> [(embed: NoteEmbed, range: NSRange, box: NSRect, content: NSRect)] {
+        guard let storage = textStorage else { return [] }
+        var result: [(NoteEmbed, NSRange, NSRect, NSRect)] = []
+        storage.enumerateAttribute(.mdEmbed, in: chars) { value, range, _ in
+            guard let embed = value as? NoteEmbed else { return }
+            var full = range
+            _ = storage.attribute(.mdEmbed, at: range.location, longestEffectiveRange: &full, in: NSRange(location: 0, length: storage.length))
+            guard full.location == range.location || !result.contains(where: { $0.1 == full }) else { return }
+            let first = glyphIndexForCharacter(at: full.location)
+            let last = glyphIndexForCharacter(at: max(full.location, NSMaxRange(full) - 1))
+            guard let container = textContainer(forGlyphAt: first, effectiveRange: nil) else { return }
+            let top = lineFragmentUsedRect(forGlyphAt: first, effectiveRange: nil)
+            let bottom = lineFragmentRect(forGlyphAt: last, effectiveRange: nil)
+            let used = lineFragmentUsedRect(forGlyphAt: last, effectiveRange: nil)
+            let col = contentColumn(glyph: first, container: container, origin: origin)
+            let pad = embed.padding
+            let box = NSRect(x: col.x, y: origin.y + top.minY - round(pad * 0.6), width: col.width,
+                             height: used.maxY - top.minY + round(pad * 0.6) + embed.contentHeight + pad * 1.4)
+            let content = NSRect(x: col.x + pad, y: origin.y + used.maxY + round(pad * 0.7), width: col.width - pad * 2,
+                                 height: embed.contentHeight)
+            result.append((embed, full, box.integral, content))
+        }
+        return result
+    }
+
+    private func drawEmbeds(in chars: NSRange, storage: NSTextStorage, origin: NSPoint) {
+        for (embed, _, box, content) in embedRects(in: chars, origin: origin) {
+            let border = NSBezierPath(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
+            border.lineWidth = 1
+            Palette.separator.setStroke()
+            border.stroke()
+            switch embed.content {
+            case let .note(render):
+                render.draw(at: content.origin, clip: content.insetBy(dx: -4, dy: 0))
+                if render.height > embed.contentHeight + 1 {
+                    // A long note is cut off: fade it out rather than slicing a line in half.
+                    let fade = NSRect(x: box.minX + 1, y: content.maxY - 36, width: box.width - 2, height: 36)
+                    NSGradient(starting: Palette.background.withAlphaComponent(0), ending: Palette.background)?.draw(in: fade, angle: 90)
+                }
+            case let .message(title, detail):
+                let font = NSFont.systemFont(ofSize: 12)
+                let label = NSMutableAttributedString(string: title, attributes: [.font: font, .foregroundColor: Palette.secondaryText])
+                if !detail.isEmpty {
+                    label.append(NSAttributedString(string: " · " + detail, attributes: [.font: font, .foregroundColor: Palette.tertiaryText]))
+                }
+                let size = label.size()
+                label.draw(at: NSPoint(x: content.minX, y: content.midY - size.height / 2))
+            }
+        }
     }
 
     private func drawGroups(in chars: NSRange, storage: NSTextStorage, origin: NSPoint) {
         var seen = Set<ObjectIdentifier>()
+        var seenCallouts = Set<Int>()
         var quoteBars: [(depth: Int, rect: NSRect)] = []
         storage.enumerateAttribute(.mdGroup, in: chars) { value, range, _ in
             guard let group = value as? GroupDecoration else { return }
@@ -234,6 +351,28 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
                 let r = NSRect(x: col.x, y: origin.y + box.minY, width: col.width, height: box.height)
                 Palette.fill.setFill()
                 NSBezierPath(roundedRect: r, xRadius: 7, yRadius: 7).fill()
+            case let .callout(type):
+                // One tinted box per callout: its lines' runs compare equal, so the whole
+                // callout is found even when only part of it is being drawn.
+                var full = NSRange()
+                _ = storage.attribute(.mdGroup, at: range.location, longestEffectiveRange: &full,
+                                      in: NSRange(location: 0, length: storage.length))
+                guard seenCallouts.insert(full.location).inserted else { return }
+                var glyphs = glyphRange(forCharacterRange: full, actualCharacterRange: nil)
+                guard glyphs.length > 0, let container = textContainer(forGlyphAt: glyphs.location, effectiveRange: nil) else { return }
+                glyphs = clampToContainer(glyphs, container: container)
+                var top = CGFloat.greatestFiniteMagnitude, bottom: CGFloat = 0
+                enumerateLineFragments(forGlyphRange: glyphs) { rect, used, _, _, _ in
+                    top = min(top, rect.minY)
+                    // Folded lines are collapsed to slivers; they mustn't stretch the box.
+                    if used.height >= 3 { bottom = max(bottom, used.maxY) }
+                }
+                guard bottom > top else { return }
+                let col = contentColumn(glyph: glyphs.location, container: container, origin: origin)
+                let box = NSRect(x: col.x, y: origin.y + top, width: col.width, height: bottom - top + 10)
+                let tint = (CalloutLook.of(type).color.usingColorSpace(.sRGB) ?? Palette.fill)
+                tint.withAlphaComponent(0.1).setFill()
+                NSBezierPath(roundedRect: box, xRadius: 8, yRadius: 8).fill()
             case let .quote(depth):
                 let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
                 let inCell = isInColumnCell(charIndex: range.location)
@@ -288,9 +427,26 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
                 let baseline = rect.minY + self.location(forGlyphAt: part.location).y
                 let top = baseline - font.ascender - 1.5
                 let bottom = baseline - font.descender + 1.5
-                let r = NSRect(x: origin.x + bounds.minX - 3, y: origin.y + top, width: bounds.width + 6, height: bottom - top)
-                (box.kind == .code ? Palette.fill : Palette.highlight).setFill()
-                NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4).fill()
+                switch box.kind {
+                case .tag:
+                    // A soft pill, tinted like links but quieter.
+                    let r = NSRect(x: origin.x + bounds.minX - 2, y: origin.y + top + 1, width: bounds.width + 4, height: bottom - top - 2)
+                    (Palette.link.usingColorSpace(.sRGB) ?? Palette.link).withAlphaComponent(0.11).setFill()
+                    NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2).fill()
+                case .key:
+                    // A keycap: a filled key with a firmer edge along its bottom.
+                    let r = NSRect(x: origin.x + bounds.minX - 4, y: origin.y + top, width: bounds.width + 8, height: bottom - top)
+                    Palette.fill.setFill()
+                    NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4).fill()
+                    let edge = NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: 4, yRadius: 4)
+                    edge.lineWidth = 1
+                    Palette.quoteBar.setStroke()
+                    edge.stroke()
+                default:
+                    let r = NSRect(x: origin.x + bounds.minX - 3, y: origin.y + top, width: bounds.width + 6, height: bottom - top)
+                    (box.kind == .code ? Palette.fill : Palette.highlight).setFill()
+                    NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4).fill()
+                }
             }
         }
     }
