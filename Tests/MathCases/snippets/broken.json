@@ -1,0 +1,4 @@
+[
+    {trigger: "ce", replacement: "\\mathrm{$0}$1", options: "mA"}
+    {trigger: "dg", replacement: "^{\\circ}", options: "m"},
+]

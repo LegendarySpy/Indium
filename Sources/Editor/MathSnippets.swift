@@ -23,12 +23,22 @@ struct MathSnippet {
     /// Can't follow a letter or a backslash (`w`): `sq` fires in `2sq`, not in `\sq` or `csq`.
     let word: Bool
     let priority: Int
+    /// The trigger and options as written, for the list of shortcuts.
+    let written: String, options: String
 
     /// Options as LaTeX Suite writes them: `m`/`M`/`n`/`t` for mode, `A` auto, `w` word, `r` regex.
     init(_ trigger: String, _ replacement: String, _ options: String, priority: Int = 0,
          compute: (([String], Bool) -> String)? = nil) {
+        try! self.init(validating: trigger, replacement, options, priority: priority, compute: compute)
+    }
+
+    /// The same, for a shortcut someone wrote: a regex that doesn't compile throws.
+    init(validating trigger: String, _ replacement: String, _ options: String, priority: Int = 0,
+         regexOptions: NSRegularExpression.Options = [], compute: (([String], Bool) -> String)? = nil) throws {
+        written = trigger
+        self.options = options
         if options.contains("r") {
-            self.trigger = .regex(try! NSRegularExpression(pattern: "(?:" + trigger + ")$"))
+            self.trigger = .regex(try NSRegularExpression(pattern: "(?:" + trigger + ")$", options: regexOptions))
         } else {
             self.trigger = .literal(trigger)
         }
@@ -78,7 +88,8 @@ struct MathSnippet {
             return knownCommands.contains { $0.hasPrefix(name) }
         }()
         var best: (snippet: MathSnippet, length: Int, captures: [String])?
-        for snippet in all where snippet.auto == auto && snippet.applies(in: context) {
+        // Your own shortcuts first: one with the same trigger and priority as a built-in wins.
+        for snippet in [custom, all].joined() where snippet.auto == auto && snippet.applies(in: context) {
             var found: (Int, [String])?
             switch snippet.trigger {
             case let .literal(t):
@@ -230,8 +241,8 @@ struct MathSnippet {
     static let spaceAfter = Set(greek + symbols + functions + ["leq", "geq", "neq", "gg", "ll", "equiv", "sim", "propto", "to",
                                                                 "mapsto", "cap", "cup", "in", "sum", "prod", "dots", "pm", "mp",
                                                                 "iint", "iiint", "oint", "lim", "setminus", "parallel", "dagger",
-                                                                // Closing bars and brackets (`\lvert x\rvert y`).
-                                                                "rvert", "rVert", "rangle", "rceil", "rfloor", "mid"])
+                                                                // Closing bars and brackets (`\lvert x\rvert y`), and spaces.
+                                                                "rvert", "rVert", "rangle", "rceil", "rfloor", "mid", "quad", "qquad"])
     /// Commands that start with one of those words, so typing on doesn't split them.
     private static let longerCommands = ["int", "middle", "infty", "inf", "injlim", "intercal", "top", "simeq", "subseteq", "subsetneq",
                                          "supseteq", "supsetneq", "cdots", "dotsc", "dotsb", "dotsm", "dotsi", "dotso", "lnot",
@@ -265,6 +276,9 @@ struct MathSnippet {
         let longer = word + String(letter)
         return !(longerCommands + greek + symbols + functions).contains { $0.hasPrefix(longer) }
     }
+
+    /// Shortcuts from the snippets file (see `MathSnippetConfig`).
+    static var custom: [MathSnippet] = []
 
     // MARK: The defaults
 

@@ -1,0 +1,8 @@
+# Reading your math shortcuts file (Format ▸ Edit Math Shortcuts…).
+# Run: Indium -IndiumMathSnippetConfigCases Tests/MathCases/snippet-configs.tsv -IndiumSnapshot /tmp/x.png
+# file<TAB>shortcuts loaded<TAB>problems, ¦-separated, each a piece of the message expected (in order).
+snippets/custom.json	9
+snippets/datajson.json	2
+snippets/broken.json	0	Line 3: expected a comma or ]
+snippets/partial.json	2	Line 3, shortcut 2 (/([A-Za-z])(\d)/): function replacements ¦ Line 4, shortcut 3 ("U"): visual shortcuts ¦ Line 5, shortcut 4 (/([a-z]/): the regex isn't valid ¦ Line 6, shortcut 5 ("zz"): unknown option "Q" ¦ Line 7, shortcut 6 (/${PLANETS}x/): unknown variable ${PLANETS} ¦ Line 8, shortcut 7: it has no trigger
+snippets/priorities.json	1	Line 2, shortcut 1 ("aa"): priority must be a whole number ¦ Line 3, shortcut 2 ("bb"): priority must be a whole number ¦ Line 4, shortcut 3 ("cc"): priority must be a whole number ¦ Line 5, shortcut 4 ("dd"): priority must be a whole number ¦ Line 6, shortcut 5 ("ee"): priority should be a number
