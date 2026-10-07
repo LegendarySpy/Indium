@@ -74,6 +74,10 @@ columns is up to the UI. Formula lines are never rewritten.
   variable whose value changed are recalculated, and that same undo step grows to restore
   them too. An edit outside the frontmatter ends the session without recalculating (the
   caption then says "values out of date"). Never on every keystroke.
+- **Recalculate.** A caption that says "values out of date" (a note saved elsewhere, an edit
+  in the Markdown source) offers Recalculate: clicking the caption recalculates that table
+  as one undo step, "Recalculate Formulas". With a problem nothing changes and the caption
+  shows it instead.
 - **Formula…** (table toolbar's More menu, or a cell's menu) edits the focused row's or
   column's formula: two operands and − + × ÷ "% of", or the formula typed in upstream syntax,
   with a live preview. Row formulas leave out a label column (`@4$2..@4$>=(@2-@3)`), column

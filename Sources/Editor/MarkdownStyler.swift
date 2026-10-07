@@ -30,9 +30,12 @@ extension NSAttributedString.Key {
 final class CaptionDecoration: NSObject {
     let text: String
     let isError: Bool
-    init(text: String, isError: Bool) {
+    /// A link after the text ("Recalculate"); clicking the caption does it.
+    let action: String?
+    init(text: String, isError: Bool, action: String? = nil) {
         self.text = text
         self.isError = isError
+        self.action = action
     }
 }
 

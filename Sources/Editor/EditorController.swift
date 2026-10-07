@@ -604,6 +604,31 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         for t in tables { replaceWithoutUndo(t.range, with: t.text) }
     }
 
+    /// The formula lines whose caption, under `point`, offers Recalculate.
+    private func staleCaption(at point: NSPoint) -> Int? {
+        guard let container = textView.textContainer else { return nil }
+        let local = NSPoint(x: point.x - textView.textContainerOrigin.x, y: point.y - textView.textContainerOrigin.y)
+        let glyph = layoutManager.glyphIndex(for: local, in: container)
+        var line = NSRange()
+        guard layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: &line).contains(local) else { return nil }
+        // The caption sits on the line's hidden source, whose glyphs take no room: the line's first.
+        let index = layoutManager.characterIndexForGlyph(at: line.location)
+        guard index < storage.length, let caption = storage.attribute(.mdCaption, at: index, effectiveRange: nil) as? CaptionDecoration,
+              caption.action != nil, let i = styler.blockIndex(containing: index) else { return nil }
+        return styler.blocks[i].range.location
+    }
+
+    /// Recalculate under a table whose stored results are out of date: one undo step.
+    /// On any problem nothing changes (the caption says what).
+    func recalculateFormulas(at formulasLocation: Int) {
+        guard formulasLocation > 0, let parts = tableParts(at: formulasLocation - 1) else { return }
+        let table = TableFormulaUI.recalculate(tableMarkdown: parts.table, formulaLines: parts.formulas, noteText: storage.string)
+        guard table != parts.table else { return }
+        registerTableUndo(at: parts.range.location, restoring: ns.substring(with: parts.range))
+        textView.undoManager?.setActionName("Recalculate Formulas")
+        replaceWithoutUndo(parts.range, with: Self.joined(table, parts.formulas))
+    }
+
     /// After typing in a cell: the formulas' results, in the typing's undo step.
     private func recalculateEditedTable() {
         guard tableFormulasPending else { return }
@@ -1646,6 +1671,10 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func handleClick(at point: NSPoint, clickCount: Int) -> Bool {
         if let editor = tableEditor, editor.hitTest(point) == nil { endTableEditing() }
+        if let formulas = staleCaption(at: point) {
+            recalculateFormulas(at: formulas)
+            return true
+        }
         for block in visibleBlocks() {
             if case let .table(table) = block.decoration.content {
                 guard block.decoration.placement != .below, tableClickArea(block).contains(point) else { continue }
