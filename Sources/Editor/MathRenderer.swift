@@ -118,6 +118,7 @@ enum MathRenderer {
         }
         // Column specs of array are layout hints the typesetter doesn't need.
         s = s.replacingOccurrences(of: #"\\begin\{array\}\{[^}]*\}"#, with: "\\\\begin{matrix}", options: .regularExpression)
+        s = s.replacingOccurrences(of: "\\begin{array}", with: "\\begin{matrix}")
         s = s.replacingOccurrences(of: "\\end{array}", with: "\\end{matrix}")
         s = s.replacingOccurrences(of: #"\\(?:tag\*?|label)\{[^}]*\}"#, with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: #"\\(?:nonumber|notag)\b"#, with: "", options: .regularExpression)
@@ -130,6 +131,9 @@ enum MathRenderer {
             s = s.replacingOccurrences(of: #"\\"# + from + #"(?![A-Za-z])"#, with: #"\\"# + to, options: .regularExpression)
         }
         s = s.replacingOccurrences(of: #"\\\\\[[^\]]*\]"#, with: "\\\\\\\\", options: .regularExpression)
+        // The braket package's one-argument form, `\braket{ x | y }` (LaTeX Suite's `brk`); the
+        // typesetter's \braket takes two arguments.
+        s = s.replacingOccurrences(of: #"\\braket\{([^{}]*\|[^{}]*)\}(?!\s*\{)"#, with: "\\\\langle $1 \\\\rangle", options: .regularExpression)
         return s
     }
 }

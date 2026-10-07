@@ -77,11 +77,19 @@ final class EditorTextView: NSTextView {
     }
 
     override func mouseMoved(with event: NSEvent) {
+        editor?.hoverTables(at: convert(event.locationInWindow, from: nil))
+        editor?.hoverTableGrip(at: convert(event.locationInWindow, from: nil))
         if pointerIsOverChrome(event) {
             NSCursor.arrow.set()
             return
         }
         super.mouseMoved(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        editor?.hideTableStrips()
+        editor?.hideTableGrip()
     }
 
     override func cursorUpdate(with event: NSEvent) {
@@ -132,28 +140,26 @@ final class EditorTextView: NSTextView {
     // MARK: Pasteboard
 
     override func paste(_ sender: Any?) {
-        if editor?.insertImages(from: .general, at: nil) == true { return }
-        if editor?.pasteTable(from: .general) == true { return }
-        pasteAsPlainText(sender)
+        let pb = TableClipboard.board
+        if editor?.insertImages(from: pb, at: nil) == true { return }
+        if editor?.pasteTable(from: pb) == true { return }
+        if let cell = TableClipboard.singleCell(from: pb) { return insertText(cell, replacementRange: selectedRange()) }
+        if pb.name == .general { return pasteAsPlainText(sender) }
+        // The debug harness's private board.
+        if let text = pb.string(forType: .string) { insertText(text, replacementRange: selectedRange()) }
     }
 
+    /// Copied text holding a table also goes out as HTML, so it pastes as a real table;
+    /// a whole table takes its formula lines along (`EditorController.copySelection`).
     override func copy(_ sender: Any?) {
-        let html = editor?.tableHTML(for: selectedRange())
-        super.copy(sender)
-        addHTML(html)
+        guard let editor else { return super.copy(sender) }
+        editor.copySelection(to: TableClipboard.board)
     }
 
     override func cut(_ sender: Any?) {
-        let html = editor?.tableHTML(for: selectedRange())
-        super.cut(sender)
-        addHTML(html)
-    }
-
-    /// Copied text holding a table also goes out as HTML, so it pastes as a real table.
-    private func addHTML(_ html: String?) {
-        guard let html else { return }
-        NSPasteboard.general.addTypes([.html], owner: nil)
-        NSPasteboard.general.setString(html, forType: .html)
+        guard let editor, let range = editor.copySelection(to: TableClipboard.board) else { return super.cut(sender) }
+        setSelectedRange(range)
+        delete(sender)
     }
 
     override func performFindPanelAction(_ sender: Any?) {
@@ -215,7 +221,7 @@ final class EditorTextView: NSTextView {
         super.draw(dirtyRect)
         (layoutManager as? MarkdownLayoutManager)?.drawFloats(in: dirtyRect, origin: textContainerOrigin)
         drawPageLines(in: dirtyRect)
-        editor?.drawMathMarks()
+        editor?.math.drawMarks()
         drawGhost()
     }
 
@@ -264,7 +270,7 @@ final class EditorTextView: NSTextView {
         // A key typed at the caret (not text put in by a command or an input method).
         if let s = string as? String, !hasMarkedText(),
            replacementRange.location == NSNotFound || replacementRange == selectedRange(),
-           editor?.handleMathInput(s) == true { return }
+           editor?.math.handleInput(s) == true { return }
         super.insertText(string, replacementRange: replacementRange)
     }
 
@@ -273,28 +279,42 @@ final class EditorTextView: NSTextView {
         super.insertText(s, replacementRange: selectedRange())
     }
 
+    /// The key press being handled, so Return can tell Shift-Return apart (math matrices).
+    private var keyEvent: NSEvent?
+
+    override func keyDown(with event: NSEvent) {
+        // Typing hides the pointer; the table strips go with it (the text may move).
+        editor?.hideTableStrips()
+        editor?.hideTableGrip()
+        keyEvent = event
+        defer { keyEvent = nil }
+        super.keyDown(with: event)
+    }
+
     override func insertNewline(_ sender: Any?) {
         if editor?.handleSlashKey(#selector(insertNewline(_:))) == true { return }
-        if editor?.handleMathNewline() == true { return }
+        let shift = (keyEvent ?? NSApp.currentEvent)?.modifierFlags.contains(.shift) == true
+        if editor?.math.handleNewline(shift: shift) == true { return }
         if editor?.handleNewline() == true { return }
         super.insertNewline(sender)
     }
 
     override func insertTab(_ sender: Any?) {
         if editor?.handleSlashKey(#selector(insertTab(_:))) == true { return }
-        if editor?.handleMathTab() == true { return }
+        if editor?.math.handleTab() == true { return }
         if editor?.indentListItem(outdent: false) == true { return }
         super.insertTab(sender)
     }
 
     override func insertBacktab(_ sender: Any?) {
+        if editor?.math.handleBacktab() == true { return }
         if editor?.indentListItem(outdent: true) == true { return }
         super.insertBacktab(sender)
     }
 
     override func deleteBackward(_ sender: Any?) {
         if editor?.deleteSelectedImage() == true { return }
-        if editor?.handleMathBackspace() == true { return }
+        if editor?.math.handleBackspace() == true { return }
         super.deleteBackward(sender)
     }
 
@@ -306,14 +326,24 @@ final class EditorTextView: NSTextView {
     override func cancelOperation(_ sender: Any?) {
         if editor?.handleSlashKey(#selector(cancelOperation(_:))) == true { return }
         if editor?.deselectImage() == true { return }
-        editor?.clearMathStops()
+        editor?.math.clearStops()
         super.cancelOperation(sender)
     }
 
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
         // A selected image is the selection; a caret the height of the image would be noise.
         if editor?.hasSelectedImage == true { return }
-        super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
+        super.drawInsertionPoint(in: caretRect(clamping: rect), color: color, turnedOn: flag)
+    }
+
+    /// A caret beside a rendered block (a table, an equation) would take the height of
+    /// the block's whole line; it's one line of text tall instead, level with the
+    /// block's first line.
+    func caretRect(clamping rect: NSRect) -> NSRect {
+        let font = typingAttributes[.font] as? NSFont ?? NSFont.systemFont(ofSize: 15)
+        let line = ceil(font.ascender - font.descender + font.leading)
+        guard rect.height > line * 2 else { return rect }
+        return NSRect(x: rect.minX, y: rect.minY + TableRender.padY + 2, width: rect.width, height: line)
     }
 
     // MARK: Appearance

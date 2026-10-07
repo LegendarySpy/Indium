@@ -17,6 +17,26 @@ extension NSAttributedString.Key {
     static let mdRule = NSAttributedString.Key("indium.rule")
     /// A page break written into the note, drawn as a labeled dashed line.
     static let mdPageBreak = NSAttributedString.Key("indium.pageBreak")
+    /// Another note shown under an `![[Note]]` line, drawn in a bordered box.
+    static let mdEmbed = NSAttributedString.Key("indium.embed")
+    /// A callout's icon, default title and fold chevron, on its first character.
+    static let mdCallout = NSAttributedString.Key("indium.callout")
+    /// A hidden `<br>` whose first character breaks the line.
+    static let mdLineBreak = NSAttributedString.Key("indium.lineBreak")
+    /// A one-line caption drawn in place of hidden source (a table's formula lines).
+    static let mdCaption = NSAttributedString.Key("indium.caption")
+}
+
+final class CaptionDecoration: NSObject {
+    let text: String
+    let isError: Bool
+    /// A link after the text ("Recalculate"); clicking the caption does it.
+    let action: String?
+    init(text: String, isError: Bool, action: String? = nil) {
+        self.text = text
+        self.isError = isError
+        self.action = action
+    }
 }
 
 final class InlineMath: NSObject {
@@ -62,12 +82,77 @@ final class BlockDecoration: NSObject {
 }
 
 final class GroupDecoration: NSObject {
-    enum Kind { case code, quote(depth: Int) }
+    enum Kind {
+        case code, quote(depth: Int)
+        /// A line of a callout of this type (as written). Lines of one callout compare
+        /// equal, so the box is found as one run however its lines were styled.
+        case callout(String)
+    }
     let kind: Kind
     init(_ kind: Kind) { self.kind = kind }
+
+    override func isEqual(_ object: Any?) -> Bool {
+        if case let .callout(a) = kind, let other = object as? GroupDecoration, case let .callout(b) = other.kind { return a == b }
+        return super.isEqual(object)
+    }
+    override var hash: Int {
+        if case let .callout(type) = kind { return type.hashValue }
+        return super.hash
+    }
 }
 
-enum InlineBoxKind { case code, highlight }
+/// What a callout's first line shows besides its text: the type's icon, the type's
+/// name when no title is written, and a chevron when it folds.
+final class CalloutMark: NSObject {
+    let look: CalloutLook
+    let defaultTitle: String?
+    let font: NSFont
+    let foldable: Bool
+    let folded: Bool
+    init(look: CalloutLook, defaultTitle: String?, font: NSFont, foldable: Bool, folded: Bool) {
+        self.look = look
+        self.defaultTitle = defaultTitle
+        self.font = font
+        self.foldable = foldable
+        self.folded = folded
+    }
+}
+
+/// Obsidian's callout types and aliases, each with a tint and an icon.
+struct CalloutLook {
+    let title: String
+    let symbol: String
+    let color: NSColor
+
+    static func of(_ type: String) -> CalloutLook {
+        let blue = NSColor.dynamic(light: NSColor(hex: 0x3F72B5), dark: NSColor(hex: 0x7EA8DE))
+        let cyan = NSColor.dynamic(light: NSColor(hex: 0x23919C), dark: NSColor(hex: 0x5EC3CC))
+        let green = NSColor.dynamic(light: NSColor(hex: 0x3A8F55), dark: NSColor(hex: 0x6CC487))
+        let orange = NSColor.dynamic(light: NSColor(hex: 0xC27722), dark: NSColor(hex: 0xE2A35C))
+        let red = NSColor.dynamic(light: NSColor(hex: 0xBF4B44), dark: NSColor(hex: 0xE5807A))
+        let purple = NSColor.dynamic(light: NSColor(hex: 0x7F5BB8), dark: NSColor(hex: 0xB394E3))
+        let gray = NSColor.dynamic(light: NSColor(hex: 0x7D7872), dark: NSColor(hex: 0xA8A39D))
+        let name = type.prefix(1).uppercased() + type.dropFirst()
+        switch type {
+        case "abstract", "summary", "tldr": return CalloutLook(title: name, symbol: "list.bullet.clipboard", color: cyan)
+        case "info": return CalloutLook(title: name, symbol: "info.circle", color: blue)
+        case "todo": return CalloutLook(title: name, symbol: "checkmark.circle", color: blue)
+        case "tip", "hint", "important": return CalloutLook(title: name, symbol: "flame", color: cyan)
+        case "success", "check", "done": return CalloutLook(title: name, symbol: "checkmark", color: green)
+        case "question", "help", "faq": return CalloutLook(title: name, symbol: "questionmark.circle", color: orange)
+        case "warning", "caution", "attention": return CalloutLook(title: name, symbol: "exclamationmark.triangle", color: orange)
+        case "failure", "fail", "missing": return CalloutLook(title: name, symbol: "xmark", color: red)
+        case "danger", "error": return CalloutLook(title: name, symbol: "bolt", color: red)
+        case "bug": return CalloutLook(title: name, symbol: "ladybug", color: red)
+        case "example": return CalloutLook(title: name, symbol: "list.bullet", color: purple)
+        case "quote", "cite": return CalloutLook(title: name, symbol: "quote.opening", color: gray)
+        // `note` and any type Obsidian doesn't know look like a note, keeping their name.
+        default: return CalloutLook(title: name, symbol: "pencil", color: blue)
+        }
+    }
+}
+
+enum InlineBoxKind { case code, highlight, tag, key }
 
 final class InlineBox: NSObject {
     let kind: InlineBoxKind
@@ -76,6 +161,40 @@ final class InlineBox: NSObject {
 
 protocol ImageResolving: AnyObject {
     func image(for ref: ImageRef) -> NSImage?
+}
+
+/// Finds the notes `![[Note]]` lines embed. Image resolvers that also adopt this get
+/// embedded notes drawn; others show the line as a plain link.
+protocol NoteEmbedResolving: AnyObject {
+    /// The note being styled, so it never embeds itself.
+    var embeddingNoteURL: URL? { get }
+    /// The note a wiki target names, resolved the way wiki links are from `note`.
+    func noteURL(forEmbed target: String, from note: URL?) -> URL?
+    /// An image written in `note`, resolved from that note's folder.
+    func image(for ref: ImageRef, from note: URL?) -> NSImage?
+    /// Whether a note it can't find shows as "Note not found". Quick Look sees only part
+    /// of the disk, so there an embed it can't read stays a plain link.
+    var showsMissingEmbeds: Bool { get }
+}
+
+extension NoteEmbedResolving {
+    var showsMissingEmbeds: Bool { true }
+}
+
+/// Resolves links and images inside an embedded note from that note's own folder,
+/// through the editor's (or Quick Look's) resolver.
+final class EmbeddedNoteContext: ImageResolving, NoteEmbedResolving {
+    let root: NoteEmbedResolving
+    let note: URL
+    init(root: NoteEmbedResolving, note: URL) {
+        self.root = root
+        self.note = note
+    }
+    var embeddingNoteURL: URL? { note }
+    func noteURL(forEmbed target: String, from note: URL?) -> URL? { root.noteURL(forEmbed: target, from: note) }
+    func image(for ref: ImageRef, from note: URL?) -> NSImage? { root.image(for: ref, from: note) }
+    func image(for ref: ImageRef) -> NSImage? { root.image(for: ref, from: note) }
+    var showsMissingEmbeds: Bool { root.showsMissingEmbeds }
 }
 
 struct StyleConfig {
@@ -105,9 +224,18 @@ final class MarkdownStyler {
     var editingTableWidths: [CGFloat]?
     /// Its cell being typed in, measured with the Markdown markers it shows.
     var editingTableCell: (row: Int, column: Int)?
+    /// The caption under a table with formulas (TableFormulaUI): given the note, the
+    /// table's block and its formula lines. Without it (Quick Look) the lines just hide.
+    var tableFormulaCaption: ((NSString, MDBlock, NSRange) -> CaptionDecoration)?
 
     private var selection: [NSRange] = []
     private var text: NSString = ""
+
+    /// How deep this styler sits inside embeds (0 for the note itself), and the notes
+    /// already open above it, so embeds stop after two levels and never loop.
+    var embedDepth = 0
+    var embedChain: Set<String> = []
+    static let maxEmbedDepth = 2
 
     // Column layout (`<!-- columns -->` regions rendered as native text tables).
     struct ColumnRegion {
@@ -178,9 +306,12 @@ final class MarkdownStyler {
             }
         }
         var restyled: NSRange?
+        // A callout's lines depend on each other (which one is last, whether a header
+        // above makes them a callout at all), so an edit in a run of quote lines restyles the run.
+        let run = blockIndex(containing: editedRange.location).map(quoteRun)
         for (i, b) in new.enumerated() {
             let touchesEdit = NSMaxRange(b.range) >= editedRange.location && b.range.location <= NSMaxRange(editedRange)
-            if touchesEdit || !unchanged.contains(BlockKey(b.range, b.kind)) {
+            if touchesEdit || run?.contains(i) == true || !unchanged.contains(BlockKey(b.range, b.kind)) {
                 style(at: i, in: storage)
                 restyled = restyled.map { NSUnionRange($0, b.range) } ?? b.range
             }
@@ -202,6 +333,8 @@ final class MarkdownStyler {
             if r.location > 0, let i = blockIndex(containing: r.location - 1) { indices.insert(i) }
         }
         selection = new
+        // Entering or leaving a callout folds or unfolds all of it.
+        for i in indices { if let h = calloutOf[i], let last = calloutLast[h] { indices.formUnion(h...last) } }
         guard !indices.isEmpty else { return }
         storage.beginEditing()
         for i in indices.sorted() where i < blocks.count { style(at: i, in: storage) }
@@ -220,7 +353,8 @@ final class MarkdownStyler {
         for r in ranges {
             if let i = blockIndex(containing: r.location) {
                 switch blocks[i].kind {
-                case .math, .image, .code, .hr, .columnMarker: return true
+                case .math, .image, .code, .hr, .columnMarker, .callout: return true
+                case .quote where calloutOf[i] != nil: return true
                 default:
                     let t = text.length >= NSMaxRange(blocks[i].range) ? text.substring(with: blocks[i].range) : ""
                     if t.contains("$") { return true }
@@ -333,7 +467,103 @@ final class MarkdownStyler {
 
     // MARK: Columns
 
+    /// Footnote texts by label, shown when the pointer rests on a reference.
+    private var footnotes: [String: String] = [:]
+
+    // MARK: Callouts
+
+    /// Callout membership: each line's header block, and each header's last line.
+    private(set) var calloutOf: [Int: Int] = [:]
+    private var calloutLast: [Int: Int] = [:]
+
+    private func computeCallouts() {
+        calloutOf = [:]
+        calloutLast = [:]
+        var i = 0
+        while i < blocks.count {
+            guard case .callout = blocks[i].kind else { i += 1; continue }
+            var j = i + 1
+            while j < blocks.count, case .quote = blocks[j].kind { j += 1 }
+            for k in i..<j { calloutOf[k] = i }
+            calloutLast[i] = j - 1
+            i = j
+        }
+    }
+
+    /// The run of quote and callout lines around a block.
+    private func quoteRun(_ index: Int) -> ClosedRange<Int> {
+        func isQuote(_ i: Int) -> Bool {
+            switch blocks[i].kind {
+            case .quote, .callout: true
+            default: false
+            }
+        }
+        guard index < blocks.count, isQuote(index) else { return index...index }
+        var lo = index, hi = index
+        while lo > 0, isQuote(lo - 1) { lo -= 1 }
+        while hi + 1 < blocks.count, isQuote(hi + 1) { hi += 1 }
+        return lo...hi
+    }
+
+    /// Whether a callout is folded right now: written with `-`, and the caret is elsewhere.
+    private func calloutFolded(header h: Int) -> Bool {
+        guard case let .callout(header) = blocks[h].kind, header.fold == .folded, let last = calloutLast[h], last > h else { return false }
+        let start = blocks[h].range.location
+        let span = NSRange(location: start, length: max(0, NSMaxRange(blocks[last].range) - start - 1))
+        return !touches(span)
+    }
+
+    private static let calloutPad: CGFloat = 14
+
+    private func styleCalloutHeader(_ header: CalloutHeader, line first: NSRange, block r: NSRange, in s: NSTextStorage) {
+        let look = CalloutLook.of(header.type)
+        let folded = calloutFolded(header: currentIndex)
+        let isLast = (calloutLast[currentIndex] ?? currentIndex) == currentIndex || folded
+        let pad = Self.calloutPad, icon = round(typo.size * 1.6)
+        let marker = NSRange(location: first.location, length: min(header.markerLength, first.length))
+        let hide = hides(active: touches(first))
+        s.addAttributes([.paragraphStyle: paragraph(indent: pad + icon, first: pad + icon, tail: pad, before: 10,
+                                                    after: isLast ? 12 : typo.paragraphSpacing),
+                         .mdGroup: GroupDecoration(.callout(header.type))], range: r)
+        s.addAttributes(hide ? [.mdHidden: true] : [.foregroundColor: Palette.syntax], range: marker)
+        let title = NSRange(location: NSMaxRange(marker), length: first.length - marker.length)
+        inline(title, in: s, font: { _, italic in self.typo.text(bold: true, italic: italic) }, color: look.color)
+        let mark = CalloutMark(look: look, defaultTitle: title.length == 0 && hide ? look.title : nil,
+                               font: typo.text(bold: true, italic: false), foldable: header.fold != .none, folded: folded)
+        s.addAttribute(.mdCallout, value: mark, range: NSRange(location: first.location, length: 1))
+    }
+
+    private func styleCalloutBody(header h: Int, depth: Int, markerLength: Int, line first: NSRange, block r: NSRange, in s: NSTextStorage) {
+        guard case let .callout(header) = blocks[h].kind else { return }
+        let group = GroupDecoration(.callout(header.type))
+        if calloutFolded(header: h) {
+            collapse(r, in: s)
+            s.addAttribute(.mdGroup, value: group, range: r)
+            return
+        }
+        let pad = Self.calloutPad
+        let marker = NSRange(location: first.location, length: min(markerLength, first.length))
+        let hide = hides(active: touches(first))
+        let markerWidth = hide ? 0 : width(of: text.substring(with: marker), font: typo.body)
+        // Quotes nested in a callout step in, without bars of their own.
+        let indent = pad + CGFloat(depth - 1) * 22
+        let isLast = calloutLast[h] == currentIndex
+        s.addAttributes([.paragraphStyle: paragraph(indent: indent, first: indent - markerWidth, tail: pad,
+                                                    after: isLast ? 12 : typo.paragraphSpacing),
+                         .mdGroup: group], range: r)
+        s.addAttributes(hide ? [.mdHidden: true] : [.foregroundColor: Palette.syntax], range: marker)
+        let content = NSRange(location: NSMaxRange(marker), length: first.length - marker.length)
+        inline(content, in: s, font: { self.typo.text(bold: $0, italic: $1) }, color: Palette.text)
+    }
+
     private func computeRegions() {
+        computeCallouts()
+        footnotes = [:]
+        for b in blocks {
+            guard case let .footnote(label, markerLength) = b.kind else { continue }
+            let line = text.substring(with: b.range) as NSString
+            footnotes[label] = line.substring(from: min(markerLength, line.length)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         regions = []
         cellOfBlock = [:]
         markerSignature = []
@@ -423,7 +653,11 @@ final class MarkdownStyler {
         return (cells, widths)
     }
 
+    /// Index of the block being styled.
+    private var currentIndex = 0
+
     private func style(at index: Int, in s: NSTextStorage) {
+        currentIndex = index
         if let c = cellOfBlock[index], c.region < regions.count {
             let info = cells(forRegion: c.region)
             currentCell = info.cells[c.column]
@@ -493,7 +727,7 @@ final class MarkdownStyler {
                                                         lineSpacing: round(font.pointSize * 0.22))], range: r)
             if level <= 2, typo.headingKern != 0 { s.addAttribute(.kern, value: typo.headingKern, range: first) }
             let active = touches(first)
-            if currentCell != nil {
+            if currentCell != nil || gutter == 0 {
                 // No gutter to hang the marker in: hide it outright.
                 s.addAttributes(hides(active: active) ? [.mdHidden: true] : [.foregroundColor: Palette.syntax], range: marker)
             } else {
@@ -501,6 +735,12 @@ final class MarkdownStyler {
             }
             let content = NSRange(location: NSMaxRange(marker), length: first.length - marker.length)
             inline(content, in: s, font: { _, italic in self.typo.heading(level, italic: italic) }, color: Palette.text)
+
+        case let .callout(header):
+            styleCalloutHeader(header, line: first, block: r, in: s)
+
+        case let .quote(depth, markerLength) where calloutOf[currentIndex] != nil:
+            styleCalloutBody(header: calloutOf[currentIndex]!, depth: depth, markerLength: markerLength, line: first, block: r, in: s)
 
         case let .quote(depth, markerLength):
             let marker = NSRange(location: first.location, length: min(markerLength, first.length))
@@ -554,6 +794,9 @@ final class MarkdownStyler {
         case let .table(spec):
             styleTable(spec, block: block, lines: lineRanges, in: s)
 
+        case .tableFormulas:
+            styleTableFormulas(block, lines: lineRanges, in: s)
+
         case .frontmatter where config.printing:
             for line in lineRanges { collapse(lineWithTerminator(line), in: s) }
 
@@ -574,6 +817,35 @@ final class MarkdownStyler {
 
         case let .image(ref):
             styleImage(ref, line: first, block: block, in: s)
+
+        case let .footnote(_, markerLength):
+            // A footnote's text, quieter than the note: its label stands in front, the
+            // brackets and colon tucked away until the caret is on the line.
+            let font = typo.small(0.88)
+            let marker = NSRange(location: first.location, length: min(markerLength, first.length))
+            let hide = hides(active: touches(first))
+            s.addAttributes([.font: font, .paragraphStyle: paragraph(after: round(typo.paragraphSpacing * 0.5))], range: r)
+            s.addAttribute(.foregroundColor, value: hide ? Palette.tertiaryText : Palette.syntax, range: marker)
+            if hide, marker.length >= 4 {
+                s.addAttribute(.mdHidden, value: true, range: NSRange(location: marker.location, length: 2))
+                s.addAttribute(.mdHidden, value: true, range: NSRange(location: NSMaxRange(marker) - 2, length: 2))
+                // The colon's place goes to a gap, so the label doesn't run into the text.
+                s.addAttribute(.kern, value: round(font.pointSize * 0.5), range: NSRange(location: NSMaxRange(marker) - 3, length: 1))
+            }
+            let content = NSRange(location: NSMaxRange(marker), length: first.length - marker.length)
+            inline(content, in: s, font: { self.typo.text(bold: $0, italic: $1, size: font.pointSize) }, color: Palette.secondaryText)
+
+        case let .embed(ref):
+            styleEmbed(ref, line: first, block: block, in: s)
+
+        case .comment:
+            // Notes to self: gone from the page (and from print) until the caret is in them.
+            let content = NSRange(location: r.location, length: max(0, NSMaxRange(lineRanges.last!) - r.location))
+            if hides(active: touches(content)) {
+                for line in lineRanges { collapse(lineWithTerminator(line), in: s) }
+            } else {
+                s.addAttribute(.foregroundColor, value: Palette.syntax, range: r)
+            }
         }
     }
 
@@ -720,6 +992,43 @@ final class MarkdownStyler {
         }
     }
 
+    /// Formula lines show as their source while the caret is on them (or Markdown is
+    /// always shown), and otherwise as a one-line caption under the table. Paper and
+    /// floating tables get neither.
+    private func styleTableFormulas(_ block: MDBlock, lines: [NSRange], in s: NSTextStorage) {
+        let table = blockIndex(containing: block.range.location - 1).map { blocks[$0] }
+        let floating = table.flatMap { t in blockIndex(containing: t.range.location).flatMap { floatOfBlock[$0] } } != nil
+        let content = NSRange(location: block.range.location, length: max(0, NSMaxRange(lines.last!) - block.range.location))
+        if config.printing || floating || table == nil {
+            collapse(block.range, in: s)
+            return
+        }
+        if config.syntax == .always || touches(content) {
+            let font = NSFont.monospacedSystemFont(ofSize: round(typo.size * 0.72), weight: .regular)
+            s.addAttributes([.font: font, .foregroundColor: Palette.secondaryText,
+                             .paragraphStyle: paragraph(after: 0, lineSpacing: 2)], range: block.range)
+            if let last = lines.last {
+                s.addAttribute(.paragraphStyle, value: paragraph(after: typo.paragraphSpacing, lineSpacing: 2), range: lineWithTerminator(last))
+            }
+            return
+        }
+        guard let table, let caption = tableFormulaCaption?(text, table, block.range) else {
+            collapse(block.range, in: s)
+            return
+        }
+        let height = round(typo.size * 1.5)
+        for (i, line) in lines.enumerated() {
+            let full = lineWithTerminator(line)
+            if i == 0 {
+                s.setAttributes([.font: typo.body, .foregroundColor: NSColor.clear, .mdHidden: true,
+                                 .paragraphStyle: paragraph(fixedHeight: height)], range: full)
+                s.addAttribute(.mdCaption, value: caption, range: line.length > 0 ? line : full)
+            } else {
+                collapse(full, in: s)
+            }
+        }
+    }
+
     private func styleImage(_ ref: ImageRef, line: NSRange, block: MDBlock, in s: NSTextStorage) {
         let image = imageResolver?.image(for: ref)
         let floating = currentFloat
@@ -766,6 +1075,68 @@ final class MarkdownStyler {
         }
     }
 
+    private func styleEmbed(_ ref: EmbedRef, line: NSRange, block: MDBlock, in s: NSTextStorage) {
+        let link: (Bool, Bool) -> NSFont = { self.typo.text(bold: $0, italic: $1) }
+        guard let resolver = imageResolver as? NoteEmbedResolving, embedDepth < Self.maxEmbedDepth else {
+            // Too deep (or nothing to resolve notes with): a link to the note.
+            inline(line, in: s, font: link, color: Palette.text)
+            return
+        }
+        var chain = embedChain
+        let host = resolver.embeddingNoteURL
+        if let host { chain.insert(host.standardizedFileURL.path) }
+        let url = resolver.noteURL(forEmbed: ref.note, from: host)
+        if let url, chain.contains(url.standardizedFileURL.path) {
+            // A note embedding one that's already open above it: a link, not a loop.
+            inline(line, in: s, font: link, color: Palette.text)
+            return
+        }
+        if url == nil, !resolver.showsMissingEmbeds {
+            inline(line, in: s, font: link, color: Palette.text)
+            return
+        }
+        let pad = round(typo.size * 0.7)
+        let innerWidth = max(contentWidth - pad * 2, 80)
+        let content: NoteEmbed.Content
+        if let url {
+            if let text = NoteEmbed.text(at: url) {
+                if let section = NoteEmbed.section(of: text, subpath: ref.subpath) {
+                    var nested = config
+                    nested.columnWidth = innerWidth
+                    nested.gutter = 0
+                    nested.printing = true
+                    nested.maxBlockHeight = min(config.maxBlockHeight, 600)
+                    let root = (resolver as? EmbeddedNoteContext)?.root ?? resolver
+                    content = .note(NoteEmbed.Render(markdown: section, config: nested, context: EmbeddedNoteContext(root: root, note: url),
+                                                     depth: embedDepth + 1, chain: chain.union([url.standardizedFileURL.path])))
+                } else {
+                    content = .message(ref.subpath?.hasPrefix("^") == true ? "Block not found" : "Heading not found",
+                                       detail: ref.subpath ?? "")
+                }
+            } else {
+                content = .message("Note can't be read", detail: ref.note)
+            }
+        } else {
+            content = .message("Note not found", detail: ref.note)
+        }
+        let cap = config.printing ? config.maxBlockHeight * 0.8 : 420
+        let contentHeight: CGFloat
+        switch content {
+        case let .note(render): contentHeight = min(render.height, cap)
+        case .message: contentHeight = round(typo.size * 1.4)
+        }
+        // The line itself is the box's title: the note's name, a link that opens it.
+        let font = typo.small(0.8)
+        s.addAttribute(.paragraphStyle, value: paragraph(indent: pad, first: pad, tail: pad, before: round(pad * 0.9),
+                                                         after: contentHeight + pad * 2, lineSpacing: 0), range: block.range)
+        inline(line, in: s, font: { _, _ in font }, color: Palette.secondaryText)
+        var dependencies: Set<String> = []
+        if let url { dependencies.insert(NoteEmbed.key(url)) }
+        if case let .note(render) = content { dependencies.formUnion(render.dependencies) }
+        s.addAttribute(.mdEmbed, value: NoteEmbed(content: content, contentHeight: contentHeight, padding: pad, dependencies: dependencies),
+                       range: line.length > 0 ? line : block.range)
+    }
+
     // MARK: Inline styling
 
     private func inline(_ range: NSRange, in s: NSTextStorage, font: @escaping (Bool, Bool) -> NSFont, color: NSColor) {
@@ -784,6 +1155,7 @@ final class MarkdownStyler {
             if lo < hi { for i in lo..<hi { traits[i] |= bit } }
         }
         var deferred: [(NSRange, [NSAttributedString.Key: Any])] = []
+        var scripts: [(range: NSRange, raise: CGFloat, scale: CGFloat)] = []
 
         for span in spans {
             // Selecting text to format it leaves the markers hidden; only a caret reveals them.
@@ -820,6 +1192,50 @@ final class MarkdownStyler {
                 styleMarkers()
             case .escape:
                 styleMarkers()
+            case .comment:
+                deferred.append((span.range, hide ? [.mdHidden: true] : [.foregroundColor: Palette.syntax]))
+            case .tag:
+                deferred.append((span.range, [.foregroundColor: Palette.link, .mdInlineBox: InlineBox(.tag)]))
+            case let .footnoteRef(label):
+                // A small raised label, like a printed footnote mark; its text shows on hover.
+                scripts.append((span.content, 0.36, 0.72))
+                var attrs: [NSAttributedString.Key: Any] = [.foregroundColor: Palette.link]
+                if let note = footnotes[label] { attrs[.toolTip] = note }
+                deferred.append((span.range, attrs))
+                styleMarkers()
+            case .inlineFootnote:
+                // Smaller and dimmed, set a little apart from the sentence it annotates.
+                deferred.append((span.content, [.foregroundColor: Palette.secondaryText]))
+                scripts.append((span.content, 0, 0.86))
+                if hide, span.range.location > range.location {
+                    deferred.append((NSRange(location: span.range.location - 1, length: 1), [.kern: round(typo.size * 0.4)]))
+                }
+                styleMarkers()
+            case let .html(tag):
+                switch tag {
+                case .br:
+                    // The tag folds into a line break; with the caret on it, it shows as written.
+                    if hide {
+                        deferred.append((span.range, [.mdHidden: true]))
+                        deferred.append((NSRange(location: span.range.location, length: 1), [.mdLineBreak: true]))
+                    } else {
+                        deferred.append((span.range, [.foregroundColor: Palette.syntax]))
+                    }
+                case .sup, .sub:
+                    scripts.append((span.content, tag == .sup ? 0.36 : -0.14, 0.72))
+                case .u:
+                    deferred.append((span.content, [.underlineStyle: NSUnderlineStyle.single.rawValue]))
+                case .mark:
+                    deferred.append((span.content, [.mdInlineBox: InlineBox(.highlight)]))
+                case .kbd:
+                    mark(span.content, 4)
+                    deferred.append((span.content, [.mdInlineBox: InlineBox(.key)]))
+                }
+                if tag != .br {
+                    let open = NSRange(location: span.range.location, length: span.content.location - span.range.location)
+                    let close = NSRange(location: NSMaxRange(span.content), length: NSMaxRange(span.range) - NSMaxRange(span.content))
+                    for m in [open, close] { deferred.append((m, hide ? [.mdHidden: true] : [.foregroundColor: Palette.syntax])) }
+                }
             case let .math(latex, display):
                 mark(span.range, 4)
                 let size = round(typo.size * (display ? 1.12 : 1.06))
@@ -871,6 +1287,15 @@ final class MarkdownStyler {
             }
         }
         for (r, attrs) in deferred { s.addAttributes(attrs, range: r) }
+        // Superscripts, subscripts and inline footnotes: the text's own font, smaller,
+        // raised or lowered.
+        for (r, raise, scale) in scripts where r.length > 0 {
+            s.enumerateAttribute(.font, in: r) { value, run, _ in
+                guard let f = value as? NSFont else { return }
+                let small = NSFont(descriptor: f.fontDescriptor, size: round(f.pointSize * scale)) ?? f
+                s.addAttributes([.font: small, .baselineOffset: round(f.pointSize * raise)], range: run)
+            }
+        }
     }
 
     static func linkURL(_ raw: String) -> URL? {
@@ -888,6 +1313,166 @@ final class MarkdownStyler {
         c.scheme = "indium-wiki"
         c.path = "/" + target
         return c.url
+    }
+}
+
+/// A note drawn inside another (`![[Note]]`): its text styled by a styler of its own
+/// and laid out once at the width of the box, then drawn read-only under the line.
+final class NoteEmbed: NSObject {
+    enum Content {
+        case note(Render)
+        case message(String, detail: String)
+    }
+    let content: Content
+    /// Height shown, capped for long notes.
+    let contentHeight: CGFloat
+    let padding: CGFloat
+    /// Every note file this embed shows, nested ones included, so a change to any of
+    /// them can refresh it.
+    let dependencies: Set<String>
+
+    init(content: Content, contentHeight: CGFloat, padding: CGFloat, dependencies: Set<String>) {
+        self.content = content
+        self.contentHeight = contentHeight
+        self.padding = padding
+        self.dependencies = dependencies
+    }
+
+    final class Render {
+        let storage: NSTextStorage
+        let layout = MarkdownLayoutManager()
+        let container: NSTextContainer
+        let height: CGFloat
+        /// Resolves the note's links and images from its own folder while it's styled.
+        let context: EmbeddedNoteContext
+        private(set) var dependencies: Set<String> = []
+
+        init(markdown: String, config: StyleConfig, context: EmbeddedNoteContext, depth: Int, chain: Set<String>) {
+            self.context = context
+            storage = NSTextStorage(string: markdown)
+            container = NSTextContainer(size: NSSize(width: config.columnWidth, height: .greatestFiniteMagnitude))
+            container.lineFragmentPadding = 0
+            layout.allowsNonContiguousLayout = false
+            layout.gutter = 0
+            layout.bodyLineSpacing = config.typography.lineSpacing
+            layout.typoParagraphGap = config.typography.paragraphSpacing
+            layout.captionFont = config.typography.text(bold: false, italic: true, size: round(config.typography.size * 0.8))
+            layout.addTextContainer(container)
+            storage.addLayoutManager(layout)
+            let styler = MarkdownStyler(config: config)
+            styler.imageResolver = context
+            styler.embedDepth = depth
+            styler.embedChain = chain
+            styler.styleAll(storage, selection: [])
+            // Read-only: links take the editor's link color rather than AppKit's blue,
+            // and the box's padding is the only space above the first line.
+            let storage = self.storage
+            var links: [NSRange] = []
+            storage.enumerateAttribute(.link, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+                if value != nil { links.append(range) }
+            }
+            storage.beginEditing()
+            for range in links {
+                storage.removeAttribute(.link, range: range)
+                storage.addAttribute(.foregroundColor, value: Palette.link, range: range)
+            }
+            if storage.length > 0, let first = storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle,
+               let style = first.mutableCopy() as? NSMutableParagraphStyle {
+                style.paragraphSpacingBefore = 0
+                let line = (storage.string as NSString).lineRange(for: NSRange(location: 0, length: 0))
+                storage.addAttribute(.paragraphStyle, value: style, range: line)
+            }
+            storage.endEditing()
+            layout.ensureLayout(for: container)
+            // A nested embed's box hangs below its line, in spacing the last line of a
+            // text doesn't get, so it counts on its own.
+            var bottom = layout.usedRect(for: container).height
+            let layout = self.layout
+            var dependencies: Set<String> = []
+            storage.enumerateAttribute(.mdEmbed, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+                guard let embed = value as? NoteEmbed else { return }
+                dependencies.formUnion(embed.dependencies)
+                let glyph = layout.glyphIndexForCharacter(at: max(range.location, NSMaxRange(range) - 1))
+                let used = layout.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
+                bottom = max(bottom, used.maxY + embed.contentHeight + embed.padding * 1.5)
+            }
+            height = ceil(bottom)
+            self.dependencies = dependencies
+        }
+
+        /// Draws the note with its top-left at `origin`, clipped to `clip`.
+        func draw(at origin: NSPoint, clip: NSRect) {
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(rect: clip).addClip()
+            let glyphs = layout.glyphRange(for: container)
+            layout.drawBackground(forGlyphRange: glyphs, at: origin)
+            layout.drawGlyphs(forGlyphRange: glyphs, at: origin)
+            NSGraphicsContext.restoreGraphicsState()
+        }
+    }
+
+    /// The note's text, read fresh each time the embed is styled (notes are small, and
+    /// a cache would have to know about every note nested inside).
+    static func text(at url: URL) -> String? {
+        try? String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// How dependencies are named: symlinks resolved, so file events (which report
+    /// `/private/tmp/...`) match the paths links resolve to.
+    static func key(_ url: URL) -> String { url.resolvingSymlinksInPath().standardizedFileURL.path }
+
+    /// The part of a note an embed shows: all of it (without frontmatter), the section
+    /// under a heading (down to the next heading as high or higher), or a `^block`.
+    static func section(of text: String, subpath: String?) -> String? {
+        let ns = text as NSString
+        let body = MarkdownScanner.scan(ns).filter { if case .frontmatter = $0.kind { return false }; return true }
+        guard let subpath else {
+            guard let start = body.first?.range.location else { return "" }
+            return ns.substring(from: start).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if subpath.hasPrefix("^") {
+            let id = NSRegularExpression.escapedPattern(for: String(subpath.dropFirst()))
+            guard let regex = try? NSRegularExpression(pattern: #"(?:^|\s)\^"# + id + #"\s*$"#) else { return nil }
+            for (i, b) in body.enumerated() {
+                let line = ns.substring(with: b.range).trimmingCharacters(in: .newlines) as NSString
+                guard let m = regex.firstMatch(in: line as String, range: NSRange(location: 0, length: line.length)) else { continue }
+                let before = line.substring(to: m.range.location).trimmingCharacters(in: .whitespaces)
+                if !before.isEmpty { return before }
+                // An id on a line of its own names the block just above it (a list or a
+                // table, usually with a blank line between).
+                var j = i - 1
+                while j >= 0, body[j].kind == .blank { j -= 1 }
+                var lines: [String] = []
+                while j >= 0, body[j].kind != .blank {
+                    lines.insert(ns.substring(with: body[j].range).trimmingCharacters(in: .newlines), at: 0)
+                    j -= 1
+                }
+                return lines.isEmpty ? nil : lines.joined(separator: "\n")
+            }
+            return nil
+        }
+        // `Note#A#B` points at B under A; the last heading is the one shown.
+        let wanted = normalize(subpath.components(separatedBy: "#").last ?? subpath)
+        var start: (index: Int, level: Int)?
+        for (i, b) in body.enumerated() {
+            guard case let .heading(level, markerLength) = b.kind else { continue }
+            if let s = start {
+                guard level <= s.level else { continue }
+                let from = body[s.index].range.location
+                return ns.substring(with: NSRange(location: from, length: b.range.location - from)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            let line = ns.substring(with: b.range) as NSString
+            if normalize(line.substring(from: min(markerLength, line.length))) == wanted { start = (i, level) }
+        }
+        guard let s = start else { return nil }
+        return ns.substring(from: body[s.index].range.location).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func normalize(_ heading: String) -> String {
+        var t = heading.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Closing hashes (`## Title ##`) aren't part of the title.
+        while t.hasSuffix("#") { t.removeLast() }
+        return t.trimmingCharacters(in: .whitespaces).lowercased()
     }
 }
 
