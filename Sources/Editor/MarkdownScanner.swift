@@ -56,13 +56,31 @@ struct TableSpec: Hashable {
     var header: [String] { rows.first?.map(\.text) ?? [] }
     var body: [[String]] { rows.dropFirst().map { $0.map(\.text) } }
 
-    /// Markdown for a table, with cells padded so the source stays readable.
+    // A cell as stored and as seen. Stored, a pipe is `\|` (GFM) and a line break `<br>`
+    // (Obsidian); seen (rendered, typed in, copied out) they're `|` and a newline. A
+    // backslash-pipe that's seen (LaTeX's `\|`, a double bar) is stored as `\\|`.
+
+    /// Cell text as it's seen, from its Markdown.
+    static func unescapeCell(_ stored: String) -> String {
+        var s = stored
+        if s.contains("|") { s = s.replacingOccurrences(of: #"\|"#, with: "|") }
+        if s.contains("<") { s = s.replacingOccurrences(of: #"<br\s*/?>"#, with: "\n", options: [.regularExpression, .caseInsensitive]) }
+        return s
+    }
+
+    /// Cell Markdown for text as it's seen: every pipe escaped, line breaks as `<br>`.
+    static func escapeCell(_ seen: String) -> String {
+        seen.replacingOccurrences(of: "|", with: #"\|"#).replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "<br>")
+    }
+
+    /// Markdown for a table, with cells padded so the source stays readable. Cells are
+    /// Markdown (`escapeCell`); any bare pipe or line break left in one is escaped.
     static func markdown(header: [String], body: [[String]], alignments: [Int], dashes: [Int]?) -> String {
         let columns = max(header.count, alignments.count, body.map(\.count).max() ?? 0, 1)
         func cells(_ row: [String]) -> [String] {
             // Escape bare pipes so they can't split the row; already escaped ones stay as they are.
             (0..<columns).map { c in c < row.count ? row[c].replacingOccurrences(of: #"(?<!\\)\|"#, with: #"\\|"#, options: .regularExpression)
-                .replacingOccurrences(of: "\n", with: " ") : "" }
+                .replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "<br>") : "" }
         }
         let head = cells(header)
         let rows = body.map(cells)

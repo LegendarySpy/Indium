@@ -78,6 +78,7 @@ final class EditorTextView: NSTextView {
 
     override func mouseMoved(with event: NSEvent) {
         editor?.hoverTables(at: convert(event.locationInWindow, from: nil))
+        editor?.hoverTableGrip(at: convert(event.locationInWindow, from: nil))
         if pointerIsOverChrome(event) {
             NSCursor.arrow.set()
             return
@@ -88,6 +89,7 @@ final class EditorTextView: NSTextView {
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         editor?.hideTableStrips()
+        editor?.hideTableGrip()
     }
 
     override func cursorUpdate(with event: NSEvent) {
@@ -138,28 +140,26 @@ final class EditorTextView: NSTextView {
     // MARK: Pasteboard
 
     override func paste(_ sender: Any?) {
-        if editor?.insertImages(from: .general, at: nil) == true { return }
-        if editor?.pasteTable(from: .general) == true { return }
-        pasteAsPlainText(sender)
+        let pb = TableClipboard.board
+        if editor?.insertImages(from: pb, at: nil) == true { return }
+        if editor?.pasteTable(from: pb) == true { return }
+        if let cell = TableClipboard.singleCell(from: pb) { return insertText(cell, replacementRange: selectedRange()) }
+        if pb.name == .general { return pasteAsPlainText(sender) }
+        // The debug harness's private board.
+        if let text = pb.string(forType: .string) { insertText(text, replacementRange: selectedRange()) }
     }
 
+    /// Copied text holding a table also goes out as HTML, so it pastes as a real table;
+    /// a whole table takes its formula lines along (`EditorController.copySelection`).
     override func copy(_ sender: Any?) {
-        let html = editor?.tableHTML(for: selectedRange())
-        super.copy(sender)
-        addHTML(html)
+        guard let editor else { return super.copy(sender) }
+        editor.copySelection(to: TableClipboard.board)
     }
 
     override func cut(_ sender: Any?) {
-        let html = editor?.tableHTML(for: selectedRange())
-        super.cut(sender)
-        addHTML(html)
-    }
-
-    /// Copied text holding a table also goes out as HTML, so it pastes as a real table.
-    private func addHTML(_ html: String?) {
-        guard let html else { return }
-        NSPasteboard.general.addTypes([.html], owner: nil)
-        NSPasteboard.general.setString(html, forType: .html)
+        guard let editor, let range = editor.copySelection(to: TableClipboard.board) else { return super.cut(sender) }
+        setSelectedRange(range)
+        delete(sender)
     }
 
     override func performFindPanelAction(_ sender: Any?) {
@@ -285,6 +285,7 @@ final class EditorTextView: NSTextView {
     override func keyDown(with event: NSEvent) {
         // Typing hides the pointer; the table strips go with it (the text may move).
         editor?.hideTableStrips()
+        editor?.hideTableGrip()
         keyEvent = event
         defer { keyEvent = nil }
         super.keyDown(with: event)
