@@ -34,3 +34,62 @@ final class FileWatcher {
         }
     }
 }
+
+/// Watches one file, for a note opened on its own from Finder. In the App Store build
+/// Indium may read only that file, not its folder, so a folder stream could stay
+/// silent; a vnode source on the file itself still fires. Editors that save by
+/// replacing the file (a new inode) end this source, so it reattaches to whatever now
+/// sits at the path.
+final class SingleFileWatcher {
+    private let url: URL
+    private let handler: () -> Void
+    private var source: DispatchSourceFileSystemObject?
+    private var retry: DispatchWorkItem?
+    /// Grows while the file stays missing, so a deleted note isn't polled hard.
+    private var retryDelay = 0.15
+
+    init(url: URL, handler: @escaping () -> Void) {
+        self.url = url
+        self.handler = handler
+        attach()
+    }
+
+    private func attach() {
+        source?.cancel()
+        source = nil
+        let fd = open(url.path, O_EVTONLY)
+        guard fd >= 0 else {
+            // Mid-replace or gone: look again shortly (a missing note is handled by the
+            // editor, which closes the window when it notices).
+            scheduleRetry()
+            return
+        }
+        let s = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .extend, .attrib, .delete, .rename, .revoke], queue: .main)
+        s.setEventHandler { [weak self] in
+            guard let self, let s = self.source else { return }
+            let replaced = !s.data.isDisjoint(with: [.delete, .rename, .revoke])
+            self.handler()
+            if replaced { self.scheduleRetry() }
+        }
+        s.setCancelHandler { close(fd) }
+        source = s
+        retryDelay = 0.15
+        s.resume()
+    }
+
+    private func scheduleRetry() {
+        retry?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.attach()
+            self?.handler()
+        }
+        retry = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + retryDelay, execute: work)
+        retryDelay = min(retryDelay * 2, 5)
+    }
+
+    deinit {
+        retry?.cancel()
+        source?.cancel()
+    }
+}

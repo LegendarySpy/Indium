@@ -68,9 +68,36 @@ final class AppSettings: ObservableObject {
     static let shared = AppSettings()
     static let textSizes: ClosedRange<Double> = 14...22
 
+    private static let isQuickLook = Bundle.main.bundleURL.pathExtension == "appex"
+
+    /// The App Group the App Store build shares with its Quick Look preview (set from the
+    /// team in project.yml; empty in local test builds, which have no team).
+    static let appGroup: String? = {
+        #if APPSTORE
+        guard let id = Bundle.main.object(forInfoDictionaryKey: "IndiumAppGroup") as? String,
+              !id.isEmpty, !id.contains("$(") else { return nil }
+        return id
+        #else
+        return nil
+        #endif
+    }()
+
+    /// Where the Quick Look preview finds Indium's look. The direct-download preview reads
+    /// the app's own preferences through a sandbox exception; the App Store preview reads
+    /// the App Group suite the app keeps in step (or uses the defaults without one).
+    private static let quickLookSuite: UserDefaults? = {
+        #if APPSTORE
+        return appGroup.flatMap { UserDefaults(suiteName: $0) }
+        #else
+        return UserDefaults(suiteName: "dev.garon.Indium")
+        #endif
+    }()
+
     /// The Quick Look preview reads the app's preferences (it can't write them).
-    private let defaults = Bundle.main.bundleURL.pathExtension == "appex"
-        ? UserDefaults(suiteName: "dev.garon.Indium") ?? .standard : UserDefaults.standard
+    private let defaults = isQuickLook ? quickLookSuite ?? .standard : UserDefaults.standard
+
+    /// Settings the Quick Look preview draws with.
+    private static let sharedKeys = ["appearance", "font", "textSize", "lineWidth", "syntax", "showPageLines"]
 
     @Published var appearance: AppearanceSetting { didSet { save(appearance.rawValue, "appearance"); applyAppearance() } }
     @Published var font: FontChoice { didSet { save(font.rawValue, "font") } }
@@ -97,6 +124,16 @@ final class AppSettings: ObservableObject {
 
     private func save(_ value: Any, _ key: String) {
         defaults.set(value, forKey: key)
+        if !Self.isQuickLook, Self.appGroup != nil, Self.sharedKeys.contains(key) { Self.quickLookSuite?.set(value, forKey: key) }
+    }
+
+    /// Copies the preview's settings into the App Group suite at launch, so it matches
+    /// from the first launch (including preferences carried over from the direct build).
+    func shareWithQuickLook() {
+        guard !Self.isQuickLook, Self.appGroup != nil, let suite = Self.quickLookSuite else { return }
+        for key in Self.sharedKeys {
+            if let value = defaults.object(forKey: key) { suite.set(value, forKey: key) } else { suite.removeObject(forKey: key) }
+        }
     }
 
     func applyAppearance() {
