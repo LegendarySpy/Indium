@@ -1,0 +1,8 @@
+[
+    {trigger: "aa", replacement: "a", options: "mA", priority: 1e999},
+    {trigger: "bb", replacement: "b", options: "mA", priority: 1e300},
+    {trigger: "cc", replacement: "c", options: "mA", priority: 1.5},
+    {trigger: "dd", replacement: "d", options: "mA", priority: -1e999},
+    {trigger: "ee", replacement: "e", options: "mA", priority: "high"},
+    {trigger: "ff", replacement: "f", options: "mA", priority: -3},
+]

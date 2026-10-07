@@ -156,6 +156,8 @@ enum MainMenu {
         add(m, "Image…", #selector(W.insertImage(_:)), "i", [.command, .shift])
         add(m, "Inline Equation", #selector(W.insertInlineMath(_:)), "m", [.command, .control])
         add(m, "Display Equation", #selector(W.insertDisplayMath(_:)), "m", [.command, .control, .shift])
+        add(m, "Math Shortcuts", #selector(MathSnippetConfig.showMathShortcuts(_:))).target = MathSnippetConfig.shared
+        add(m, "Edit Math Shortcuts…", #selector(MathSnippetConfig.editMathShortcuts(_:))).target = MathSnippetConfig.shared
         m.addItem(.separator())
         return m
     }
