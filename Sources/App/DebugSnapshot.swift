@@ -34,6 +34,17 @@ enum DebugSnapshot {
         m = model(t3)
         let t4 = apply(t3, m.move(group(m, "Gamma"), to: .before(group(m, "# Title"))))
         print("=== gamma to top ===\n" + t4)
+
+        // A table's formula lines belong to its block: they move with it.
+        let f = "Intro.\n\n| Q | A |\n| - | - |\n| x | 2 |\n| y | 4 |\n<!-- TBLFM: @3$2=(@2$2*2) -->\n\nOutro.\n"
+        m = model(f)
+        let kinds = MarkdownScanner.scan(f as NSString).map { "\($0.kind)".components(separatedBy: "(").first! }
+        print("=== formula blocks ===\n" + kinds.joined(separator: " "))
+        let f1 = apply(f, m.move(group(m, "| Q"), to: .after(group(m, "Outro"))))
+        print("=== table with formulas to end ===\n" + f1)
+        m = model(f1)
+        let f2 = apply(f1, m.move(group(m, "| Q"), to: .before(group(m, "Intro"))))
+        print("=== table with formulas to top ===\n" + f2)
     }
 
     /// `-IndiumIconSteps "files;open:A.md;icon;suggest;wait:0.3;shot:/tmp/a.png;wait:2;dump"` drives
@@ -177,6 +188,44 @@ enum DebugSnapshot {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { run(i + 1) }
         }
         run(0)
+    }
+
+    /// The window and any popovers over it, as a PNG.
+    static func debugShot(window: NSWindow, path: String) {
+        guard let frame = window.contentView?.superview else { return }
+        frame.layoutSubtreeIfNeeded()
+        frame.displayIfNeeded()
+        guard let base = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return }
+        frame.cacheDisplay(in: frame.bounds, to: base)
+        let pops = NSApp.windows.filter { $0 !== window && $0.isVisible && String(describing: type(of: $0)).contains("Popover") }
+        var canvas = window.frame
+        for w in pops { canvas = canvas.union(w.frame) }
+        let image = NSImage(size: canvas.size)
+        image.lockFocus()
+        NSColor.windowBackgroundColor.setFill()
+        NSRect(origin: .zero, size: canvas.size).fill()
+        base.draw(in: NSRect(x: window.frame.minX - canvas.minX, y: window.frame.minY - canvas.minY, width: window.frame.width, height: window.frame.height))
+        for w in pops {
+            guard let v = w.contentView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { continue }
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            NSColor.controlBackgroundColor.setFill()
+            v.bounds.fill()
+            NSGraphicsContext.restoreGraphicsState()
+            v.cacheDisplay(in: v.bounds, to: rep)
+            let r = v.convert(v.bounds, to: nil).offsetBy(dx: w.frame.minX - canvas.minX, dy: w.frame.minY - canvas.minY)
+            let shape = NSBezierPath(roundedRect: r, xRadius: 10, yRadius: 10)
+            NSColor.controlBackgroundColor.setFill()
+            shape.fill()
+            NSColor.separatorColor.setStroke()
+            shape.stroke()
+            rep.draw(in: r)
+        }
+        image.unlockFocus()
+        if let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) {
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        }
+        print("  shot:", path)
     }
 
     static func runIfRequested(_ controller: DocumentWindowController) {
@@ -345,7 +394,9 @@ enum DebugSnapshot {
                     undo.groupsByEvent = false
                 }
                 for step in steps {
-                    let isUndo = step == "undo" || step == "redo"
+                    // Steps that only look (and Tab, as a real key) open no explicit undo group: an empty
+                    // explicit group stays on the stack, where a real key event's empty group is dropped.
+                    let isUndo = ["undo", "redo", "noteundo", "tab", "text", "caption", "fprint", "shot", "focus"].contains(step.split(separator: ":").first.map(String.init) ?? "")
                     if !isUndo { undo?.beginUndoGrouping() }
                     defer { if !isUndo { undo?.endUndoGrouping() } }
                     let e = target.editor.tableEditor
@@ -385,6 +436,60 @@ enum DebugSnapshot {
                         hit?.mouseDown(with: mouse(.leftMouseDown, from, clicks: clicks))
                     case "done":
                         target.editor.endTableEditing(caretAfter: true)
+                    // Table formulas: `formula` opens Formula… for the focused cell; `fpick:2,−,3`
+                    // sets its menus (rows/columns in TBLFM numbering, an operation's title);
+                    // `ftext:…` types the formula; `fok`, `fremove`, `fcancel`; `fprint` shows it;
+                    // `text` prints the note; `caption` the captions drawn; `shot:path` a screenshot.
+                    case "formula":
+                        target.editor.showFormulaPopover()
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+                    case "fpick", "ftext", "fok", "fremove", "fcancel", "fprint":
+                        guard let pop = target.editor.formulaPopover?.contentViewController as? TableFormulaPopover else { print("  no formula popover"); break }
+                        switch step.split(separator: ":").first.map(String.init) ?? "" {
+                        case "fpick":
+                            let n = arg.split(separator: ",").map(String.init)
+                            pop.debugSet(left: Int(n[0]), operation: n.count > 1 ? n[1] : nil, right: n.count > 2 ? Int(n[2]) : nil)
+                        case "ftext":
+                            pop.field.stringValue = arg
+                            pop.updatePreview()
+                        case "fok": pop.apply()
+                        case "fremove": pop.remove()
+                        case "fcancel": pop.cancel()
+                        default: break
+                        }
+                        print("  FORMULA [\(pop.titleLabel.stringValue)] [\(pop.left.titleOfSelectedItem ?? "-")] [\(pop.operation.titleOfSelectedItem ?? "-")] [\(pop.right.titleOfSelectedItem ?? "-")]",
+                              "field:", pop.field.stringValue, "preview:", pop.preview.stringValue.debugDescription,
+                              "apply:", pop.applyButton.isEnabled, "remove shown:", !pop.removeButton.isHidden)
+                    // Structure, as the toolbar and cell menu do it: `focus:r,c`, `addrow` (below),
+                    // `addrowabove`, `delrow`, `addcol` (right), `addcolleft`, `delcol`.
+                    case "focus":
+                        let n = arg.split(separator: ",").compactMap { Int($0) }
+                        e?.focusCell(row: n[0], column: n[1])
+                    case "addrow": e?.addRow(below: nil)
+                    case "addrowabove": e?.addRow(above: nil)
+                    case "delrow": e?.deleteRow()
+                    case "addcol": e?.addColumn(right: nil)
+                    case "addcolleft": e?.addColumn(left: nil)
+                    case "delcol": e?.deleteColumn()
+                    case "tab":
+                        // Tab to the next cell outside an explicit undo group: a real key's
+                        // event group that registers nothing is dropped, an explicit one isn't.
+                        window.firstResponder?.doCommand(by: #selector(NSResponder.insertTab(_:)))
+                    case "noteundo":
+                        // The note's own undo, as Edit ▸ Undo in the note would.
+                        let um = target.editor.textView.undoManager
+                        print("  noteundo level:", um?.groupingLevel ?? -1, "name:", um?.undoActionName ?? "-", "same as note's:", um === target.editor.note?.undoManager)
+                        um?.undo()
+                    case "text":
+                        let um = target.editor.textView.undoManager
+                        print("NOTE TEXT (canUndo \(um?.canUndo ?? false) [\(um?.undoActionName ?? "-")] canRedo \(um?.canRedo ?? false)):\n" + target.editor.text)
+                    case "caption":
+                        let storage = target.editor.storage
+                        storage.enumerateAttribute(.mdCaption, in: NSRange(location: 0, length: storage.length)) { v, r, _ in
+                            if let c = v as? CaptionDecoration { print("  CAPTION at \(r.location) error=\(c.isError): \(c.text)") }
+                        }
+                    case "shot":
+                        debugShot(window: window, path: arg)
                     case "notesel":
                         let n = arg.split(separator: ",").compactMap { Int($0) }
                         window.makeFirstResponder(target.editor.textView)
