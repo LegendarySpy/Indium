@@ -468,6 +468,19 @@ enum Evaluator {
 
     // MARK: Arithmetic
 
+    /// For an error about a label like `g Zn`: how to write it so it works, as plain `g`
+    /// with the substance in the row's label. Empty when no unit is a label like that.
+    static func labelHint(_ units: FormulaUnit?...) -> String {
+        for case let u? in units where u.isOpaque {
+            let symbol = u.text.split(separator: " ").first.map(String.init) ?? ""
+            if let plain = FormulaUnit.parse(symbol), !plain.isOpaque {
+                return ". Write the unit as plain “\(plain.text)” and name the substance in the row label"
+            }
+            return ". “\(u.text)” isn't a unit Indium can compute with"
+        }
+        return ""
+    }
+
     static func percent(_ q: Quantity) -> Quantity {
         var p = q.precision
         p.decimals += 2
@@ -484,7 +497,7 @@ enum Evaluator {
         switch (a.unit, b.unit) {
         case let (x?, y?):
             guard x == y else {
-                throw FormulaError(kind: .incompatibleUnits, message: "Can't \(subtract ? "subtract" : "add") \(y.text) \(subtract ? "from" : "to") \(x.text)")
+                throw FormulaError(kind: .incompatibleUnits, message: "Can't \(subtract ? "subtract" : "add") \(y.text) \(subtract ? "from" : "to") \(x.text)" + labelHint(x, y))
             }
             unit = x
         // A plain number takes the other side's unit: 35.134 g − 34.794 = 0.340 g.
@@ -500,7 +513,7 @@ enum Evaluator {
         let combined = FormulaUnit.combine(a.unit, b.unit, power: divide ? -1 : 1)
         guard combined.defined else {
             throw FormulaError(kind: .incompatibleUnits,
-                               message: "Can't \(divide ? "divide" : "multiply") \(a.unit?.text ?? "a plain number") by \(b.unit?.text ?? "a plain number"): the unit would be meaningless")
+                               message: "Can't \(divide ? "divide" : "multiply") \(a.unit?.text ?? "a plain number") by \(b.unit?.text ?? "a plain number"): the unit would be meaningless" + labelHint(a.unit, b.unit))
         }
         return Quantity(v, unit: combined.unit, precision: .product([a.precision, b.precision], value: v))
     }
@@ -514,7 +527,7 @@ enum Evaluator {
             let whole = b.value.rounded() == b.value && abs(b.value) <= Double(FormulaUnit.maxPower)
             let raised: (unit: FormulaUnit?, defined: Bool) = whole ? base.raised(to: Int(b.value)) : (nil, false)
             guard raised.defined else {
-                throw FormulaError(kind: .incompatibleUnits, message: "Can't raise \(base.text) to the power \(b.numberText())")
+                throw FormulaError(kind: .incompatibleUnits, message: "Can't raise \(base.text) to the power \(b.numberText())" + labelHint(base))
             }
             unit = raised.unit
         }
