@@ -511,11 +511,25 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     // MARK: Frontmatter variables
 
-    /// The frontmatter as it was before the edit under way, while the caret is still in it.
-    private var frontmatterBefore: String?
+    /// What one undo step puts back: the note's text up to `suffix` characters from its end.
+    private final class RegionRestore {
+        var text: String
+        var suffix: Int
+        init(text: String, suffix: Int) { self.text = text; self.suffix = suffix }
+    }
+
+    /// A run of edits inside the frontmatter. Its first edit registers one undo step that
+    /// restores the frontmatter as it started; the edits after it register nothing. When it
+    /// ends, tables reading a changed variable are recalculated into that same step.
+    private struct FrontmatterSession {
+        let before: String
+        let restore: RegionRestore
+    }
+    private var frontmatterSession: FrontmatterSession?
+    /// Undo registration is off for the frontmatter edit under way (until `textDidChange`).
+    private var frontmatterEditUnrecorded = false
     /// The frontmatter changed: table captions, which read its variables, are drawn again.
     private var frontmatterEdited = false
-    private var committingFrontmatter = false
 
     private var frontmatterRange: NSRange? {
         guard let first = styler.blocks.first, case .frontmatter = first.kind else { return nil }
@@ -527,56 +541,65 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return textView.selectedRanges.allSatisfy { NSLocationInRange($0.rangeValue.location, range) }
     }
 
-    /// Remembers the frontmatter before someone starts typing in it.
+    /// Called before every edit: one inside the frontmatter joins (or starts) the session,
+    /// any other ends it, without recalculating (the caption then says the values are stale).
     private func frontmatterWillChange(_ range: NSRange) {
-        guard frontmatterBefore == nil, !committingFrontmatter, !isLoading, let fm = frontmatterRange,
-              NSMaxRange(range) <= NSMaxRange(fm), let undo = textView.undoManager, !undo.isUndoing, !undo.isRedoing else { return }
-        frontmatterBefore = ns.substring(with: fm)
+        guard !isLoading, let undo = textView.undoManager, !undo.isUndoing, !undo.isRedoing, undo.isUndoRegistrationEnabled else { return }
+        guard let fm = frontmatterRange, range.location < NSMaxRange(fm), NSMaxRange(range) <= NSMaxRange(fm) else {
+            frontmatterSession = nil
+            return
+        }
+        if frontmatterSession == nil {
+            let restore = RegionRestore(text: ns.substring(with: fm), suffix: storage.length - NSMaxRange(fm))
+            frontmatterSession = FrontmatterSession(before: restore.text, restore: restore)
+            registerRegionUndo(restore)
+        }
+        undo.disableUndoRegistration()
+        frontmatterEditUnrecorded = true
     }
 
-    /// The frontmatter edit is done (the caret left it, or the note is closing): tables whose
-    /// formulas read a variable that changed are recalculated. The edit and the new results
-    /// become one undo step: the typing in the frontmatter is undone and done again as one
-    /// change together with the tables.
-    private func commitFrontmatter() {
-        guard let before = frontmatterBefore, !committingFrontmatter else { return }
-        frontmatterBefore = nil
-        guard let fm = frontmatterRange, let undo = textView.undoManager, undo.groupingLevel == 0 else { return }
-        let after = ns.substring(with: fm)
-        let old = NoteVariables.parse(noteText: before), new = NoteVariables.parse(noteText: after)
+    private func recordEditsAgain() {
+        guard frontmatterEditUnrecorded else { return }
+        frontmatterEditUnrecorded = false
+        textView.undoManager?.enableUndoRegistration()
+    }
+
+    /// Undo puts back the start of the note as `restore` holds it, and redo the other way round.
+    private func registerRegionUndo(_ restore: RegionRestore) {
+        guard let undo = textView.undoManager else { return }
+        undo.registerUndo(withTarget: self) { controller in
+            controller.frontmatterSession = nil
+            controller.recordEditsAgain()
+            let range = NSRange(location: 0, length: max(0, controller.storage.length - restore.suffix))
+            controller.registerRegionUndo(RegionRestore(text: controller.ns.substring(with: range), suffix: restore.suffix))
+            controller.replaceWithoutUndo(range, with: restore.text)
+        }
+        undo.setActionName("Typing")
+    }
+
+    /// The frontmatter edit is done (the caret left it, or the note is saved or closed):
+    /// tables whose formulas read a variable that changed are recalculated, and the
+    /// session's undo step grows to cover them.
+    private func endFrontmatterSession() {
+        recordEditsAgain()
+        guard let session = frontmatterSession else { return }
+        frontmatterSession = nil
+        guard let fm = frontmatterRange else { return }
+        let old = NoteVariables.parse(noteText: session.before), new = NoteVariables.parse(noteText: ns.substring(with: fm))
         let changed = Set(old.values.keys).union(new.values.keys).filter { old.values[$0]?.formatted() != new.values[$0]?.formatted() }
         guard !changed.isEmpty else { return }
-        // Each table that reads a changed variable, recalculated, last first.
-        var tables: [(range: NSRange, text: String)] = []
+        var tables: [(range: NSRange, text: String)] = []   // last first
         for block in styler.blocks.reversed() {
-            guard case .table = block.kind, let parts = tableParts(at: block.range.location), !parts.formulas.isEmpty,
-                  parts.formulas.contains(where: { TableFormulaUI.names(in: $0).intersection(changed).isEmpty == false }) else { continue }
+            guard case .table = block.kind, let parts = tableParts(at: block.range.location),
+                  parts.formulas.contains(where: { !TableFormulaUI.names(in: $0).isDisjoint(with: changed) }) else { continue }
             let table = TableFormulaUI.recalculate(tableMarkdown: parts.table, formulaLines: parts.formulas, noteText: storage.string)
             if table != parts.table { tables.append((parts.range, Self.joined(table, parts.formulas))) }
         }
-        guard !tables.isEmpty else { return }
-        committingFrontmatter = true
-        defer { committingFrontmatter = false }
-        let selection = textView.selectedRange()
-        // Back to where the frontmatter edit started; only the frontmatter may change on the way.
-        let body = ns.substring(from: NSMaxRange(fm))
-        var undone = 0
-        while undo.canUndo, undone < 500, frontmatterRange.map({ ns.substring(with: $0) }) != before {
-            undo.undo()
-            undone += 1
-        }
-        guard let start = frontmatterRange, ns.substring(with: start) == before, ns.substring(from: NSMaxRange(start)) == body else {
-            // Something else was in the way: put it all back and recalculate as a step of its own.
-            for _ in 0..<undone where undo.canRedo { undo.redo() }
-            for t in tables { replace(t.range, with: t.text, actionName: "Recalculate") }
-            return
-        }
-        undo.beginUndoGrouping()
-        replace(start, with: after)
-        for t in tables { replace(t.range, with: t.text) }
-        undo.setActionName("Typing")
-        undo.endUndoGrouping()
-        textView.setSelectedRange(NSRange(location: min(selection.location, storage.length), length: 0))
+        guard let last = tables.first else { return }
+        let end = NSMaxRange(last.range)
+        session.restore.text = session.before + ns.substring(with: NSRange(location: NSMaxRange(fm), length: end - NSMaxRange(fm)))
+        session.restore.suffix = storage.length - end
+        for t in tables { replaceWithoutUndo(t.range, with: t.text) }
     }
 
     /// After typing in a cell: the formulas' results, in the typing's undo step.
@@ -730,7 +753,6 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func load(_ newNote: Note?) {
         recalculateEditedTable()
-        commitFrontmatter()
         saveNow()
         if let old = note {
             old.selection = textView.selectedRange()
@@ -792,6 +814,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func saveNow() {
+        endFrontmatterSession()
         saveTimer?.invalidate()
         saveTimer = nil
         guard let note, !note.isTemporary, hasUnsavedEdits, !resolvingConflict else { return }
@@ -1009,6 +1032,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func textDidChange(_ notification: Notification) {
+        recordEditsAgain()
         if frontmatterEdited {
             frontmatterEdited = false
             for block in styler.blocks where block.kind == .tableFormulas {
@@ -1032,7 +1056,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func textViewDidChangeSelection(_ notification: Notification) {
         guard !isLoading else { return }
         // On the next turn of the run loop, outside the event that moved the caret.
-        if frontmatterBefore != nil, !caretInFrontmatter { RunLoop.main.perform { [weak self] in MainActor.assumeIsolated { self?.commitFrontmatter() } } }
+        if frontmatterSession != nil, !caretInFrontmatter { RunLoop.main.perform { [weak self] in MainActor.assumeIsolated { self?.endFrontmatterSession() } } }
         if selectedImageLine != nil, !changingImageSelection { clearImageSelection() }
         if textView.isTrackingMouse {
             selectionBar.dismiss()
