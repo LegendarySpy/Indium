@@ -78,6 +78,7 @@ final class EditorTextView: NSTextView {
 
     override func mouseMoved(with event: NSEvent) {
         editor?.hoverTables(at: convert(event.locationInWindow, from: nil))
+        editor?.hoverTableGrip(at: convert(event.locationInWindow, from: nil))
         if pointerIsOverChrome(event) {
             NSCursor.arrow.set()
             return
@@ -88,6 +89,7 @@ final class EditorTextView: NSTextView {
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         editor?.hideTableStrips()
+        editor?.hideTableGrip()
     }
 
     override func cursorUpdate(with event: NSEvent) {
@@ -283,6 +285,7 @@ final class EditorTextView: NSTextView {
     override func keyDown(with event: NSEvent) {
         // Typing hides the pointer; the table strips go with it (the text may move).
         editor?.hideTableStrips()
+        editor?.hideTableGrip()
         keyEvent = event
         defer { keyEvent = nil }
         super.keyDown(with: event)

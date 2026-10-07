@@ -570,6 +570,67 @@ enum DebugSnapshot {
         print("CLIPBOARD CASES: \(passed)/\(cases.count) passed")
     }
 
+    /// `-IndiumDragSteps "hover:0;drag:0,Outro,after,/tmp/d.png;text;undo;text"`: moves tables by
+    /// their grip with real mouse events. `hover:n` shows table n's grip; `drag:n,prefix,where[,shot]`
+    /// drags it to the block starting with `prefix` (`before`, `after`, `left`, `right` = beside it),
+    /// screenshotting the drop indicator mid-drag; `escape:n,prefix,where` drags and presses Escape;
+    /// `text`, `undo`, `redo`, `shot:path`. Each mutating step is its own undo group.
+    static func runDragSteps(_ steps: [String], editor: EditorController, window: NSWindow) {
+        let tv = editor.textView
+        let undo = tv.undoManager
+        if let undo, undo.groupingLevel > 0 { undo.endUndoGrouping() }
+        undo?.groupsByEvent = false
+        func mouse(_ type: NSEvent.EventType, _ p: NSPoint) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: tv.convert(p, to: nil), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+        }
+        func hover(_ n: Int) -> BlockHandleView? {
+            let tables = editor.visibleTables().sorted { $0.location < $1.location }
+            guard n < tables.count else { print("  no table \(n)"); return nil }
+            editor.hoverTableGrip(at: NSPoint(x: tables[n].content.midX, y: tables[n].content.minY + 4))
+            print("  GRIP table \(n) at \(tables[n].content): \(editor.tableGrip.map { "\($0.frame)" } ?? "none")")
+            return editor.tableGrip
+        }
+        for step in steps {
+            let parts = step.split(separator: ":", maxSplits: 1).map(String.init)
+            let args = parts.count > 1 ? parts[1].split(separator: ",").map(String.init) : []
+            switch parts[0] {
+            case "hover": _ = hover(Int(args.first ?? "0") ?? 0)
+            case "drag", "escape":
+                guard args.count >= 3, let grip = hover(Int(args[0]) ?? 0),
+                      let target = editor.visibleGroupFrames().first(where: { $0.group.text.hasPrefix(args[1]) }) else { print("  DRAG: nothing to drag or no target \(args)"); break }
+                let r = target.rect
+                let p: NSPoint = switch args[2] {
+                case "before": NSPoint(x: r.midX, y: r.minY + min(6, r.height / 4))
+                case "left": NSPoint(x: r.minX + 8, y: r.midY)
+                case "right": NSPoint(x: r.maxX - 8, y: r.midY)
+                default: NSPoint(x: r.midX, y: r.maxY - min(6, r.height / 4))
+                }
+                if args.count > 3 { EditorController.onDragStep = { debugShot(window: window, path: args[3]) } }
+                let start = NSPoint(x: grip.frame.midX, y: grip.frame.midY)
+                NSApp.postEvent(mouse(.leftMouseDragged, NSPoint(x: (start.x + p.x) / 2, y: (start.y + p.y) / 2)), atStart: false)
+                NSApp.postEvent(mouse(.leftMouseDragged, p), atStart: false)
+                if parts[0] == "escape", let esc = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                                                     context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53) {
+                    NSApp.postEvent(esc, atStart: false)
+                }
+                NSApp.postEvent(mouse(.leftMouseUp, p), atStart: false)
+                print("  DRAG table \(args[0]) to \(args[2]) \(args[1].debugDescription) at \(p), hit:", window.contentView?.superview?.hitTest(window.contentView!.superview!.convert(tv.convert(start, to: nil), from: nil)).map { "\(type(of: $0))" } ?? "nil")
+                undo?.beginUndoGrouping()
+                grip.mouseDown(with: mouse(.leftMouseDown, start))
+                undo?.endUndoGrouping()
+                EditorController.onDragStep = nil
+                print("  undo name:", undo?.undoActionName ?? "-", "grip left:", editor.tableGrip == nil)
+            case "undo": undo?.undo()
+            case "redo": undo?.redo()
+            case "text": print("NOTE TEXT:\n" + editor.text + "\nEND NOTE TEXT")
+            case "shot": debugShot(window: window, path: parts.count > 1 ? parts[1] : "/tmp/drag.png")
+            default: print("  unknown step \(step)")
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+    }
+
     static func runIfRequested(_ controller: DocumentWindowController) {
         let d = UserDefaults.standard
         // Harness runs copy and paste on a board of their own, never the real clipboard.
@@ -1022,6 +1083,9 @@ enum DebugSnapshot {
             // corner of a table's grid (L top-left, R top-right, B bottom-left; `-IndiumPointerTable n`
             // picks the table). `move` hovers (entering whatever strip is there), `click` sends a
             // mouse-down to the view hit testing picks, `scroll` scrolls the note to a y offset.
+            if let steps = d.string(forKey: "IndiumDragSteps") {
+                runDragSteps(steps.split(separator: ";").map(String.init), editor: target.editor, window: window)
+            }
             if let steps = d.string(forKey: "IndiumPointerSteps") {
                 let editor = target.editor, tv = editor.textView
                 func tableRect() -> NSRect? {

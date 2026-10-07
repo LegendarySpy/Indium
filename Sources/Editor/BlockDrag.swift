@@ -245,3 +245,213 @@ extension EditorController {
         return false
     }
 }
+
+// MARK: - Moving a table by its grip
+
+/// Hovering a table shows a grip beside its header; dragging it lifts the table (with
+/// its formula lines and any float marker: its whole block) and a line or a half-width
+/// area shows where it will land. Dropping is one undoable edit; Escape cancels.
+extension EditorController {
+    struct GroupFrame {
+        let group: LayoutGroup
+        let rect: NSRect
+        let inColumn: Bool
+    }
+
+    #if DEBUG
+    /// The debug harness's look at a drag in progress, after the drop spot is shown.
+    static var onDragStep: (() -> Void)?
+    #endif
+
+    var tableGrip: BlockHandleView? { textView.subviews.lazy.compactMap { $0 as? BlockHandleView }.first }
+
+    /// Rendered tables on screen (text view coordinates), floating ones first.
+    func visibleTables() -> [(location: Int, content: NSRect, headerHeight: CGFloat)] {
+        guard let container = textView.textContainer else { return [] }
+        let origin = textView.textContainerOrigin
+        let visible = textView.visibleRect.offsetBy(dx: -origin.x, dy: -origin.y)
+        let chars = layoutManager.characterRange(forGlyphRange: layoutManager.glyphRange(forBoundingRect: visible, in: container), actualGlyphRange: nil)
+        return (layoutManager.floatBlocks(origin: origin) + layoutManager.blockRects(in: chars, origin: origin)).compactMap { block in
+            guard case let .table(table) = block.decoration.content, block.decoration.placement != .below else { return nil }
+            return (block.range.location, block.content, table.rowHeights.first ?? 30)
+        }
+    }
+
+    /// Left of the header row, in the margin.
+    static func gripFrame(table: NSRect, headerHeight: CGFloat) -> NSRect {
+        NSRect(x: table.minX - BlockHandleView.size.width - 6, y: table.minY + max(0, (headerHeight - BlockHandleView.size.height) / 2),
+               width: BlockHandleView.size.width, height: BlockHandleView.size.height)
+    }
+
+    /// Shows the grip of the table under the pointer.
+    func hoverTableGrip(at point: NSPoint) {
+        if tableGrip?.dragging == true { return }
+        guard textView.isEditable, AppSettings.shared.syntax != .always else { return hideTableGrip() }
+        for table in visibleTables() {
+            let frame = Self.gripFrame(table: table.content, headerHeight: table.headerHeight)
+            guard table.content.union(frame).insetBy(dx: -4, dy: -4).contains(point) else { continue }
+            let grip = tableGrip ?? {
+                let grip = BlockHandleView(frame: frame)
+                textView.addSubview(grip)
+                return grip
+            }()
+            grip.frame = frame
+            let location = table.location
+            grip.onDrag = { [weak self] event in self?.dragTable(at: location, from: event) }
+            return
+        }
+        hideTableGrip()
+    }
+
+    func hideTableGrip() {
+        guard let grip = tableGrip, !grip.dragging else { return }
+        grip.removeFromSuperview()
+    }
+
+    /// Frames (text view coordinates) of the blocks on screen.
+    func visibleGroupFrames() -> [GroupFrame] {
+        guard let container = textView.textContainer else { return [] }
+        let origin = textView.textContainerOrigin
+        let visible = textView.visibleRect.insetBy(dx: 0, dy: -200)
+        let glyphsOnScreen = layoutManager.glyphRange(forBoundingRect: visible.offsetBy(dx: -origin.x, dy: -origin.y), in: container)
+        let charsOnScreen = layoutManager.characterRange(forGlyphRange: glyphsOnScreen, actualGlyphRange: nil)
+        var frames: [GroupFrame] = []
+        for (group, region) in layoutModel.groups where NSIntersectionRange(group.range, charsOnScreen).length > 0 {
+            let glyphs = layoutManager.glyphRange(forCharacterRange: group.range, actualCharacterRange: nil)
+            guard glyphs.length > 0 else { continue }
+            var rect = NSRect.null
+            layoutManager.enumerateLineFragments(forGlyphRange: glyphs) { frag, used, _, _, _ in
+                rect = rect.union(NSRect(x: frag.minX, y: used.minY, width: frag.width, height: max(used.height, 1)))
+            }
+            guard !rect.isNull else { continue }
+            let col = layoutManager.contentColumn(glyph: glyphs.location, container: container, origin: origin)
+            frames.append(GroupFrame(group: group, rect: NSRect(x: col.x, y: rect.minY + origin.y, width: col.width, height: rect.height),
+                                     inColumn: region != nil))
+        }
+        return frames
+    }
+
+    private func dragTable(at location: Int, from event: NSEvent) {
+        guard let window = textView.window, let grip = tableGrip else { return }
+        if let editing = styler.editingTableLocation, editing == location { endTableEditing() }
+        guard let source = layoutModel.group(containing: location),
+              let lifted = visibleTables().first(where: { $0.location == location })?.content else { return }
+        grip.dragging = true
+        grip.isHidden = true
+        // Only the table moves: a selection elsewhere and its bar go.
+        selectionBar.dismiss()
+        textView.setSelectedRange(NSRange(location: source.range.location, length: 0))
+        defer {
+            grip.dragging = false
+            grip.removeFromSuperview()
+        }
+
+        // A lifted picture of the table follows the pointer.
+        let snapshotRect = lifted.insetBy(dx: -6, dy: -4)
+        let ghost = NSImageView(frame: snapshotRect)
+        if let rep = textView.bitmapImageRepForCachingDisplay(in: snapshotRect) {
+            textView.cacheDisplay(in: snapshotRect, to: rep)
+            let image = NSImage(size: snapshotRect.size)
+            image.addRepresentation(rep)
+            ghost.image = image
+        }
+        ghost.wantsLayer = true
+        ghost.layer?.cornerRadius = 10
+        ghost.layer?.backgroundColor = Palette.background.cgColor
+        ghost.alphaValue = 0.85
+        ghost.shadow = {
+            let s = NSShadow()
+            s.shadowBlurRadius = 18
+            s.shadowOffset = NSSize(width: 0, height: -6)
+            s.shadowColor = NSColor.black.withAlphaComponent(0.2)
+            return s
+        }()
+        // The table stays put, faded, until it's dropped.
+        let veil = NSView(frame: snapshotRect)
+        veil.wantsLayer = true
+        veil.layer?.backgroundColor = Palette.background.withAlphaComponent(0.65).cgColor
+        let indicator = DropIndicatorView()
+        indicator.isHidden = true
+        textView.addSubview(veil)
+        textView.addSubview(indicator)
+        textView.addSubview(ghost)
+
+        let start = textView.convert(event.locationInWindow, from: nil)
+        let offset = NSPoint(x: start.x - snapshotRect.minX, y: start.y - snapshotRect.minY)
+        var target: DropTarget?
+        NSCursor.closedHand.push()
+        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .keyDown]) {
+            if next.type == .leftMouseUp { break }
+            if next.type == .keyDown {
+                if next.keyCode == 53 { target = nil; break }
+                continue
+            }
+            textView.autoscroll(with: next)
+            let p = textView.convert(next.locationInWindow, from: nil)
+            ghost.setFrameOrigin(NSPoint(x: p.x - offset.x, y: p.y - offset.y))
+            target = dropTarget(at: p, dragging: source)
+            showIndicator(indicator, for: target)
+            #if DEBUG
+            Self.onDragStep?()
+            #endif
+        }
+        NSCursor.pop()
+        ghost.removeFromSuperview()
+        veil.removeFromSuperview()
+        indicator.removeFromSuperview()
+        if let target { moveBlock(source, to: target) }
+    }
+
+    /// Where a block dropped at `p` goes: before or after the block under the pointer
+    /// (by its upper or lower half), or beside it near its left or right edge.
+    func dropTarget(at p: NSPoint, dragging: LayoutGroup) -> DropTarget? {
+        let frames = visibleGroupFrames()
+        let candidates = frames.filter { f in
+            p.y >= f.rect.minY - 14 && p.y <= f.rect.maxY + 14 && (!f.inColumn || (p.x >= f.rect.minX - 16 && p.x <= f.rect.maxX + 16))
+        }
+        let frame = candidates.min { abs($0.rect.midY - p.y) < abs($1.rect.midY - p.y) }
+            ?? frames.min { abs($0.rect.midY - p.y) < abs($1.rect.midY - p.y) }
+        guard let frame, frame.group !== dragging else { return nil }
+        let edge = min(frame.rect.width * 0.22, 130)
+        if p.x < frame.rect.minX + edge { return .beside(frame.group, leading: true) }
+        if p.x > frame.rect.maxX - edge { return .beside(frame.group, leading: false) }
+        return p.y < frame.rect.midY ? .before(frame.group) : .after(frame.group)
+    }
+
+    private func showIndicator(_ indicator: DropIndicatorView, for target: DropTarget?) {
+        guard let target, let frame = visibleGroupFrames().first(where: { $0.group.range == target.group.range }) else {
+            indicator.isHidden = true
+            return
+        }
+        let r = frame.rect
+        switch target {
+        case .before:
+            indicator.style = .line
+            indicator.frame = NSRect(x: r.minX - 8, y: r.minY - 12, width: r.width + 16, height: 10)
+        case .after:
+            indicator.style = .line
+            indicator.frame = NSRect(x: r.minX - 8, y: r.maxY + 2, width: r.width + 16, height: 10)
+        case let .beside(_, leading):
+            indicator.style = .area
+            let w = r.width * 0.48
+            indicator.frame = NSRect(x: leading ? r.minX - 6 : r.maxX - w + 6, y: r.minY - 6, width: w, height: max(r.height + 12, 44))
+        }
+        indicator.isHidden = false
+        indicator.needsDisplay = true
+    }
+
+    /// Moves a block, as one undo step. Dropping it where it already is changes nothing.
+    func moveBlock(_ group: LayoutGroup, to target: DropTarget) {
+        guard let edit = layoutModel.move(group, to: target),
+              edit.text != (storage.string as NSString).substring(with: edit.range) else { return }
+        let isTable = styler.blocks.contains { block in
+            if case .table = block.kind { return NSLocationInRange(block.range.location, group.range) }
+            return false
+        }
+        let offset = scrollView.contentView.bounds.origin
+        replace(edit.range, with: edit.text, select: NSRange(location: edit.range.location + edit.movedOffset, length: 0),
+                actionName: isTable ? "Move Table" : "Move Block")
+        scrollView.contentView.scroll(to: offset)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+}
