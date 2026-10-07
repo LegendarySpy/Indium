@@ -24,6 +24,11 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     /// The cell whose text is being edited (nil while cells are selected as a block).
     var onFocusChange: ((Cell?) -> Void)?
     var onDeleteTable: (() -> Void)?
+    /// Formula… in a cell's menu.
+    var onFormula: (() -> Void)?
+    /// Called instead of `onChange` when rows or columns were inserted or deleted, with
+    /// what was done, so formulas can keep pointing at the same rows and columns.
+    var onStructureChange: ((String, TableFormulaUI.ShapeChange) -> Void)?
 
     private(set) var render: TableRender
     private var fields: [[CellField]] = []
@@ -278,8 +283,15 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         field.source = field.stringValue
         setText(field.source, row: field.row, column: field.column)
         field.restyleEditor()
-        onChange?(markdown, (field.row, field.column))
+        let typing = separatesNextChange ? nil : (field.row, field.column)
+        separatesNextChange = false
+        onChange?(markdown, typing)
     }
+
+    /// The next change in a cell is its own Undo step rather than more of the typing
+    /// before it (a math shortcut expanding: Undo brings back what was typed).
+    private var separatesNextChange = false
+    func separateNextChange() { separatesNextChange = true }
 
     func controlTextDidEndEditing(_ obj: Notification) {
         (obj.object as? CellField)?.showRendered()
@@ -290,6 +302,21 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         let (r, c) = (field.row, field.column)
         let range = textView.selectedRange()
         let length = (textView.string as NSString).length
+        // Math comes first: a shortcut's blanks, then out of the equation; only then the
+        // keys move between cells. Return and Escape always leave (dropping any blanks).
+        let math = (textView as? CellTextView)?.math
+        if let math {
+            let handled: Bool
+            switch selector {
+            case #selector(NSResponder.insertTab(_:)): handled = math.handleTab()
+            case #selector(NSResponder.insertBacktab(_:)): handled = math.handleBacktab()
+            case #selector(NSResponder.deleteBackward(_:)): handled = math.handleBackspace()
+            case #selector(NSResponder.insertNewline(_:)):
+                handled = math.handleNewline(shift: NSApp.currentEvent?.modifierFlags.contains(.shift) == true)
+            default: handled = false
+            }
+            if handled { return true }
+        }
         switch selector {
         case #selector(NSResponder.insertTab(_:)):
             if c + 1 < columns { focusCell(row: r, column: c + 1, selectAll: true) }
@@ -335,6 +362,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
             select(from: (r, c), to: (r + 1, c))
             return true
         case #selector(NSResponder.cancelOperation(_:)):
+            math?.clearStops()
             onExit?()
             return true
         default:
@@ -504,7 +532,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
 
     func addRowAtEnd() {
         body.append(Array(repeating: "", count: columns))
-        commitStructure()
+        commitStructure(.insertRows(at: rowCount, count: 1))
         focusCell(row: rowCount - 1, column: 0)
     }
 
@@ -512,28 +540,28 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     func addRow(below row: Int? = nil) {
         let index = min(row ?? targetBounds.rows.upperBound - 1, rowCount - 1)
         body.insert(Array(repeating: "", count: columns), at: index)
-        commitStructure()
+        commitStructure(.insertRows(at: index + 2, count: 1))
     }
 
     /// A row above the header would take its place; it goes under it instead.
     func addRow(above row: Int? = nil) {
         let index = max((row ?? targetBounds.rows.lowerBound) - 1, 0)
         body.insert(Array(repeating: "", count: columns), at: index)
-        commitStructure()
+        commitStructure(.insertRows(at: index + 2, count: 1))
         if (row ?? targetBounds.rows.lowerBound) > 0 { focusCell(row: index + 1, column: focus.column) }
     }
 
     func addColumn(right column: Int? = nil) {
         let index = min((column ?? targetBounds.columns.upperBound - 1) + 1, columns)
         insertColumn(at: index)
-        commitStructure()
+        commitStructure(.insertColumns(at: index + 1, count: 1))
         focusCell(row: focus.row, column: index)
     }
 
     func addColumn(left column: Int? = nil) {
         let index = column ?? targetBounds.columns.lowerBound
         insertColumn(at: index)
-        commitStructure()
+        commitStructure(.insertColumns(at: index + 1, count: 1))
         focusCell(row: focus.row, column: index)
     }
 
@@ -559,7 +587,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         let rows = targetBounds.rows.filter { $0 > 0 }
         guard !rows.isEmpty else { NSSound.beep(); return }
         for r in rows.reversed() { body.remove(at: r - 1) }
-        commitStructure()
+        commitStructure(.deleteRows(at: rows.first! + 1, count: rows.count))
         focusCell(row: min(rows.first!, rowCount - 1), column: focus.column)
     }
 
@@ -572,7 +600,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
             if c < alignments.count { alignments.remove(at: c) }
             if var d = dashes, c < d.count { d.remove(at: c); dashes = d }
         }
-        commitStructure()
+        commitStructure(.deleteColumns(at: cols.lowerBound + 1, count: cols.count))
         focusCell(row: focus.row, column: min(cols.lowerBound, columns - 1))
     }
 
@@ -584,9 +612,10 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         if let kept { select(from: kept.anchor, to: kept.head) } else { focusCell(row: focus.row, column: focus.column) }
     }
 
-    private func commitStructure() {
+    /// `change` in TBLFM numbering (row 1 the header, column 1 the leftmost).
+    private func commitStructure(_ change: TableFormulaUI.ShapeChange? = nil) {
         selection = nil
-        onChange?(markdown, nil)
+        if let change, let onStructureChange { onStructureChange(markdown, change) } else { onChange?(markdown, nil) }
         rebuildFields()
     }
 
@@ -677,6 +706,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         menu.addItem(deleteColumns)
         menu.addItem(ClosureMenuItem(rows * cols > 1 ? "Clear Cells" : "Clear Cell") { [weak self] in self?.clearCells() })
         menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem("Formula…") { [weak self] in self?.onFormula?() })
         menu.addItem(ClosureMenuItem("Copy Table") { [weak self] in self?.copyTable() })
         menu.addItem(ClosureMenuItem("Delete Table") { [weak self] in self?.onDeleteTable?() })
         return menu
@@ -778,8 +808,96 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
 
 /// The field editor shared by a table's cells. Paste and Select All reach past the
 /// cell: a copied grid fills cells, and a second Select All takes the whole table.
-final class CellTextView: NSTextView {
+final class CellTextView: NSTextView, MathEditingHost {
     weak var table: TableEditorView?
+
+    /// Math is written in a cell just as in the note: shortcuts, `/` fractions, Tab
+    /// through the blanks and out, and the preview card (floating over the page, so the
+    /// table doesn't clip it). The keys reach it through `TableEditorView`'s commands.
+    lazy var math = MathEditor(host: self)
+    private var storageObserver: NSObjectProtocol?
+
+    var mathTextView: NSTextView { self }
+    var mathEnabled: Bool { table != nil }
+    /// A cell is one line of a pipe table: no `$$` blocks or line breaks, no bare `|`.
+    var mathSingleLine: Bool { true }
+    func mathBlock(at location: Int) -> MathEditor.Block { .text }
+    var mathUndoManager: UndoManager? { noteUndo }
+    func mathSeparateUndo() { table?.separateNextChange() }
+    var mathPreviewParent: NSView? { table?.superview }
+    var mathPreviewColumn: NSRect {
+        guard let page = table?.superview else { return .zero }
+        guard let text = page as? NSTextView, let container = text.textContainer else { return page.bounds }
+        return NSRect(origin: text.textContainerOrigin, size: container.size)
+    }
+    var mathFontSize: CGFloat { table.map { round($0.render.typography.size * 0.9) } ?? font?.pointSize ?? 13 }
+
+    func insertTypedText(_ s: String) {
+        super.insertText(s, replacementRange: selectedRange())
+    }
+
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        // A key typed at the caret (not text put in by a command or an input method).
+        if let s = string as? String, !hasMarkedText(),
+           replacementRange.location == NSNotFound || replacementRange == selectedRange(),
+           math.handleInput(s) { return }
+        super.insertText(string, replacementRange: replacementRange)
+    }
+
+    override func shouldChangeText(in range: NSRange, replacementString: String?) -> Bool {
+        guard super.shouldChangeText(in: range, replacementString: replacementString) else { return false }
+        observeStorage()
+        math.pendingEdit = replacementString.map { (range, ($0 as NSString).length) }
+        return true
+    }
+
+    /// Blanks move with the text as it changes around them.
+    private func observeStorage() {
+        guard storageObserver == nil, let storage = textStorage else { return }
+        storageObserver = NotificationCenter.default.addObserver(forName: NSTextStorage.didProcessEditingNotification, object: storage,
+                                                                 queue: nil) { [weak self] note in
+            guard let storage = note.object as? NSTextStorage, storage.editedMask.contains(.editedCharacters) else { return }
+            MainActor.assumeIsolated { self?.math.shiftStops(editedRange: storage.editedRange, delta: storage.changeInLength) }
+        }
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        math.syncCopies()
+        math.updatePreview()
+    }
+
+    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        guard !stillSelecting else { return }
+        math.selectionChanged()
+        math.updatePreview()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        math.drawMarks()
+    }
+
+    /// Leaving the cell leaves its equation: no blanks or preview linger.
+    override func resignFirstResponder() -> Bool {
+        guard super.resignFirstResponder() else { return false }
+        math.clearStops()
+        math.hidePreview()
+        return true
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil {
+            math.clearStops()
+            math.hidePreview()
+        }
+    }
+
+    deinit {
+        if let storageObserver { NotificationCenter.default.removeObserver(storageObserver) }
+    }
 
     /// Cells never record their own typing (with no undo manager there's nowhere to):
     /// the note keeps a copy of the table from before each run of typing instead, and
@@ -988,6 +1106,8 @@ final class TableToolbarView: NSView {
     var onDeleteColumn: (() -> Void)?
     var onDeleteTable: (() -> Void)?
     var onCopyTable: (() -> Void)?
+    /// Formula… for the focused row or column.
+    var onFormula: (() -> Void)?
     var onDone: (() -> Void)?
     /// nil: full width; true/false: text wraps beside it on the right/left.
     var onPlace: ((Bool?) -> Void)?
@@ -1065,6 +1185,8 @@ final class TableToolbarView: NSView {
             }
         }
         let addMore = { [weak self] (menu: NSMenu) in
+            menu.addItem(ClosureMenuItem("Formula…") { self?.onFormula?() })
+            menu.addItem(.separator())
             menu.addItem(ClosureMenuItem("Delete Row") { self?.onDeleteRow?() })
             menu.addItem(ClosureMenuItem("Delete Column") { self?.onDeleteColumn?() })
             menu.addItem(.separator())

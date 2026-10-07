@@ -68,7 +68,7 @@ extension EditorController {
         var content: [MDBlock] = []
         for b in styler.blocks where NSIntersectionRange(b.range, group.range).length > 0 {
             switch b.kind {
-            case .blank: continue
+            case .blank, .tableFormulas: continue
             case let .columnMarker(.float(r)) where content.isEmpty && right == nil: right = r
             case .table, .image: content.append(b)
             default: return nil
@@ -88,7 +88,12 @@ extension EditorController {
               case let .region(region) = layoutModel.items[i], region.columns.count == 2,
               let c = region.columns.firstIndex(where: { $0.groups.count == 1 && $0.groups[0] === group }) else { return nil }
         let kinds = styler.blocks.filter { NSIntersectionRange($0.range, group.range).length > 0 }.map(\.kind)
-        let content = kinds.filter { if case .blank = $0 { return false }; return true }
+        let content = kinds.filter {
+            switch $0 {
+            case .blank, .tableFormulas: return false
+            default: return true
+            }
+        }
         guard content.count == 1 else { return nil }
         switch content[0] {
         case .table, .image: break

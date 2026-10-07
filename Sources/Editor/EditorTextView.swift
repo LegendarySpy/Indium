@@ -221,7 +221,7 @@ final class EditorTextView: NSTextView {
         super.draw(dirtyRect)
         (layoutManager as? MarkdownLayoutManager)?.drawFloats(in: dirtyRect, origin: textContainerOrigin)
         drawPageLines(in: dirtyRect)
-        editor?.drawMathMarks()
+        editor?.math.drawMarks()
         drawGhost()
     }
 
@@ -270,7 +270,7 @@ final class EditorTextView: NSTextView {
         // A key typed at the caret (not text put in by a command or an input method).
         if let s = string as? String, !hasMarkedText(),
            replacementRange.location == NSNotFound || replacementRange == selectedRange(),
-           editor?.handleMathInput(s) == true { return }
+           editor?.math.handleInput(s) == true { return }
         super.insertText(string, replacementRange: replacementRange)
     }
 
@@ -293,26 +293,27 @@ final class EditorTextView: NSTextView {
     override func insertNewline(_ sender: Any?) {
         if editor?.handleSlashKey(#selector(insertNewline(_:))) == true { return }
         let shift = (keyEvent ?? NSApp.currentEvent)?.modifierFlags.contains(.shift) == true
-        if editor?.handleMathNewline(shift: shift) == true { return }
+        if editor?.math.handleNewline(shift: shift) == true { return }
         if editor?.handleNewline() == true { return }
         super.insertNewline(sender)
     }
 
     override func insertTab(_ sender: Any?) {
         if editor?.handleSlashKey(#selector(insertTab(_:))) == true { return }
-        if editor?.handleMathTab() == true { return }
+        if editor?.math.handleTab() == true { return }
         if editor?.indentListItem(outdent: false) == true { return }
         super.insertTab(sender)
     }
 
     override func insertBacktab(_ sender: Any?) {
+        if editor?.math.handleBacktab() == true { return }
         if editor?.indentListItem(outdent: true) == true { return }
         super.insertBacktab(sender)
     }
 
     override func deleteBackward(_ sender: Any?) {
         if editor?.deleteSelectedImage() == true { return }
-        if editor?.handleMathBackspace() == true { return }
+        if editor?.math.handleBackspace() == true { return }
         super.deleteBackward(sender)
     }
 
@@ -324,7 +325,7 @@ final class EditorTextView: NSTextView {
     override func cancelOperation(_ sender: Any?) {
         if editor?.handleSlashKey(#selector(cancelOperation(_:))) == true { return }
         if editor?.deselectImage() == true { return }
-        editor?.clearMathStops()
+        editor?.math.clearStops()
         super.cancelOperation(sender)
     }
 
