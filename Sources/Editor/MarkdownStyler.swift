@@ -17,6 +17,8 @@ extension NSAttributedString.Key {
     static let mdRule = NSAttributedString.Key("indium.rule")
     /// A page break written into the note, drawn as a labeled dashed line.
     static let mdPageBreak = NSAttributedString.Key("indium.pageBreak")
+    /// Another note shown under an `![[Note]]` line, drawn in a bordered box.
+    static let mdEmbed = NSAttributedString.Key("indium.embed")
 }
 
 final class InlineMath: NSObject {
@@ -78,6 +80,32 @@ protocol ImageResolving: AnyObject {
     func image(for ref: ImageRef) -> NSImage?
 }
 
+/// Finds the notes `![[Note]]` lines embed. Image resolvers that also adopt this get
+/// embedded notes drawn; others show the line as a plain link.
+protocol NoteEmbedResolving: AnyObject {
+    /// The note being styled, so it never embeds itself.
+    var embeddingNoteURL: URL? { get }
+    /// The note a wiki target names, resolved the way wiki links are from `note`.
+    func noteURL(forEmbed target: String, from note: URL?) -> URL?
+    /// An image written in `note`, resolved from that note's folder.
+    func image(for ref: ImageRef, from note: URL?) -> NSImage?
+}
+
+/// Resolves links and images inside an embedded note from that note's own folder,
+/// through the editor's (or Quick Look's) resolver.
+final class EmbeddedNoteContext: ImageResolving, NoteEmbedResolving {
+    let root: NoteEmbedResolving
+    let note: URL
+    init(root: NoteEmbedResolving, note: URL) {
+        self.root = root
+        self.note = note
+    }
+    var embeddingNoteURL: URL? { note }
+    func noteURL(forEmbed target: String, from note: URL?) -> URL? { root.noteURL(forEmbed: target, from: note) }
+    func image(for ref: ImageRef, from note: URL?) -> NSImage? { root.image(for: ref, from: note) }
+    func image(for ref: ImageRef) -> NSImage? { root.image(for: ref, from: note) }
+}
+
 struct StyleConfig {
     var typography: Typography
     var gutter: CGFloat = 56
@@ -108,6 +136,12 @@ final class MarkdownStyler {
 
     private var selection: [NSRange] = []
     private var text: NSString = ""
+
+    /// How deep this styler sits inside embeds (0 for the note itself), and the notes
+    /// already open above it, so embeds stop after two levels and never loop.
+    var embedDepth = 0
+    var embedChain: Set<String> = []
+    static let maxEmbedDepth = 2
 
     // Column layout (`<!-- columns -->` regions rendered as native text tables).
     struct ColumnRegion {
@@ -493,7 +527,7 @@ final class MarkdownStyler {
                                                         lineSpacing: round(font.pointSize * 0.22))], range: r)
             if level <= 2, typo.headingKern != 0 { s.addAttribute(.kern, value: typo.headingKern, range: first) }
             let active = touches(first)
-            if currentCell != nil {
+            if currentCell != nil || gutter == 0 {
                 // No gutter to hang the marker in: hide it outright.
                 s.addAttributes(hides(active: active) ? [.mdHidden: true] : [.foregroundColor: Palette.syntax], range: marker)
             } else {
@@ -574,6 +608,9 @@ final class MarkdownStyler {
 
         case let .image(ref):
             styleImage(ref, line: first, block: block, in: s)
+
+        case let .embed(ref):
+            styleEmbed(ref, line: first, block: block, in: s)
 
         case .comment:
             // Notes to self: gone from the page (and from print) until the caret is in them.
@@ -775,6 +812,64 @@ final class MarkdownStyler {
         }
     }
 
+    private func styleEmbed(_ ref: EmbedRef, line: NSRange, block: MDBlock, in s: NSTextStorage) {
+        let link: (Bool, Bool) -> NSFont = { self.typo.text(bold: $0, italic: $1) }
+        guard let resolver = imageResolver as? NoteEmbedResolving, embedDepth < Self.maxEmbedDepth else {
+            // Too deep (or nothing to resolve notes with): a link to the note.
+            inline(line, in: s, font: link, color: Palette.text)
+            return
+        }
+        var chain = embedChain
+        let host = resolver.embeddingNoteURL
+        if let host { chain.insert(host.standardizedFileURL.path) }
+        let url = resolver.noteURL(forEmbed: ref.note, from: host)
+        if let url, chain.contains(url.standardizedFileURL.path) {
+            // A note embedding one that's already open above it: a link, not a loop.
+            inline(line, in: s, font: link, color: Palette.text)
+            return
+        }
+        let pad = round(typo.size * 0.7)
+        let innerWidth = max(contentWidth - pad * 2, 80)
+        let content: NoteEmbed.Content
+        if let url {
+            if let text = NoteEmbed.text(at: url) {
+                if let section = NoteEmbed.section(of: text, subpath: ref.subpath) {
+                    var nested = config
+                    nested.columnWidth = innerWidth
+                    nested.gutter = 0
+                    nested.printing = true
+                    nested.maxBlockHeight = min(config.maxBlockHeight, 600)
+                    let root = (resolver as? EmbeddedNoteContext)?.root ?? resolver
+                    content = .note(NoteEmbed.Render(markdown: section, config: nested, context: EmbeddedNoteContext(root: root, note: url),
+                                                     depth: embedDepth + 1, chain: chain.union([url.standardizedFileURL.path])))
+                } else {
+                    content = .message(ref.subpath?.hasPrefix("^") == true ? "Block not found" : "Heading not found",
+                                       detail: ref.subpath ?? "")
+                }
+            } else {
+                content = .message("Note can't be read", detail: ref.note)
+            }
+        } else {
+            content = .message("Note not found", detail: ref.note)
+        }
+        let cap = config.printing ? config.maxBlockHeight * 0.8 : 420
+        let contentHeight: CGFloat
+        switch content {
+        case let .note(render): contentHeight = min(render.height, cap)
+        case .message: contentHeight = round(typo.size * 1.4)
+        }
+        // The line itself is the box's title: the note's name, a link that opens it.
+        let font = typo.small(0.8)
+        s.addAttribute(.paragraphStyle, value: paragraph(indent: pad, first: pad, tail: pad, before: round(pad * 0.9),
+                                                         after: contentHeight + pad * 2, lineSpacing: 0), range: block.range)
+        inline(line, in: s, font: { _, _ in font }, color: Palette.secondaryText)
+        var dependencies: Set<String> = []
+        if let url { dependencies.insert(NoteEmbed.key(url)) }
+        if case let .note(render) = content { dependencies.formUnion(render.dependencies) }
+        s.addAttribute(.mdEmbed, value: NoteEmbed(content: content, contentHeight: contentHeight, padding: pad, dependencies: dependencies),
+                       range: line.length > 0 ? line : block.range)
+    }
+
     // MARK: Inline styling
 
     private func inline(_ range: NSRange, in s: NSTextStorage, font: @escaping (Bool, Bool) -> NSFont, color: NSColor) {
@@ -901,6 +996,166 @@ final class MarkdownStyler {
         c.scheme = "indium-wiki"
         c.path = "/" + target
         return c.url
+    }
+}
+
+/// A note drawn inside another (`![[Note]]`): its text styled by a styler of its own
+/// and laid out once at the width of the box, then drawn read-only under the line.
+final class NoteEmbed: NSObject {
+    enum Content {
+        case note(Render)
+        case message(String, detail: String)
+    }
+    let content: Content
+    /// Height shown, capped for long notes.
+    let contentHeight: CGFloat
+    let padding: CGFloat
+    /// Every note file this embed shows, nested ones included, so a change to any of
+    /// them can refresh it.
+    let dependencies: Set<String>
+
+    init(content: Content, contentHeight: CGFloat, padding: CGFloat, dependencies: Set<String>) {
+        self.content = content
+        self.contentHeight = contentHeight
+        self.padding = padding
+        self.dependencies = dependencies
+    }
+
+    final class Render {
+        let storage: NSTextStorage
+        let layout = MarkdownLayoutManager()
+        let container: NSTextContainer
+        let height: CGFloat
+        /// Resolves the note's links and images from its own folder while it's styled.
+        let context: EmbeddedNoteContext
+        private(set) var dependencies: Set<String> = []
+
+        init(markdown: String, config: StyleConfig, context: EmbeddedNoteContext, depth: Int, chain: Set<String>) {
+            self.context = context
+            storage = NSTextStorage(string: markdown)
+            container = NSTextContainer(size: NSSize(width: config.columnWidth, height: .greatestFiniteMagnitude))
+            container.lineFragmentPadding = 0
+            layout.allowsNonContiguousLayout = false
+            layout.gutter = 0
+            layout.bodyLineSpacing = config.typography.lineSpacing
+            layout.typoParagraphGap = config.typography.paragraphSpacing
+            layout.captionFont = config.typography.text(bold: false, italic: true, size: round(config.typography.size * 0.8))
+            layout.addTextContainer(container)
+            storage.addLayoutManager(layout)
+            let styler = MarkdownStyler(config: config)
+            styler.imageResolver = context
+            styler.embedDepth = depth
+            styler.embedChain = chain
+            styler.styleAll(storage, selection: [])
+            // Read-only: links take the editor's link color rather than AppKit's blue,
+            // and the box's padding is the only space above the first line.
+            let storage = self.storage
+            var links: [NSRange] = []
+            storage.enumerateAttribute(.link, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+                if value != nil { links.append(range) }
+            }
+            storage.beginEditing()
+            for range in links {
+                storage.removeAttribute(.link, range: range)
+                storage.addAttribute(.foregroundColor, value: Palette.link, range: range)
+            }
+            if storage.length > 0, let first = storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle,
+               let style = first.mutableCopy() as? NSMutableParagraphStyle {
+                style.paragraphSpacingBefore = 0
+                let line = (storage.string as NSString).lineRange(for: NSRange(location: 0, length: 0))
+                storage.addAttribute(.paragraphStyle, value: style, range: line)
+            }
+            storage.endEditing()
+            layout.ensureLayout(for: container)
+            // A nested embed's box hangs below its line, in spacing the last line of a
+            // text doesn't get, so it counts on its own.
+            var bottom = layout.usedRect(for: container).height
+            let layout = self.layout
+            var dependencies: Set<String> = []
+            storage.enumerateAttribute(.mdEmbed, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+                guard let embed = value as? NoteEmbed else { return }
+                dependencies.formUnion(embed.dependencies)
+                let glyph = layout.glyphIndexForCharacter(at: max(range.location, NSMaxRange(range) - 1))
+                let used = layout.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
+                bottom = max(bottom, used.maxY + embed.contentHeight + embed.padding * 1.5)
+            }
+            height = ceil(bottom)
+            self.dependencies = dependencies
+        }
+
+        /// Draws the note with its top-left at `origin`, clipped to `clip`.
+        func draw(at origin: NSPoint, clip: NSRect) {
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(rect: clip).addClip()
+            let glyphs = layout.glyphRange(for: container)
+            layout.drawBackground(forGlyphRange: glyphs, at: origin)
+            layout.drawGlyphs(forGlyphRange: glyphs, at: origin)
+            NSGraphicsContext.restoreGraphicsState()
+        }
+    }
+
+    /// The note's text, read fresh each time the embed is styled (notes are small, and
+    /// a cache would have to know about every note nested inside).
+    static func text(at url: URL) -> String? {
+        try? String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// How dependencies are named: symlinks resolved, so file events (which report
+    /// `/private/tmp/...`) match the paths links resolve to.
+    static func key(_ url: URL) -> String { url.resolvingSymlinksInPath().standardizedFileURL.path }
+
+    /// The part of a note an embed shows: all of it (without frontmatter), the section
+    /// under a heading (down to the next heading as high or higher), or a `^block`.
+    static func section(of text: String, subpath: String?) -> String? {
+        let ns = text as NSString
+        let body = MarkdownScanner.scan(ns).filter { if case .frontmatter = $0.kind { return false }; return true }
+        guard let subpath else {
+            guard let start = body.first?.range.location else { return "" }
+            return ns.substring(from: start).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if subpath.hasPrefix("^") {
+            let id = NSRegularExpression.escapedPattern(for: String(subpath.dropFirst()))
+            guard let regex = try? NSRegularExpression(pattern: #"(?:^|\s)\^"# + id + #"\s*$"#) else { return nil }
+            for (i, b) in body.enumerated() {
+                let line = ns.substring(with: b.range).trimmingCharacters(in: .newlines) as NSString
+                guard let m = regex.firstMatch(in: line as String, range: NSRange(location: 0, length: line.length)) else { continue }
+                let before = line.substring(to: m.range.location).trimmingCharacters(in: .whitespaces)
+                if !before.isEmpty { return before }
+                // An id on a line of its own names the block just above it (a list or a
+                // table, usually with a blank line between).
+                var j = i - 1
+                while j >= 0, body[j].kind == .blank { j -= 1 }
+                var lines: [String] = []
+                while j >= 0, body[j].kind != .blank {
+                    lines.insert(ns.substring(with: body[j].range).trimmingCharacters(in: .newlines), at: 0)
+                    j -= 1
+                }
+                return lines.isEmpty ? nil : lines.joined(separator: "\n")
+            }
+            return nil
+        }
+        // `Note#A#B` points at B under A; the last heading is the one shown.
+        let wanted = normalize(subpath.components(separatedBy: "#").last ?? subpath)
+        var start: (index: Int, level: Int)?
+        for (i, b) in body.enumerated() {
+            guard case let .heading(level, markerLength) = b.kind else { continue }
+            if let s = start {
+                guard level <= s.level else { continue }
+                let from = body[s.index].range.location
+                return ns.substring(with: NSRange(location: from, length: b.range.location - from)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            let line = ns.substring(with: b.range) as NSString
+            if normalize(line.substring(from: min(markerLength, line.length))) == wanted { start = (i, level) }
+        }
+        guard let s = start else { return nil }
+        return ns.substring(from: body[s.index].range.location).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func normalize(_ heading: String) -> String {
+        var t = heading.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Closing hashes (`## Title ##`) aren't part of the title.
+        while t.hasSuffix("#") { t.removeLast() }
+        return t.trimmingCharacters(in: .whitespaces).lowercased()
     }
 }
 
