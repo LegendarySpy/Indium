@@ -34,6 +34,17 @@ enum DebugSnapshot {
         m = model(t3)
         let t4 = apply(t3, m.move(group(m, "Gamma"), to: .before(group(m, "# Title"))))
         print("=== gamma to top ===\n" + t4)
+
+        // A table's formula lines belong to its block: they move with it.
+        let f = "Intro.\n\n| Q | A |\n| - | - |\n| x | 2 |\n| y | 4 |\n<!-- TBLFM: @3$2=(@2$2*2) -->\n\nOutro.\n"
+        m = model(f)
+        let kinds = MarkdownScanner.scan(f as NSString).map { "\($0.kind)".components(separatedBy: "(").first! }
+        print("=== formula blocks ===\n" + kinds.joined(separator: " "))
+        let f1 = apply(f, m.move(group(m, "| Q"), to: .after(group(m, "Outro"))))
+        print("=== table with formulas to end ===\n" + f1)
+        m = model(f1)
+        let f2 = apply(f1, m.move(group(m, "| Q"), to: .before(group(m, "Intro"))))
+        print("=== table with formulas to top ===\n" + f2)
     }
 
     /// `-IndiumIconSteps "files;open:A.md;icon;suggest;wait:0.3;shot:/tmp/a.png;wait:2;dump"` drives
@@ -290,6 +301,157 @@ enum DebugSnapshot {
         run(0)
     }
 
+    /// The window and any popovers over it, as a PNG.
+    static func debugShot(window: NSWindow, path: String) {
+        guard let frame = window.contentView?.superview else { return }
+        frame.layoutSubtreeIfNeeded()
+        frame.displayIfNeeded()
+        guard let base = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return }
+        frame.cacheDisplay(in: frame.bounds, to: base)
+        let pops = NSApp.windows.filter { $0 !== window && $0.isVisible && String(describing: type(of: $0)).contains("Popover") }
+        var canvas = window.frame
+        for w in pops { canvas = canvas.union(w.frame) }
+        let image = NSImage(size: canvas.size)
+        image.lockFocus()
+        NSColor.windowBackgroundColor.setFill()
+        NSRect(origin: .zero, size: canvas.size).fill()
+        base.draw(in: NSRect(x: window.frame.minX - canvas.minX, y: window.frame.minY - canvas.minY, width: window.frame.width, height: window.frame.height))
+        for w in pops {
+            guard let v = w.contentView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { continue }
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            NSColor.controlBackgroundColor.setFill()
+            v.bounds.fill()
+            NSGraphicsContext.restoreGraphicsState()
+            v.cacheDisplay(in: v.bounds, to: rep)
+            let r = v.convert(v.bounds, to: nil).offsetBy(dx: w.frame.minX - canvas.minX, dy: w.frame.minY - canvas.minY)
+            let shape = NSBezierPath(roundedRect: r, xRadius: 10, yRadius: 10)
+            NSColor.controlBackgroundColor.setFill()
+            shape.fill()
+            NSColor.separatorColor.setStroke()
+            shape.stroke()
+            rep.draw(in: r)
+        }
+        image.unlockFocus()
+        if let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) {
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        }
+        print("  shot:", path)
+    }
+
+    /// Math typed in a table cell. Each case starts from a fresh note holding
+    ///
+    ///     | H1 | H2 |      the cell typed in is c1 (row 1, column 0), its text and
+    ///     | -- | -- |      caret set from `before`. The result is that cell's text with
+    ///     | c1 | c2 |      the caret (`‸`) or selection (`«»`); `@r,c:` in front when the
+    ///     | d1 | d2 |      keys moved to another cell, `exited` when they left the table.
+    ///
+    /// An optional fourth column is the row as stored in the note, spaces squeezed. Every
+    /// case also checks the table still has two columns in every row (a bare `|` splits one).
+    /// Keys as for `-IndiumMathCases`, plus ⇤ Shift-Tab and ⎋ Escape.
+    static func runMathCellCases(_ cases: String, editor: EditorController, window: NSWindow, realKeys: Bool) {
+        let undo = editor.textView.undoManager
+        func spin() { RunLoop.current.run(until: Date().addingTimeInterval(0.03)) }
+        func send(_ chars: String, _ flags: NSEvent.ModifierFlags = [], code: UInt16 = 0) {
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                                            windowNumber: window.windowNumber, context: nil, characters: chars,
+                                            charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code) {
+                    window.sendEvent(e)
+                }
+            }
+            spin()
+        }
+        func unmark(_ s: String) -> (String, NSRange) {
+            let ns = s as NSString
+            let caret = ns.range(of: "‸")
+            if caret.location != NSNotFound { return (ns.replacingCharacters(in: caret, with: ""), NSRange(location: caret.location, length: 0)) }
+            let a = ns.range(of: "«"), b = ns.range(of: "»")
+            let plain = ns.replacingOccurrences(of: "«", with: "").replacingOccurrences(of: "»", with: "")
+            return (plain, a.location == NSNotFound ? NSRange(location: (plain as NSString).length, length: 0)
+                                                       : NSRange(location: a.location, length: b.location - a.location - 1))
+        }
+        if !realKeys {
+            if let undo, undo.groupingLevel > 0 { undo.endUndoGrouping() }
+            undo?.groupsByEvent = false
+        }
+        let note = "| H1 | H2 |\n| --- | --- |\n| c1 | c2 |\n| d1 | d2 |\n\nAfter the table.\n"
+        var failed = 0, total = 0
+        for line in cases.components(separatedBy: "\n") where !line.isEmpty && !line.hasPrefix("#") {
+            let parts = line.components(separatedBy: "\t")
+            guard parts.count == 3 || parts.count == 4 else { continue }
+            total += 1
+            let (start, sel) = unmark(parts[0])
+            if !realKeys { undo?.beginUndoGrouping() }
+            editor.endTableEditing()
+            editor.replace(NSRange(location: 0, length: editor.storage.length), with: note)
+            editor.beginTableEditing(at: 0, row: 1, column: 0)
+            guard let cell = editor.tableEditor?.cellEditor as? CellTextView else {
+                if !realKeys { undo?.endUndoGrouping() }
+                failed += 1
+                print("FAIL", parts[0], "· no cell editor")
+                continue
+            }
+            let all = NSRange(location: 0, length: (cell.string as NSString).length)
+            if cell.shouldChangeText(in: all, replacementString: start) {
+                cell.textStorage?.replaceCharacters(in: all, with: start)
+                cell.didChangeText()
+            }
+            cell.setSelectedRange(sel)
+            cell.math.clearStops()
+            if !realKeys { undo?.endUndoGrouping() }
+            spin()
+            // Each case starts with nothing to undo, so ↶ can't reach into the one before.
+            undo?.removeAllActions()
+            for key in parts[1] {
+                if realKeys {
+                    switch key {
+                    case "⇥": send("\t", code: 48)
+                    case "⇤": send("\u{19}", .shift, code: 48)
+                    case "⏎": send("\r", code: 36)
+                    case "⌫": send("\u{7f}", code: 51)
+                    case "⎋": send("\u{1b}", code: 53)
+                    case "↶": undo?.undo(); spin()
+                    case "↷": undo?.redo(); spin()
+                    default: send(String(key))
+                    }
+                    continue
+                }
+                guard let tv = editor.tableEditor?.cellEditor else { break }
+                let isUndo = key == "↶" || key == "↷"
+                if !isUndo { undo?.beginUndoGrouping() }
+                switch key {
+                case "⇥": tv.doCommand(by: #selector(NSResponder.insertTab(_:)))
+                case "⇤": tv.doCommand(by: #selector(NSResponder.insertBacktab(_:)))
+                case "⏎": tv.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+                case "⌫": tv.doCommand(by: #selector(NSResponder.deleteBackward(_:)))
+                case "⎋": tv.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+                case "↶": undo?.undo()
+                case "↷": undo?.redo()
+                default: tv.insertText(String(key), replacementRange: NSRange(location: NSNotFound, length: 0))
+                }
+                if !isUndo { undo?.endUndoGrouping() }
+                spin()
+            }
+            var result = "exited"
+            if let table = editor.tableEditor, let tv = table.cellEditor {
+                let text = tv.string as NSString
+                let r = tv.selectedRange()
+                result = text.replacingCharacters(in: r, with: r.length == 0 ? "‸" : "«" + text.substring(with: r) + "»")
+                if table.focus.row != 1 || table.focus.column != 0 { result = "@\(table.focus.row),\(table.focus.column):" + result }
+            }
+            var ok = result == parts[2]
+            let rows = editor.text.components(separatedBy: "\n").filter { $0.hasPrefix("|") }
+            let stored = rows.count > 2 ? rows[2].replacingOccurrences(of: #" {2,}"#, with: " ", options: .regularExpression) : ""
+            var notes: [String] = []
+            if parts.count == 4, stored != parts[3] { ok = false; notes.append("stored \(stored.debugDescription), expected \(parts[3].debugDescription)") }
+            if let broken = rows.first(where: { MarkdownScanner.splitRow($0).count != 2 }) { ok = false; notes.append("row split: \(broken)") }
+            if !ok { failed += 1 }
+            print(ok ? "PASS" : "FAIL", parts[0], "·", parts[1], "→", result, ok ? "" : "(expected \(parts[2])) " + notes.joined(separator: "; "))
+        }
+        print("MATH CELL CASES: \(total - failed)/\(total) passed")
+    }
+
     static func runIfRequested(_ controller: DocumentWindowController) {
         let d = UserDefaults.standard
         if let steps = d.string(forKey: "IndiumAccessSteps") {
@@ -389,6 +551,76 @@ enum DebugSnapshot {
             print("SNIPPETS: \(total - failed)/\(total) typeset")
             exit(0)
         }
+        // `-IndiumMathSnippetsFile path`: your math shortcuts from this file instead of the folder's.
+        if let path = d.string(forKey: "IndiumMathSnippetsFile") {
+            let config = MathSnippetConfig.shared
+            config.overrideURL = URL(fileURLWithPath: path)
+            config.refresh(force: true)
+            print("SNIPPET CONFIG: \(config.loadedCount) loaded")
+            for problem in config.problems { print("SNIPPET PROBLEM:", problem) }
+            // `-IndiumMathSnippetsCreate YES`: what Edit Math Shortcuts… does before opening the file
+            // (the alert it would show, printed instead).
+            if d.bool(forKey: "IndiumMathSnippetsCreate") {
+                print("SNIPPET CREATE:", config.prepareFile().map { "failed: " + $0.replacingOccurrences(of: "\n", with: " ") } ?? "ok")
+                exit(0)
+            }
+            // `-IndiumMathSnippetsReference out.md`: the Math Shortcuts note, written out.
+            if let out = d.string(forKey: "IndiumMathSnippetsReference") {
+                try? config.reference.write(toFile: out, atomically: true, encoding: .utf8)
+                exit(0)
+            }
+        }
+        // `-IndiumMathSnippetConfigCases cases.tsv`: `file<TAB>shortcuts loaded<TAB>problems`, the
+        // problems as `¦`-separated pieces of text each one must contain (files relative to the cases).
+        if let path = d.string(forKey: "IndiumMathSnippetConfigCases"), let cases = try? String(contentsOfFile: path, encoding: .utf8) {
+            let dir = URL(fileURLWithPath: path).deletingLastPathComponent()
+            var failed = 0, total = 0
+            for line in cases.components(separatedBy: "\n") where !line.isEmpty && !line.hasPrefix("#") {
+                let parts = line.components(separatedBy: "\t")
+                guard parts.count >= 2 else { continue }
+                total += 1
+                let text = (try? String(contentsOf: dir.appendingPathComponent(parts[0]), encoding: .utf8)) ?? ""
+                let result = MathSnippetConfig.parse(text)
+                let expected = parts.count < 3 || parts[2].isEmpty ? [] : parts[2].components(separatedBy: "¦").map { $0.trimmingCharacters(in: .whitespaces) }
+                let ok = String(result.snippets.count) == parts[1] && result.problems.count == expected.count
+                    && zip(result.problems, expected).allSatisfy { $0.contains($1) }
+                if !ok { failed += 1 }
+                print(ok ? "PASS" : "FAIL", parts[0], "→", result.snippets.count, "loaded;", result.problems.isEmpty ? "no problems" : result.problems.joined(separator: " ¦ "))
+            }
+            print("SNIPPET CONFIG CASES: \(total - failed)/\(total) passed")
+            exit(0)
+        }
+        // `-IndiumMathCellSnippets YES`: every math shortcut as a table cell writes it: one line,
+        // no bare `|` (it would split the row), and it still typesets.
+        if d.bool(forKey: "IndiumMathCellSnippets") {
+            var samples = MathSnippet.all.compactMap { s -> String? in if case let .literal(t) = s.trigger { return t }; return nil }
+            samples += ["x1", "CO2", "x_{1}2", "\\hat{x}1", "beg", "\\alpha sr"]
+            var failed = 0, total = 0, declined = 0
+            for sample in samples {
+                for display in [false, true] {
+                    for auto in [true, false] {
+                        let before = "z " + sample
+                        guard let e = MathSnippet.expansion(before: before, context: .math(display: display), auto: auto, pipes: false) else { continue }
+                        if e.text.contains("\n") { declined += 1; continue }
+                        var text = e.text as NSString
+                        for b in (e.stops + e.copies.flatMap { $0 }).filter({ $0.length == 0 }).sorted(by: { $0.location > $1.location }) {
+                            let env = ["\\begin{", "\\end{"].contains { text.substring(to: b.location).hasSuffix($0) }
+                            let afterCommand = text.substring(to: b.location).range(of: #"\\[A-Za-z]+$"#, options: .regularExpression) != nil
+                            text = text.replacingCharacters(in: b, with: env ? "matrix" : afterCommand ? " a" : "a") as NSString
+                        }
+                        let doc = String((before as NSString).substring(to: (before as NSString).length - e.length)) + (text as String)
+                        total += 1
+                        let piped = (text as String).contains("|")
+                        if piped || MathRenderer.render(doc, size: 17, display: display) == nil {
+                            failed += 1
+                            print("FAIL", sample, display ? "display" : "inline", auto ? "auto" : "tab", piped ? "pipe" : "typeset", "→", doc.debugDescription)
+                        }
+                    }
+                }
+            }
+            print("CELL SNIPPETS: \(total - failed)/\(total) fit a cell (\(declined) multi-line declined)")
+            exit(0)
+        }
         // `-IndiumEvalCases a.tsv,b.tsv,c.md`: formula regression cases (quick answers, evaluator,
         // table formulas; see FormulaSelfTest). `-IndiumEvalVerbose YES` prints every table result.
         if let paths = d.string(forKey: "IndiumEvalCases") {
@@ -462,7 +694,9 @@ enum DebugSnapshot {
                     undo.groupsByEvent = false
                 }
                 for step in steps {
-                    let isUndo = step == "undo" || step == "redo"
+                    // Steps that only look (and Tab, as a real key) open no explicit undo group: an empty
+                    // explicit group stays on the stack, where a real key event's empty group is dropped.
+                    let isUndo = ["undo", "redo", "noteundo", "tab", "text", "caption", "fprint", "shot", "focus", "done", "notesel", "selectAll", "select", "pb"].contains(step.split(separator: ":").first.map(String.init) ?? "")
                     if !isUndo { undo?.beginUndoGrouping() }
                     defer { if !isUndo { undo?.endUndoGrouping() } }
                     let e = target.editor.tableEditor
@@ -502,6 +736,61 @@ enum DebugSnapshot {
                         hit?.mouseDown(with: mouse(.leftMouseDown, from, clicks: clicks))
                     case "done":
                         target.editor.endTableEditing(caretAfter: true)
+                    // Table formulas: `formula` opens Formula… for the focused cell; `fpick:2,−,3`
+                    // sets its menus (rows/columns in TBLFM numbering, an operation's title);
+                    // `ftext:…` types the formula; `fok`, `fremove`, `fcancel`; `fprint` shows it;
+                    // `text` prints the note; `caption` the captions drawn; `shot:path` a screenshot.
+                    case "formula":
+                        let n = arg.split(separator: ",").compactMap { Int($0) }
+                        target.editor.showFormulaPopover(cell: n.count == 2 ? (n[0], n[1]) : nil)
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+                    case "fpick", "ftext", "fok", "fremove", "fcancel", "fprint":
+                        guard let pop = target.editor.formulaPopover?.contentViewController as? TableFormulaPopover else { print("  no formula popover"); break }
+                        switch step.split(separator: ":").first.map(String.init) ?? "" {
+                        case "fpick":
+                            let n = arg.split(separator: ",").map(String.init)
+                            pop.debugSet(left: Int(n[0]), operation: n.count > 1 ? n[1] : nil, right: n.count > 2 ? Int(n[2]) : nil)
+                        case "ftext":
+                            pop.field.stringValue = arg
+                            pop.updatePreview()
+                        case "fok": pop.apply()
+                        case "fremove": pop.remove()
+                        case "fcancel": pop.cancel()
+                        default: break
+                        }
+                        print("  FORMULA [\(pop.titleLabel.stringValue)] [\(pop.left.titleOfSelectedItem ?? "-")] [\(pop.operation.titleOfSelectedItem ?? "-")] [\(pop.right.titleOfSelectedItem ?? "-")]",
+                              "field:", pop.field.stringValue, "preview:", pop.preview.stringValue.debugDescription,
+                              "apply:", pop.applyButton.isEnabled, "remove shown:", !pop.removeButton.isHidden)
+                    // Structure, as the toolbar and cell menu do it: `focus:r,c`, `addrow` (below),
+                    // `addrowabove`, `delrow`, `addcol` (right), `addcolleft`, `delcol`.
+                    case "focus":
+                        let n = arg.split(separator: ",").compactMap { Int($0) }
+                        e?.focusCell(row: n[0], column: n[1])
+                    case "addrow": e?.addRow(below: nil)
+                    case "addrowabove": e?.addRow(above: nil)
+                    case "delrow": e?.deleteRow()
+                    case "addcol": e?.addColumn(right: nil)
+                    case "addcolleft": e?.addColumn(left: nil)
+                    case "delcol": e?.deleteColumn()
+                    case "tab":
+                        // Tab to the next cell outside an explicit undo group: a real key's
+                        // event group that registers nothing is dropped, an explicit one isn't.
+                        window.firstResponder?.doCommand(by: #selector(NSResponder.insertTab(_:)))
+                    case "noteundo", "undo", "redo":
+                        // The note's own undo, as Edit ▸ Undo in the note would.
+                        let um = target.editor.textView.undoManager
+                        print("  noteundo level:", um?.groupingLevel ?? -1, "name:", um?.undoActionName ?? "-", "same as note's:", um === target.editor.note?.undoManager)
+                        if step == "redo" { um?.redo() } else { um?.undo() }
+                    case "text":
+                        let um = target.editor.textView.undoManager
+                        print("NOTE TEXT (canUndo \(um?.canUndo ?? false) [\(um?.undoActionName ?? "-")] canRedo \(um?.canRedo ?? false)):\n" + target.editor.text)
+                    case "caption":
+                        let storage = target.editor.storage
+                        storage.enumerateAttribute(.mdCaption, in: NSRange(location: 0, length: storage.length)) { v, r, _ in
+                            if let c = v as? CaptionDecoration { print("  CAPTION at \(r.location) error=\(c.isError): \(c.text)") }
+                        }
+                    case "shot":
+                        debugShot(window: window, path: arg)
                     case "notesel":
                         let n = arg.split(separator: ",").compactMap { Int($0) }
                         window.makeFirstResponder(target.editor.textView)
@@ -747,6 +1036,10 @@ enum DebugSnapshot {
                     print(ok ? "PASS" : "FAIL", parts[0], "·", parts[1], "→", result, ok ? "" : "(expected \(parts[2]))")
                 }
                 print("MATH CASES: \(total - failed)/\(total) passed")
+            }
+            // `-IndiumMathCellCases /path`: the same kind of cases, typed into a table cell (see runMathCellCases).
+            if let path = d.string(forKey: "IndiumMathCellCases"), let cases = try? String(contentsOfFile: path, encoding: .utf8) {
+                runMathCellCases(cases, editor: target.editor, window: window, realKeys: d.bool(forKey: "IndiumMathRealKeys"))
             }
             if d.bool(forKey: "IndiumSlashAccept") {
                 _ = target.editor.handleSlashKey(#selector(NSResponder.insertTab(_:)))

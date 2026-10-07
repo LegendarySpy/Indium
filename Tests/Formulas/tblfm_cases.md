@@ -237,6 +237,23 @@ Notes go on here.
 --- issues
 @4$3 [incompatibleUnits] Can't subtract mol from g
 
+=== a species in the unit (g Zn) stays an error, and says to write plain g
+| Quantity | A |
+| --- | --- |
+| Hydrated | 2.008 g Zn |
+| Anhydrous | 0.715 g |
+| Water | |
+<!-- TBLFM: @4$2=(@2-@3) -->
+--- expect
+| Quantity | A |
+| --- | --- |
+| Hydrated | 2.008 g Zn |
+| Anhydrous | 0.715 g |
+| Water | |
+<!-- TBLFM: @4$2=(@2-@3) -->
+--- issues
+@4$2 [incompatibleUnits] Can't subtract g from g Zn. Write the unit as plain “g” and name the substance in the row label
+
 === invalid formula cannot partially overwrite a table
 | a | b |
 | --- | --- |

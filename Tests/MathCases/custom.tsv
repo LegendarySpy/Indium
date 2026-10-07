@@ -1,0 +1,19 @@
+# Your own math shortcuts, from Tests/MathCases/snippets/custom.json.
+# Run: Indium -IndiumTemp YES -IndiumMathSnippetsFile Tests/MathCases/snippets/custom.json -IndiumMathCases Tests/MathCases/custom.tsv -IndiumSnapshot /tmp/x.png
+# (Format as main.tsv. The same file with -IndiumMathCellCases checks them in a table cell.)
+$‸$	ce	$\mathrm{‸}$
+$‸$	ceH⇥	$\mathrm{H}‸$
+$‸$	90deg	$90^{\circ}‸$
+$x‸$	dg⇥	$x^{\circ}‸$
+a ‸	->	a →‸
+$\alpha‸$	hat	$\hat{\alpha}‸$
+$‸$	nn	$\mathbb{N}‸$
+done ‸	qed	done ∎‸
+$‸$	qed	$∎‸$
+# Same trigger and priority as a built-in: yours wins. Lower priority: the built-in stays.
+$x‸$	sr	$x^{3}‸$
+$‸$	@a	$\alpha‸$
+# Undo after your shortcut brings back what was typed, as with the built-ins.
+$x‸$	sr↶	$xsr‸$
+# Built-ins carry on around them.
+$x‸$	/y⇥⇥	$\frac{x}{y}$‸

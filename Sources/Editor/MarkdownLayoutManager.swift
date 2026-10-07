@@ -200,6 +200,7 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         drawBullets(in: chars, storage: storage, origin: origin)
         drawRules(in: chars, storage: storage, origin: origin)
         drawPageBreaks(in: chars, storage: storage, origin: origin)
+        drawCaptions(in: chars, storage: storage, origin: origin)
         drawInlineMath(in: chars, storage: storage, origin: origin)
         drawBlocks(in: chars, storage: storage, origin: origin)
     }
@@ -349,6 +350,24 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
             let col = contentColumn(glyph: g, container: container, origin: origin)
             Self.drawPageLine(y: origin.y + frag.midY, from: col.x, to: col.x + col.width,
                               label: "Page Break", centered: true, color: Palette.quoteBar)
+        }
+    }
+
+    private func drawCaptions(in chars: NSRange, storage: NSTextStorage, origin: NSPoint) {
+        storage.enumerateAttribute(.mdCaption, in: chars) { value, range, _ in
+            guard let caption = value as? CaptionDecoration else { return }
+            let g = glyphIndexForCharacter(at: range.location)
+            guard let container = textContainer(forGlyphAt: g, effectiveRange: nil) else { return }
+            let frag = lineFragmentRect(forGlyphAt: g, effectiveRange: nil)
+            let col = contentColumn(glyph: g, container: container, origin: origin)
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 11, weight: .regular),
+                .foregroundColor: caption.isError ? Palette.error : Palette.tertiaryText,
+            ]
+            let text = caption.text as NSString
+            let size = text.size(withAttributes: attrs)
+            let rect = NSRect(x: col.x, y: round(origin.y + frag.midY - size.height / 2), width: col.width, height: ceil(size.height))
+            text.draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: attrs)
         }
     }
 

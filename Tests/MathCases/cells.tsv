@@ -1,0 +1,60 @@
+# Math typed in a table cell: the same shortcuts as in the page, then the cell's own keys.
+# Run: Indium -IndiumTemp YES -IndiumMathCellCases Tests/MathCases/cells.tsv -IndiumSnapshot /tmp/x.png [-IndiumMathRealKeys YES]
+# The note is a 2×3 table; keys go to its first body cell (c1), set from `before`.
+# before<TAB>keys<TAB>expected cell[<TAB>stored row]. `@r,c:` in front: the keys moved to that cell
+# (Tab selects the next cell's text). `exited`: they left the table. Stored rows have spaces squeezed.
+# Keys: ⇥ Tab, ⇤ Shift-Tab, ⏎ Return, ⌫ Backspace, ⎋ Escape, ↶ Undo, ↷ Redo.
+#
+# Auto-fraction, as in the page (and after a subscript: chemical formulas).
+$x‸$	/	$\frac{x}{‸}$
+$CuSO_{4}‸$	/	$\frac{CuSO_{4}}{‸}$
+$CuSO_{4}\cdot 5H_{2}O‸$	/	$CuSO_{4}\cdot \frac{5H_{2}O}{‸}$
+$(a+b)‸$	/	$\frac{a+b}{‸}$
+$x‸$	/2	$\frac{x}{2‸}$	| $\frac{x}{2}$ | c2 |
+$‸$	//	$\frac{‸}{}$
+$‸$	//a⇥b⇥	$\frac{a}{b}‸$
+# Shortcuts.
+$‸$	@a	$\alpha‸$
+$x‸$	sr	$x^{2}‸$
+$‸$	@asr	$\alpha^{2}‸$
+‸	mk	$‸$
+‸	mkx	$x‸$	| $x$ | c2 |
+water ‸	mkH2O	water $H_{2}O‸$
+$x‸$	1	$x_{1}‸$
+# Tab through the blanks and out of the equation; only then to the next cell.
+$x‸$	/y⇥	$\frac{x}{y}‸$
+$x‸$	/y⇥⇥	$\frac{x}{y}$‸
+$x‸$	/y⇥⇥⇥	@1,1:«c2»	| $\frac{x}{y}$ | c2 |
+$‸$	//a⇥⇤	$\frac{«a»}{}$
+$‸$	//a⇥b⇤⇥	$\frac{a}{«b»}$
+$‸$	//a⇥b⇤⇥⇥	$\frac{a}{b}‸$
+# Outside math, Tab and Shift-Tab move between cells and Return goes down a row.
+c1‸	⇥	@1,1:«c2»
+c1‸	⇤	@0,1:«H2»
+c1‸	⏎	@2,0:d1‸
+$x$ and ‸	⇥	@1,1:«c2»
+# Return leaves the cell even mid-shortcut (keeping what's written); Escape leaves the table.
+$‸$	//⏎	@2,0:d1‸	| $\frac{}{}$ | c2 |
+$x‸$	/⎋	exited	| $\frac{x}{}$ | c2 |
+c1‸	⎋	exited	| c1 | c2 |
+# Undo after an expansion brings back what was typed; Redo the expansion.
+$x‸$	/↶	$x/‸$
+$x‸$	/↶↷	$\frac{x}{‸}$
+$‸$	@a↶	$@a‸$
+$x‸$	sr↶	$xsr‸$
+# A price is not an equation, and an escaped dollar opens nothing.
+$5‸	/	$5/‸	| $5/ | c2 |
+‸	$5/	$5/‸	| $5/ | c2 |
+Costs $5 and $10‸	/	Costs $5 and $10/‸
+\$x‸	/	\$x/‸	| \$x/ | c2 |
+# A bare | would split the row: shortcuts that write bars use commands in a cell.
+$‸$	lr|x⇥	$\left\lvert x \right\rvert‸$	| $\left\lvert x \right\rvert$ | c2 |
+$‸$	modx⇥	$\lvert x\rvert‸$
+$‸$	modx⇥y	$\lvert x\rvert y‸$
+$‸$	lr|x⇥y	$\left\lvert x \right\rvert y‸$
+$‸$	normx⇥	$\lvert x \rvert‸$
+$‸$	brkx⇥y⇥	$\langle x \mid y \rangle‸$	| $\langle x \mid y \rangle$ | c2 |
+# A bar typed by hand is kept, and escaped in the file; the rendered table currently reads that `\|` as ‖.
+$‸$	|x|	$|x|‸$	| $\|x\|$ | c2 |
+# One line only: display-math shortcuts that need lines of their own stay as typed.
+‸	dm	dm‸
