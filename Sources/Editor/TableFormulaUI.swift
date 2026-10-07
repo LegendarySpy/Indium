@@ -41,6 +41,14 @@ enum TableFormulaUI {
         return indent.isEmpty ? markdown : markdown.components(separatedBy: "\n").map { indent + $0 }.joined(separator: "\n")
     }
 
+    /// The names a formula line could read as note variables.
+    static func names(in formulaLine: String) -> Set<String> {
+        guard let body = TableFormulas.formulaText(ofLine: formulaLine) else { return [] }
+        let ns = body as NSString
+        return Set(nameToken.matches(in: body, range: NSRange(location: 0, length: ns.length)).map { ns.substring(with: $0.range) })
+    }
+    private static let nameToken = try! NSRegularExpression(pattern: #"(?<![A-Za-z0-9_@$.])[A-Za-z_][A-Za-z0-9_]*"#)
+
     // MARK: Caption
 
     /// "ƒ 2 formulas" under a table, or what's wrong in red.
@@ -54,7 +62,7 @@ enum TableFormulaUI {
             return CaptionDecoration(text: "ƒ " + describe(issue, grid: grid) + more, isError: true)
         }
         let n = outcome.formulas.count
-        let stale = outcome.changed.isEmpty ? "" : " · values out of date until the table is edited"
+        let stale = outcome.changed.isEmpty ? "" : " · values out of date"
         return CaptionDecoration(text: "ƒ \(n) formula\(n == 1 ? "" : "s")" + stale, isError: false)
     }
 
@@ -299,6 +307,7 @@ final class TableFormulaPopover: NSViewController, NSTextFieldDelegate {
             p.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
             p.target = self
             p.action = #selector(builderChanged)
+            (p.cell as? NSPopUpButtonCell)?.lineBreakMode = .byTruncatingMiddle
         }
         operation.addItems(withTitles: Operation.allCases.map(\.rawValue))
         field.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
@@ -381,8 +390,11 @@ final class TableFormulaPopover: NSViewController, NSTextFieldDelegate {
         } else if let existing {
             field.stringValue = existing.text
         } else {
-            // A new formula: the two before it, the first minus the second (hydrated − anhydrous).
-            let idx = options.map(\.index)
+            // A new formula: the two before it, the first minus the second (hydrated − anhydrous),
+            // from the ones no formula fills, so the suggestion never depends on itself.
+            let all = options.map(\.index)
+            let inputs = all.filter { TableFormulaUI.existing(.init(isRow: target.isRow, index: $0), in: formulaLines) == nil }
+            let idx = inputs.count >= 2 ? inputs : all
             let before = idx.filter { $0 < target.index }
             let a = before.count >= 2 ? before[before.count - 2] : idx.first, b = before.last ?? (idx.count > 1 ? idx[1] : idx.first)
             if let a { left.selectItem(withTag: a) }

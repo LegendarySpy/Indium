@@ -184,6 +184,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
+        frontmatterWillChange(range)
         finder.noteClientStringWillChange()
         pendingMathEdit = replacementString.map { (range, ($0 as NSString).length) }
         return true
@@ -525,6 +526,76 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         refreshTableEditor()
     }
 
+    // MARK: Frontmatter variables
+
+    /// The frontmatter as it was before the edit under way, while the caret is still in it.
+    private var frontmatterBefore: String?
+    /// The frontmatter changed: table captions, which read its variables, are drawn again.
+    private var frontmatterEdited = false
+    private var committingFrontmatter = false
+
+    private var frontmatterRange: NSRange? {
+        guard let first = styler.blocks.first, case .frontmatter = first.kind else { return nil }
+        return first.range
+    }
+
+    private var caretInFrontmatter: Bool {
+        guard let range = frontmatterRange else { return false }
+        return textView.selectedRanges.allSatisfy { NSLocationInRange($0.rangeValue.location, range) }
+    }
+
+    /// Remembers the frontmatter before someone starts typing in it.
+    private func frontmatterWillChange(_ range: NSRange) {
+        guard frontmatterBefore == nil, !committingFrontmatter, !isLoading, let fm = frontmatterRange,
+              NSMaxRange(range) <= NSMaxRange(fm), let undo = textView.undoManager, !undo.isUndoing, !undo.isRedoing else { return }
+        frontmatterBefore = ns.substring(with: fm)
+    }
+
+    /// The frontmatter edit is done (the caret left it, or the note is closing): tables whose
+    /// formulas read a variable that changed are recalculated. The edit and the new results
+    /// become one undo step: the typing in the frontmatter is undone and done again as one
+    /// change together with the tables.
+    private func commitFrontmatter() {
+        guard let before = frontmatterBefore, !committingFrontmatter else { return }
+        frontmatterBefore = nil
+        guard let fm = frontmatterRange, let undo = textView.undoManager, undo.groupingLevel == 0 else { return }
+        let after = ns.substring(with: fm)
+        let old = NoteVariables.parse(noteText: before), new = NoteVariables.parse(noteText: after)
+        let changed = Set(old.values.keys).union(new.values.keys).filter { old.values[$0]?.formatted() != new.values[$0]?.formatted() }
+        guard !changed.isEmpty else { return }
+        // Each table that reads a changed variable, recalculated, last first.
+        var tables: [(range: NSRange, text: String)] = []
+        for block in styler.blocks.reversed() {
+            guard case .table = block.kind, let parts = tableParts(at: block.range.location), !parts.formulas.isEmpty,
+                  parts.formulas.contains(where: { TableFormulaUI.names(in: $0).intersection(changed).isEmpty == false }) else { continue }
+            let table = TableFormulaUI.recalculate(tableMarkdown: parts.table, formulaLines: parts.formulas, noteText: storage.string)
+            if table != parts.table { tables.append((parts.range, Self.joined(table, parts.formulas))) }
+        }
+        guard !tables.isEmpty else { return }
+        committingFrontmatter = true
+        defer { committingFrontmatter = false }
+        let selection = textView.selectedRange()
+        // Back to where the frontmatter edit started; only the frontmatter may change on the way.
+        let body = ns.substring(from: NSMaxRange(fm))
+        var undone = 0
+        while undo.canUndo, undone < 500, frontmatterRange.map({ ns.substring(with: $0) }) != before {
+            undo.undo()
+            undone += 1
+        }
+        guard let start = frontmatterRange, ns.substring(with: start) == before, ns.substring(from: NSMaxRange(start)) == body else {
+            // Something else was in the way: put it all back and recalculate as a step of its own.
+            for _ in 0..<undone where undo.canRedo { undo.redo() }
+            for t in tables { replace(t.range, with: t.text, actionName: "Recalculate") }
+            return
+        }
+        undo.beginUndoGrouping()
+        replace(start, with: after)
+        for t in tables { replace(t.range, with: t.text) }
+        undo.setActionName("Typing")
+        undo.endUndoGrouping()
+        textView.setSelectedRange(NSRange(location: min(selection.location, storage.length), length: 0))
+    }
+
     /// After typing in a cell: the formulas' results, in the typing's undo step.
     private func recalculateEditedTable() {
         guard tableFormulasPending else { return }
@@ -551,20 +622,23 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     /// Formula… from the table toolbar or a cell's menu, for the focused row or column.
-    func showFormulaPopover() {
+    /// `cell` (the editor's numbering) instead of the focused one, for the debug harness.
+    func showFormulaPopover(cell: (row: Int, column: Int)? = nil) {
+        // A cell just typed in counts: its results first, so the preview starts from them.
+        recalculateEditedTable()
         guard let editor = tableEditor, let location = styler.editingTableLocation, let parts = tableParts(at: location),
               let grid = TableFormulaUI.grid(of: parts.table)?.grid else { return }
-        recalculateEditedTable()
         let popover = NSPopover()
         let controller = TableFormulaPopover(grid: grid, formulaLines: parts.formulas, variables: NoteVariables.parse(noteText: storage.string),
-                                             focus: (editor.focus.row + 1, editor.focus.column + 1))
+                                             focus: ((cell ?? editor.focus).row + 1, (cell ?? editor.focus).column + 1))
         controller.presentingPopover = popover
         controller.onApply = { [weak self] lines in self?.setTableFormulas(lines) }
         popover.contentViewController = controller
         popover.behavior = .transient
-        let cell = editor.render.cellRect(row: editor.focus.row, column: editor.focus.column,
+        let at = cell ?? editor.focus
+        let rect = editor.render.cellRect(row: at.row, column: at.column,
                                           in: NSRect(x: 0, y: 0, width: editor.render.width, height: editor.render.height))
-        popover.show(relativeTo: cell, of: editor, preferredEdge: .maxY)
+        popover.show(relativeTo: rect, of: editor, preferredEdge: .maxY)
         formulaPopover = popover
     }
     private(set) weak var formulaPopover: NSPopover?
@@ -673,6 +747,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func load(_ newNote: Note?) {
         recalculateEditedTable()
+        commitFrontmatter()
         saveNow()
         if let old = note {
             old.selection = textView.selectedRange()
@@ -914,6 +989,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textVersion += 1
         shiftMathStops(editedRange: editedRange, delta: delta)
         guard !isLoading else { return }
+        if let fm = frontmatterRange, editedRange.location <= NSMaxRange(fm) { frontmatterEdited = true }
         let caret = NSRange(location: NSMaxRange(editedRange), length: 0)
         if let restyled = styler.didEdit(textStorage, editedRange: editedRange, delta: delta, selection: [caret]) {
             relayout = relayout.map { NSUnionRange($0, restyled) } ?? restyled
@@ -950,6 +1026,13 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func textDidChange(_ notification: Notification) {
+        if frontmatterEdited {
+            frontmatterEdited = false
+            for block in styler.blocks where block.kind == .tableFormulas {
+                styler.restyleBlock(at: block.range.location, in: storage)
+                relayout = relayout.map { NSUnionRange($0, block.range) } ?? block.range
+            }
+        }
         relayoutRestyled()
         guard !isLoading else { return }
         hasUnsavedEdits = true
@@ -965,6 +1048,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func textViewDidChangeSelection(_ notification: Notification) {
         guard !isLoading else { return }
+        // On the next turn of the run loop, outside the event that moved the caret.
+        if frontmatterBefore != nil, !caretInFrontmatter { RunLoop.main.perform { [weak self] in MainActor.assumeIsolated { self?.commitFrontmatter() } } }
         if selectedImageLine != nil, !changingImageSelection { clearImageSelection() }
         if textView.isTrackingMouse {
             selectionBar.dismiss()
