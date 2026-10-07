@@ -104,8 +104,8 @@ extension EditorController {
     }
 
     /// Whether `location` sits in `\text{…}` (or another argument that holds words, not
-    /// math), or in a superscript or subscript.
-    private func argument(in span: MathSpan, at location: Int) -> (words: Bool, script: Bool) {
+    /// math), or in a superscript.
+    private func argument(in span: MathSpan, at location: Int) -> (words: Bool, superscript: Bool) {
         let text = source
         let wordy: Set<String> = ["text", "textbf", "textit", "textrm", "texttt", "textsf", "textnormal", "mathrm", "operatorname",
                                   "mbox", "hbox", "begin", "end", "label", "tag", "color", "textcolor"]
@@ -127,7 +127,7 @@ extension EditorController {
             }
             if c == 0x7B {
                 if let command, wordy.contains(command) { stack.append(.words) }
-                else if previous == 0x5E || previous == 0x5F { stack.append(.script) }
+                else if previous == 0x5E { stack.append(.script) }
                 else { stack.append(.plain) }
                 command = nil
             } else if c == 0x7D {
@@ -151,8 +151,16 @@ extension EditorController {
         let sel = textView.selectedRange()
         let paired = pairedDollarAt
         pairedDollarAt = nil
+        let tail = mathWordTail
+        mathWordTail = nil
         if sel.length > 0 { return wrapSelection(in: sel, with: ch) }
         let caret = sel.location
+        // `ome` became `\omega`; typing on with `ga` finishes the word rather than adding to it.
+        if let tail, tail.location == caret, tail.rest.first == ch {
+            let rest = String(tail.rest.dropFirst())
+            if !rest.isEmpty { mathWordTail = (caret, rest) }
+            return true
+        }
         // Right after `$‸$` was closed for you: a second `$` makes `$$`, and a space
         // means it wasn't an equation after all.
         if paired == caret, caret < source.length, source.character(at: caret) == 0x24 {
@@ -183,16 +191,18 @@ extension EditorController {
         let arg = argument(in: span, at: caret)
         if arg.words { return false }
         let before = text.substring(with: NSRange(location: span.content.location, length: caret - span.content.location))
-        if ch == "/" {
-            guard !arg.script, !before.hasSuffix("\\") else { return false }
-            return autoFraction(in: span, at: caret)
-        }
         // Brackets pair up only where nothing follows them.
         if "([{".contains(ch), let next, let u = UnicodeScalar(next),
            CharacterSet.alphanumerics.contains(u) || next == 0x5C { return false }
         if let expansion = MathSnippet.expansion(before: before + typed, context: .math(display: span.display), auto: true) {
             expand(expansion, typed: typed, at: caret)
             return true
+        }
+        // As in LaTeX Suite: shortcuts first (`//`), then the slash makes a fraction, except in
+        // a superscript (`x^{1/2}`), after a backslash, or with nothing before it.
+        if ch == "/" {
+            guard !arg.superscript, !before.hasSuffix("\\") else { return false }
+            return autoFraction(in: span, at: caret)
         }
         // `\alpha` then a letter: a new word, not `\alphax`.
         if ch.isLetter, let m = before.range(of: #"\\([A-Za-z]+)$"#, options: .regularExpression),
@@ -275,9 +285,9 @@ extension EditorController {
         guard !selected.contains("\n") else { return false }
         if let span = mathSpan(at: sel.location), NSMaxRange(sel) <= NSMaxRange(span.content) {
             guard let template = MathSnippet.visual[ch], !argument(in: span, at: sel.location).words else { return false }
-            let (expanded, stops) = MathSnippet.render(template, captures: [], visual: selected)
+            let r = MathSnippet.render(template, captures: [], visual: selected)
             textView.breakUndoCoalescing()
-            applyExpansion(expanded, stops: stops, replacing: sel)
+            applyExpansion(r.text, stops: r.stops, copies: r.copies, replacing: sel, undoSelection: sel)
             return true
         }
         guard ch == "$", mathSpan(at: NSMaxRange(sel)) == nil else { return false }
@@ -308,6 +318,11 @@ extension EditorController {
                 i = j - 1
                 continue
             }
+            // A space after a Greek letter doesn't end the term: `\alpha x/` → `\frac{\alpha x}{}`.
+            if c == 0x20, i + 1 < caret, text.character(at: i + 1) != 0x20, followsGreekLetter(i, from: start) {
+                i -= 1
+                continue
+            }
             if breaks.contains(c) { numStart = i + 1; break }
             // `\\` ends a row and `\,` is a space; `\alpha` is part of the term.
             if c == 0x5C, i + 1 < caret, let u = UnicodeScalar(text.character(at: i + 1)), !CharacterSet.letters.contains(u) {
@@ -316,6 +331,8 @@ extension EditorController {
             }
             i -= 1
         }
+        // Nothing to divide: the slash stays a slash (and a second one makes `\frac{}{}`).
+        guard numStart < caret else { return false }
         var numerator = text.substring(with: NSRange(location: numStart, length: caret - numStart))
         if numerator.hasPrefix("("), numerator.hasSuffix(")"), Self.balanced(String(numerator.dropFirst().dropLast())) {
             numerator = String(numerator.dropFirst().dropLast())
@@ -323,13 +340,21 @@ extension EditorController {
         let head = "\\frac{" + numerator + "}{"
         let expanded = head + "}"
         let length = (expanded as NSString).length
-        let stops = numerator.isEmpty
-            ? [NSRange(location: 6, length: 0), NSRange(location: 8, length: 0), NSRange(location: length, length: 0)]
-            : [NSRange(location: (head as NSString).length, length: 0), NSRange(location: length, length: 0)]
+        let stops = [NSRange(location: (head as NSString).length, length: 0), NSRange(location: length, length: 0)]
         textView.insertTypedText("/")
         separateUndo()
-        applyExpansion(expanded, stops: stops, replacing: NSRange(location: numStart, length: caret + 1 - numStart))
+        applyExpansion(expanded, stops: stops, replacing: NSRange(location: numStart, length: caret + 1 - numStart),
+                       undoSelection: NSRange(location: caret + 1, length: 0))
         return true
+    }
+
+    /// The space at `index` comes right after a Greek letter's command (`\alpha␣`).
+    private func followsGreekLetter(_ index: Int, from start: Int) -> Bool {
+        let text = source
+        var j = index - 1
+        while j >= start, let u = UnicodeScalar(text.character(at: j)), CharacterSet.letters.contains(u) { j -= 1 }
+        guard j >= start, j < index - 1, text.character(at: j) == 0x5C else { return false }
+        return MathSnippet.greek.contains(text.substring(with: NSRange(location: j + 1, length: index - j - 1)))
     }
 
     private static func balanced(_ s: String) -> Bool {
@@ -345,7 +370,28 @@ extension EditorController {
         textView.insertTypedText(typed)
         separateUndo()
         let end = caret + (typed as NSString).length
-        applyExpansion(expansion.text, stops: expansion.stops, replacing: NSRange(location: end - expansion.length, length: expansion.length))
+        let start = end - expansion.length
+        applyExpansion(expansion.text, stops: expansion.stops, copies: expansion.copies,
+                       replacing: NSRange(location: start, length: expansion.length), undoSelection: NSRange(location: end, length: 0))
+        if let rest = expansion.completes, textView.selectedRange().length == 0 {
+            mathWordTail = (textView.selectedRange().location, rest)
+        }
+    }
+
+    /// Undo puts the caret back where it was (rather than selecting the restored text, so
+    /// typing on doesn't replace it), and Redo puts it where the shortcut left it. Call
+    /// `before` ahead of the edit and `after` once it's done.
+    private func registerUndoSelection(before: NSRange) {
+        guard let undo = textView.undoManager else { return }
+        undo.registerUndo(withTarget: textView) { $0.setSelectedRange(before) }
+    }
+
+    private func registerRedoSelection(after: NSRange) {
+        guard let undo = textView.undoManager else { return }
+        // Runs first while undoing, so what it registers runs last while redoing.
+        undo.registerUndo(withTarget: textView) { tv in
+            undo.registerUndo(withTarget: tv) { $0.setSelectedRange(after) }
+        }
     }
 
     /// What comes next is its own Undo step, even within the same key press.
@@ -373,30 +419,94 @@ extension EditorController {
         textView.setSelectedRange(NSRange(location: min(end + span.delimiter, source.length), length: 0))
     }
 
-    private func applyExpansion(_ expanded: String, stops: [NSRange], replacing range: NSRange) {
+    private func applyExpansion(_ expanded: String, stops: [NSRange], copies: [[NSRange]] = [], replacing range: NSRange,
+                                undoSelection: NSRange? = nil) {
         var expanded = expanded
         var stops = stops
+        var copies = copies + Array(repeating: [], count: max(0, stops.count - copies.count))
         // Right before an inline equation's closing `$`, a trailing space would stop it
         // counting as math; the next word gets its space when it's typed.
         if let span = mathSpan(at: range.location), !span.block, NSMaxRange(range) == NSMaxRange(span.content) {
             while expanded.hasSuffix(" ") { expanded.removeLast() }
             let limit = (expanded as NSString).length
-            stops = stops.map { NSRange(location: min($0.location, limit), length: min($0.length, max(0, limit - $0.location))) }
+            func clamp(_ r: NSRange) -> NSRange { NSRange(location: min(r.location, limit), length: min(r.length, max(0, limit - r.location))) }
+            stops = stops.map(clamp)
+            copies = copies.map { $0.map(clamp) }
             var seen = Set<Int>()
-            stops = stops.filter { seen.insert($0.location * 1000 + $0.length).inserted || $0.length > 0 }
+            let keep = stops.map { seen.insert($0.location * 1000 + $0.length).inserted || $0.length > 0 }
+            stops = zip(stops, keep).filter(\.1).map(\.0)
+            copies = zip(copies, keep).filter(\.1).map(\.0)
         }
         let length = (expanded as NSString).length
-        let placed = stops.map { NSRange(location: $0.location + range.location, length: $0.length) }
+        let offset = { (r: NSRange) in NSRange(location: r.location + range.location, length: r.length) }
+        let placed = stops.map(offset)
+        let placedCopies = copies.map { $0.map(offset) }
         let caret = placed.first ?? NSRange(location: range.location + length, length: 0)
+        if let undoSelection { registerUndoSelection(before: undoSelection) }
         applyingMathEdit = true
         replace(range, with: expanded, select: caret, actionName: "Math Shortcut")
         applyingMathEdit = false
-        guard !placed.isEmpty else { return }
-        // A shortcut expanded inside another's blank goes first; the outer blanks follow.
-        let bounds = NSRange(location: range.location, length: length)
-        mathStops = Array(placed.dropFirst()) + mathStops
-        mathStopBounds = mathStopBounds.map { NSUnionRange($0, bounds) } ?? bounds
-        if mathStops.isEmpty { mathStopBounds = nil }
+        if !placed.isEmpty {
+            // A shortcut expanded inside another's blank goes first; the outer blanks follow.
+            let bounds = NSRange(location: range.location, length: length)
+            mathStops = Array(placed.dropFirst()) + mathStops
+            mathStopCopies = Array(placedCopies.dropFirst()) + mathStopCopies
+            mathStopBounds = mathStopBounds.map { NSUnionRange($0, bounds) } ?? bounds
+            if !placedCopies[0].isEmpty { mathActiveStop = (caret, placedCopies[0]) }
+            if mathStops.isEmpty, mathActiveStop == nil { mathStopBounds = nil }
+        }
+        if expanded.range(of: #"\\(?:[a-z]*frac|[a-z]*sum|[a-z]*int|prod|bigcup|bigcap)(?![A-Za-z])"#, options: .regularExpression) != nil {
+            enlargeEnclosingBrackets(around: NSRange(location: range.location, length: length))
+        }
+        if undoSelection != nil { registerRedoSelection(after: textView.selectedRange()) }
+    }
+
+    /// Brackets around a fraction, sum or integral that was just written grow to fit:
+    /// `(x/` → `\left( \frac{x}{} \right)` (LaTeX Suite's auto-enlarge).
+    private func enlargeEnclosingBrackets(around inserted: NSRange) {
+        guard let span = mathSpan(at: inserted.location) else { return }
+        let text = source
+        let lo = span.content.location, hi = NSMaxRange(span.content)
+        // Unclosed `(` and `[` before the insertion, innermost last.
+        var opens: [Int] = []
+        var i = lo
+        while i < inserted.location {
+            let c = text.character(at: i)
+            if c == 0x5C { i += 2; continue }
+            if c == 0x28 || c == 0x5B { opens.append(i) }
+            if c == 0x29 || c == 0x5D, let last = opens.last, text.character(at: last) == (c == 0x29 ? 0x28 : 0x5B) { opens.removeLast() }
+            i += 1
+        }
+        var edits: [(at: Int, with: String)] = []
+        var j = NSMaxRange(inserted)
+        for open in opens.reversed() {
+            let o = text.character(at: open), close: unichar = o == 0x28 ? 0x29 : 0x5D
+            // Its partner after the insertion.
+            var depth = 0
+            var found: Int?
+            while j < hi {
+                let c = text.character(at: j)
+                if c == 0x5C { j += 2; continue }
+                if c == o { depth += 1 } else if c == close { if depth == 0 { found = j; break }; depth -= 1 }
+                j += 1
+            }
+            guard let found else { break }
+            j = found + 1
+            let before = text.substring(with: NSRange(location: lo, length: open - lo))
+            guard before.range(of: #"\\(?:left|middle|right|[bB]ig{1,2}[lr]?)\s*$"#, options: .regularExpression) == nil else { continue }
+            let o1 = String(utf16CodeUnits: [o], count: 1), c1 = String(utf16CodeUnits: [close], count: 1)
+            edits.append((open, "\\left" + o1 + " "))
+            edits.append((found, " \\right" + c1))
+        }
+        guard !edits.isEmpty else { return }
+        var sel = textView.selectedRange()
+        applyingMathEdit = true
+        for edit in edits.sorted(by: { $0.at > $1.at }) {
+            replace(NSRange(location: edit.at, length: 1), with: edit.with, actionName: "Math Shortcut")
+            if edit.at < sel.location { sel.location += (edit.with as NSString).length - 1 }
+        }
+        textView.setSelectedRange(sel)
+        applyingMathEdit = false
     }
 
     // MARK: Tab and Return
@@ -405,14 +515,19 @@ extension EditorController {
     /// a column in a matrix, or out past the next closing bracket or the equation's end.
     func handleMathTab() -> Bool {
         guard AppSettings.shared.mathShortcuts, tableEditor == nil else { return false }
+        mathWordTail = nil
         if let next = mathStops.first {
             mathStops.removeFirst()
-            if mathStops.isEmpty { mathStopBounds = nil }
+            let copies = mathStopCopies.isEmpty ? [] : mathStopCopies.removeFirst()
+            mathActiveStop = copies.isEmpty ? nil : (next, copies)
+            if mathStops.isEmpty, mathActiveStop == nil { mathStopBounds = nil }
             applyingMathEdit = true
             textView.setSelectedRange(next)
             applyingMathEdit = false
             return true
         }
+        mathActiveStop = nil
+        mathStopBounds = nil
         let sel = textView.selectedRange()
         guard sel.length == 0, let span = mathSpan(at: sel.location) else { return false }
         let caret = sel.location
@@ -421,8 +536,9 @@ extension EditorController {
         if !argument(in: span, at: caret).words,
            let expansion = MathSnippet.expansion(before: before, context: .math(display: span.display), auto: false) {
             textView.breakUndoCoalescing()
-            applyExpansion(expansion.text, stops: expansion.stops,
-                           replacing: NSRange(location: caret - expansion.length, length: expansion.length))
+            separateUndo()
+            applyExpansion(expansion.text, stops: expansion.stops, copies: expansion.copies,
+                           replacing: NSRange(location: caret - expansion.length, length: expansion.length), undoSelection: sel)
             return true
         }
         if matrixEnvironment(in: span, at: caret) != nil {
@@ -480,11 +596,13 @@ extension EditorController {
               before.range(of: #"\\(?:left|big|Big|bigg|Bigg)[lr]?\s*$"#, options: .regularExpression) == nil,
               !after.hasSuffix("\\right"), before.last != "\\" else { return nil }
         let o = String(utf16CodeUnits: [opener], count: 1), cl = String(utf16CodeUnits: [c], count: 1)
-        let replacement = "\\left" + o + inside + "\\right" + cl
+        let left = "\\left" + o + " ", right = " \\right" + cl
+        // The closing one first, so the opening one's place still holds; blanks inside keep theirs.
         applyingMathEdit = true
-        replace(NSRange(location: open, length: close - open + 1), with: replacement, actionName: "Typing")
+        replace(NSRange(location: close, length: 1), with: right, actionName: "Typing")
+        replace(NSRange(location: open, length: 1), with: left, actionName: "Typing")
         applyingMathEdit = false
-        return open + (replacement as NSString).length
+        return close + (left as NSString).length - 1 + (right as NSString).length
     }
 
     /// The matrix-like environment (`pmatrix`, `cases`, `aligned`…) the caret is in.
@@ -503,13 +621,30 @@ extension EditorController {
     }
 
     /// Return: a new row inside a matrix, and a `$$` typed on its own line gets its
-    /// closing `$$`. Shift-Return always just breaks the line.
-    func handleMathNewline() -> Bool {
+    /// closing `$$`. Shift-Return leaves a matrix (to the end of the next line, or past its
+    /// `\end{…}` on one line), and otherwise just breaks the line.
+    func handleMathNewline(shift: Bool = NSApp.currentEvent?.modifierFlags.contains(.shift) == true) -> Bool {
         guard AppSettings.shared.mathShortcuts, tableEditor == nil else { return false }
-        if NSApp.currentEvent?.modifierFlags.contains(.shift) == true { return false }
         let sel = textView.selectedRange()
         guard sel.length == 0 else { return false }
         let caret = sel.location
+        if shift {
+            guard let span = mathSpan(at: caret), let env = matrixEnvironment(in: span, at: caret) else { return false }
+            let text = source
+            clearMathStops()
+            var s = 0, e = 0, ce = 0
+            text.getLineStart(&s, end: &e, contentsEnd: &ce, for: NSRange(location: caret, length: 0))
+            if span.block, e > ce, e < NSMaxRange(span.content) {
+                text.getLineStart(&s, end: &e, contentsEnd: &ce, for: NSRange(location: e, length: 0))
+                textView.setSelectedRange(NSRange(location: ce, length: 0))
+            } else {
+                let rest = NSRange(location: caret, length: NSMaxRange(span.content) - caret)
+                let end = text.range(of: "\\end{\(env)}", range: rest)
+                guard end.location != NSNotFound else { return false }
+                textView.setSelectedRange(NSRange(location: NSMaxRange(end), length: 0))
+            }
+            return true
+        }
         if let span = mathSpan(at: caret), matrixEnvironment(in: span, at: caret) != nil {
             // A row already ended with `\\` just needs the line break.
             let row = source.substring(with: NSRange(location: span.content.location, length: caret - span.content.location))
@@ -569,8 +704,17 @@ extension EditorController {
     // MARK: Blanks left by shortcuts
 
     /// Keeps the blanks on their text as the note changes around them.
-    func shiftMathStops(editedRange: NSRange, delta: Int) {
-        guard !mathStops.isEmpty else { return }
+    func shiftMathStops(editedRange reported: NSRange, delta: Int) {
+        // The text storage can report a wider range than what changed (attributes fixed
+        // around it); the edit recorded just before is exact.
+        var editedRange = reported
+        if let p = pendingMathEdit, p.length - p.range.length == delta, p.range.location >= reported.location,
+           p.range.location + p.length <= NSMaxRange(reported) {
+            editedRange = NSRange(location: p.range.location, length: p.length)
+        }
+        pendingMathEdit = nil
+        if let tail = mathWordTail, editedRange.location <= tail.location { mathWordTail = nil }
+        guard !mathStops.isEmpty || mathActiveStop != nil else { return }
         let oldEnd = NSMaxRange(editedRange) - delta
         func shift(_ r: NSRange, grows: Bool) -> NSRange {
             if grows, editedRange.location >= r.location, oldEnd <= NSMaxRange(r) {
@@ -584,19 +728,55 @@ extension EditorController {
             return NSRange(location: NSMaxRange(editedRange), length: 0)
         }
         mathStops = mathStops.map { shift($0, grows: false) }
+        // Copies take what's put in their place (an empty copy included), so they grow like the blank.
+        mathStopCopies = mathStopCopies.map { $0.map { shift($0, grows: true) } }
         mathStopBounds = mathStopBounds.map { shift($0, grows: true) }
+        if let active = mathActiveStop {
+            // Typing in the blank (or at its edges) grows it; an edit elsewhere ends the mirroring.
+            let inside = editedRange.location >= active.range.location && oldEnd <= NSMaxRange(active.range)
+            mathActiveStop = inside || syncingMathCopies
+                ? (shift(active.range, grows: true), active.copies.map { shift($0, grows: true) }) : nil
+        }
+    }
+
+    /// Types what's in the blank being filled into its copies (a repeated tabstop).
+    func syncMathCopies() {
+        guard !syncingMathCopies, let active = mathActiveStop, !active.copies.isEmpty else { return }
+        let text = source
+        guard NSMaxRange(active.range) <= text.length else { mathActiveStop = nil; return }
+        let value = text.substring(with: active.range)
+        let pending = active.copies.enumerated().filter { NSMaxRange($0.element) <= text.length && text.substring(with: $0.element) != value }
+        guard !pending.isEmpty else { return }
+        syncingMathCopies = true
+        applyingMathEdit = true
+        let sel = textView.selectedRange()
+        let offset = sel.location - active.range.location
+        // Last first; each edit moves the ranges after it, the copies still to do included.
+        for (i, _) in pending.sorted(by: { $0.element.location > $1.element.location }) {
+            guard let copy = mathActiveStop?.copies[i] else { break }
+            replace(copy, with: value)
+        }
+        // The caret stays where it was in the blank, which may have moved.
+        if let moved = mathActiveStop?.range {
+            textView.setSelectedRange(NSRange(location: moved.location + offset, length: sel.length))
+        }
+        applyingMathEdit = false
+        syncingMathCopies = false
     }
 
     /// The caret left the shortcut: its blanks are forgotten.
     func mathSelectionChanged() {
-        guard !applyingMathEdit, !mathStops.isEmpty, let bounds = mathStopBounds else { return }
+        guard !applyingMathEdit, !mathStops.isEmpty || mathActiveStop != nil, let bounds = mathStopBounds else { return }
         let sel = textView.selectedRange()
         if sel.location < bounds.location || NSMaxRange(sel) > NSMaxRange(bounds) { clearMathStops() }
     }
 
     func clearMathStops() {
         mathStops = []
+        mathStopCopies = []
+        mathActiveStop = nil
         mathStopBounds = nil
+        mathWordTail = nil
     }
 
     // MARK: Marks

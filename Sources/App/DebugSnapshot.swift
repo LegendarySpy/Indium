@@ -234,6 +234,44 @@ enum DebugSnapshot {
             print("\(lines.count - failed)/\(lines.count) typeset")
             exit(0)
         }
+        // `-IndiumMathSnippetRender YES`: every math shortcut's output (blanks filled in) must typeset.
+        if d.bool(forKey: "IndiumMathSnippetRender") {
+            var samples = MathSnippet.all.compactMap { s -> String? in if case let .literal(t) = s.trigger { return t }; return nil }
+            samples += ["x1", "CO2", "x12", "\\alpha1", "\\sin2", "x_{1}2", "x_12", "\\hat{x}1", "\\vec{\\alpha}_{1}2", "xhat", "xbar",
+                        "xdot", "xddot", "xtilde", "xund", "xvec", "x,.", "x.,", "\\alpha,.", "3rt", "par2", "pab", "iden3", "beg",
+                        "\\alpha hat", "\\alpha bar", "\\alpha dot", "\\alpha vec", "\\alpha tilde", "\\alpha und", "\\alpha sr",
+                        "\\infty cb", "\\alpha rd"]
+            var failed = 0, total = 0
+            for sample in samples {
+                for display in [false, true] {
+                    for auto in [true, false] {
+                        let before = ("z " + sample) as NSString
+                        guard let e = MathSnippet.expansion(before: before as String, context: .math(display: display), auto: auto) else { continue }
+                        var text = e.text as NSString
+                        let blanks = (e.stops + e.copies.flatMap { $0 }).filter { $0.length == 0 }.sorted { $0.location > $1.location }
+                        for b in blanks {
+                            let env = b.location >= 7 && ["\\begin{", "\\end{"].contains { text.substring(to: b.location).hasSuffix($0) }
+                            let afterCommand = text.substring(to: b.location).range(of: #"\\[A-Za-z]+$"#, options: .regularExpression) != nil
+                            text = text.replacingCharacters(in: b, with: env ? "matrix" : afterCommand ? " a" : "a") as NSString
+                        }
+                        let doc = before.substring(to: before.length - e.length) + (text as String)
+                        total += 1
+                        if MathRenderer.render(doc, size: 17, display: display) == nil {
+                            failed += 1
+                            print("FAIL", sample, display ? "display" : "inline", auto ? "auto" : "tab", "→", doc.debugDescription)
+                        }
+                    }
+                }
+            }
+            for (key, template) in MathSnippet.visual {
+                let r = MathSnippet.render(template, captures: [], visual: "x + y")
+                let doc = (r.text as NSString).replacingOccurrences(of: "{  }", with: "{ a }")
+                total += 1
+                if MathRenderer.render(doc, size: 17, display: false) == nil { failed += 1; print("FAIL visual", key, "→", doc) }
+            }
+            print("SNIPPETS: \(total - failed)/\(total) typeset")
+            exit(0)
+        }
         if d.bool(forKey: "IndiumMathTest") {
             let cases: [(String, Bool)] = [("1 + 2 =", false), ("1 + 2 = ", false), ("Mass is 2 + 3 =", false), ("x =", false),
                 ("35.134\\text{ g} - 34.794\\text{ g} =", true), ("\\frac{0.147\\text{ g Zn}}{65.38\\text{ g/mol}} =", true),
@@ -414,10 +452,10 @@ enum DebugSnapshot {
                 // undo groups by event exactly as it does for someone typing.
                 let realKeys = d.bool(forKey: "IndiumMathRealKeys")
                 func spin() { RunLoop.current.run(until: Date().addingTimeInterval(0.03)) }
-                func send(_ chars: String) {
+                func send(_ chars: String, _ flags: NSEvent.ModifierFlags = []) {
                     let codes: [String: UInt16] = ["\t": 48, "\r": 36, "\u{7f}": 51]
                     for type in [NSEvent.EventType.keyDown, .keyUp] {
-                        if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                        if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                                                     windowNumber: window.windowNumber, context: nil, characters: chars,
                                                     charactersIgnoringModifiers: chars, isARepeat: false, keyCode: codes[chars] ?? 0) {
                             window.sendEvent(e)
@@ -448,12 +486,16 @@ enum DebugSnapshot {
                         editor.replace(NSRange(location: 0, length: editor.storage.length), with: start)
                         tv.setSelectedRange(sel)
                         spin()
+                        // Each case starts with nothing to undo, so ↶ can't reach into the one before.
+                        undo?.removeAllActions()
                         for key in parts[1] {
                             switch key {
                             case "⇥": send("\t")
                             case "⏎": send("\r")
+                            case "⇧": send("\r", .shift)
                             case "⌫": send("\u{7f}")
                             case "↶": undo?.undo(); spin()
+                            case "↷": undo?.redo(); spin()
                             default: send(String(key))
                             }
                         }
@@ -463,13 +505,15 @@ enum DebugSnapshot {
                     tv.setSelectedRange(sel)
                     undo?.endUndoGrouping()
                     for key in parts[1] {
-                        let isUndo = key == "↶"
+                        let isUndo = key == "↶" || key == "↷"
                         if !isUndo { undo?.beginUndoGrouping() }
                         switch key {
                         case "⇥": tv.insertTab(nil)
                         case "⏎": tv.insertNewline(nil)
+                        case "⇧": if !editor.handleMathNewline(shift: true) { tv.insertLineBreak(nil) }
                         case "⌫": tv.deleteBackward(nil)
                         case "↶": undo?.undo()
+                        case "↷": undo?.redo()
                         default: tv.insertText(String(key), replacementRange: NSRange(location: NSNotFound, length: 0))
                         }
                         if !isUndo { undo?.endUndoGrouping() }

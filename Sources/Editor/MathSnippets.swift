@@ -13,6 +13,9 @@ struct MathSnippet {
     }
     let trigger: Trigger
     let replacement: String
+    /// Builds the replacement from the trigger's captured groups instead (LaTeX Suite's
+    /// function snippets), given whether the equation is a display one.
+    let compute: (([String], Bool) -> String)?
     /// Where it applies: math (`m`), display math only (`M`), inline math only (`n`), or prose (`t`).
     let math: Bool, text: Bool, displayOnly: Bool, inlineOnly: Bool
     /// Expands as you type (`A`); otherwise on Tab.
@@ -22,13 +25,15 @@ struct MathSnippet {
     let priority: Int
 
     /// Options as LaTeX Suite writes them: `m`/`M`/`n`/`t` for mode, `A` auto, `w` word, `r` regex.
-    init(_ trigger: String, _ replacement: String, _ options: String, priority: Int = 0) {
+    init(_ trigger: String, _ replacement: String, _ options: String, priority: Int = 0,
+         compute: (([String], Bool) -> String)? = nil) {
         if options.contains("r") {
             self.trigger = .regex(try! NSRegularExpression(pattern: "(?:" + trigger + ")$"))
         } else {
             self.trigger = .literal(trigger)
         }
         self.replacement = replacement
+        self.compute = compute
         math = options.contains("m") || options.contains("M") || options.contains("n")
         displayOnly = options.contains("M")
         inlineOnly = options.contains("n")
@@ -44,6 +49,12 @@ struct MathSnippet {
         let text: String
         /// Tabstops in the expanded text, in the order Tab visits them.
         let stops: [NSRange]
+        /// For each stop, the other places the same tabstop number appears (`${0:f}(x) … ${0:f}'(x)`):
+        /// what's typed in the stop is typed there too.
+        var copies: [[NSRange]] = []
+        /// The rest of the command's name when the trigger is its start (`ome` → `\omega`):
+        /// typing on with those letters is absorbed rather than starting a new word.
+        var completes: String? = nil
     }
 
     enum Context {
@@ -58,6 +69,13 @@ struct MathSnippet {
         let tailStart = max(0, ns.length - 64)
         let tail = ns.substring(from: tailStart)
         let tailNS = tail as NSString
+        // Typing a command's name (`\lbra…`): only shortcuts that start with a backslash apply,
+        // so `bra` doesn't fire inside `\lbrace` (LaTeX Suite's "disable snippets while typing macros").
+        let typingCommand: Bool = {
+            guard auto, let m = before.range(of: #"\\[A-Za-z]{2,}$"#, options: .regularExpression) else { return false }
+            let name = String(before[m].dropFirst())
+            return knownCommands.contains { $0.hasPrefix(name) }
+        }()
         var best: (snippet: MathSnippet, length: Int, captures: [String])?
         for snippet in all where snippet.auto == auto && snippet.applies(in: context) {
             var found: (Int, [String])?
@@ -65,6 +83,7 @@ struct MathSnippet {
             case let .literal(t):
                 let length = (t as NSString).length
                 guard before.hasSuffix(t) else { continue }
+                if typingCommand, !t.hasPrefix("\\") { continue }
                 if ns.length > length {
                     let c = ns.character(at: ns.length - length - 1)
                     let afterBackslash = c == 0x5C
@@ -75,6 +94,7 @@ struct MathSnippet {
                 found = (length, [])
             case let .regex(regex):
                 guard let m = regex.firstMatch(in: tail, range: NSRange(location: 0, length: tailNS.length)) else { continue }
+                if typingCommand, !tailNS.substring(with: m.range).hasPrefix("\\") { continue }
                 let captures = (1..<max(1, m.numberOfRanges)).map { i in
                     m.range(at: i).location == NSNotFound ? "" : tailNS.substring(with: m.range(at: i))
                 }
@@ -85,8 +105,17 @@ struct MathSnippet {
             best = (snippet, length, captures)
         }
         guard let best else { return nil }
-        let (text, stops) = render(best.snippet.replacement, captures: best.captures, visual: "")
-        return Expansion(length: best.length, text: text, stops: stops)
+        var display = false
+        if case let .math(d) = context { display = d }
+        let template = best.snippet.compute?(best.captures, display) ?? best.snippet.replacement
+        let r = render(template, captures: best.captures, visual: "")
+        var completes: String?
+        if case let .literal(t) = best.snippet.trigger, t.first?.isLetter == true, r.text.hasPrefix("\\"),
+           r.stops.isEmpty, r.text.dropFirst().allSatisfy(\.isLetter) {
+            let name = String(r.text.dropFirst())
+            if name.count > t.count, name.hasPrefix(t) { completes = String(name.dropFirst(t.count)) }
+        }
+        return Expansion(length: best.length, text: r.text, stops: r.stops, copies: r.copies, completes: completes)
     }
 
     private func applies(in context: Context) -> Bool {
@@ -96,11 +125,18 @@ struct MathSnippet {
         }
     }
 
-    /// Expands `$n`, `${n:text}`, `[[n]]` and `${VISUAL}`.
-    static func render(_ replacement: String, captures: [String], visual: String) -> (String, [NSRange]) {
+    struct Rendered {
+        let text: String
+        let stops: [NSRange]
+        let copies: [[NSRange]]
+    }
+
+    /// Expands `$n`, `${n:text}`, `[[n]]` and `${VISUAL}`. A tabstop number used more than
+    /// once is one stop: its first place, and copies of it.
+    static func render(_ replacement: String, captures: [String], visual: String) -> Rendered {
         var out = ""
         var length = 0
-        var stops: [Int: NSRange] = [:]
+        var stops: [Int: [NSRange]] = [:]
         let chars = Array(replacement)
         var i = 0
         func append(_ s: String) {
@@ -123,7 +159,7 @@ struct MathSnippet {
             }
             if c == "$" {
                 if let (n, k) = number(at: i + 1) {
-                    if stops[n] == nil { stops[n] = NSRange(location: length, length: 0) }
+                    stops[n, default: []].append(NSRange(location: length, length: 0))
                     i = k
                     continue
                 }
@@ -139,7 +175,7 @@ struct MathSnippet {
                         let placeholder = String(chars[(k + 1)..<close])
                         let start = length
                         append(placeholder)
-                        if stops[n] == nil { stops[n] = NSRange(location: start, length: length - start) }
+                        stops[n, default: []].append(NSRange(location: start, length: length - start))
                         i = close + 1
                         continue
                     }
@@ -148,7 +184,8 @@ struct MathSnippet {
             append(String(c))
             i += 1
         }
-        return (out, stops.keys.sorted().map { stops[$0]! })
+        let order = stops.keys.sorted()
+        return Rendered(text: out, stops: order.map { stops[$0]![0] }, copies: order.map { Array(stops[$0]!.dropFirst()) })
     }
 
     // MARK: Words that become commands
@@ -178,6 +215,24 @@ struct MathSnippet {
                                          "Psi", "Xi", "exists", "emptyset", "equiv", "ell", "iint", "iiint", "sumlimits",
                                          "dagger", "parallel", "setminus", "lg", "argmax", "argmin", "wedge", "vee"]
 
+    /// Command names someone might be partway through typing after a backslash. While the
+    /// name so far starts one of these, letter shortcuts (`bra` in `\lbrace`) stay quiet.
+    static let knownCommands: Set<String> = Set(greek + symbols + functions + longerCommands + Array(spaceAfter) + [
+        "lbrace", "rbrace", "lbrack", "rbrack", "langle", "rangle", "lvert", "rvert", "lVert", "rVert", "lceil", "rceil",
+        "lfloor", "rfloor", "left", "right", "big", "Big", "bigg", "Bigg", "bigl", "bigr", "Bigl", "Bigr",
+        "rightarrow", "leftarrow", "Rightarrow", "Leftarrow", "leftrightarrow", "Leftrightarrow", "longrightarrow",
+        "longleftarrow", "Longrightarrow", "rightleftharpoons", "xrightarrow", "xleftarrow", "uparrow", "downarrow",
+        "frac", "dfrac", "tfrac", "cfrac", "binom", "sqrt", "text", "textbf", "textit", "textrm", "mathrm", "mathbf",
+        "mathit", "mathcal", "mathbb", "mathfrak", "mathscr", "mathsf", "boldsymbol", "operatorname", "begin", "end",
+        "quad", "qquad", "hat", "widehat", "tilde", "widetilde", "bar", "overline", "underline", "vec", "overrightarrow",
+        "dot", "ddot", "overbrace", "underbrace", "overset", "underset", "stackrel", "cancel", "cancelto", "boxed",
+        "pmod", "bmod", "mod", "cdot", "cdots", "ldots", "vdots", "ddots", "circ", "bullet", "odot", "prime", "degree",
+        "angle", "triangle", "square", "checkmark", "displaystyle", "textstyle", "limits", "nolimits", "coprod", "sup",
+        "arg", "deg", "dim", "gcd", "hom", "ker", "Pr", "bra", "ket", "braket", "mid", "nmid", "not", "neq", "ne",
+        "approx", "cong", "pm", "mp", "div", "ast", "dagger", "ddagger", "aleph", "Re", "Im", "wp", "varnothing",
+        "rightharpoonup", "leftharpoondown", "hookrightarrow", "mapsto", "color", "textcolor", "phantom", "hspace",
+    ])
+
     /// True when `\word` followed by `letter` should become `\word letter`.
     static func wantsSpace(after word: String, before letter: Character) -> Bool {
         guard spaceAfter.contains(word) else { return false }
@@ -201,6 +256,7 @@ struct MathSnippet {
             .init("@s", "\\sigma", "mA"), .init("@S", "\\Sigma", "mA"), .init("@u", "\\upsilon", "mA"), .init("@U", "\\Upsilon", "mA"),
             .init("@o", "\\omega", "mA"), .init("@O", "\\Omega", "mA"), .init("@p", "\\phi", "mA"), .init("@P", "\\Phi", "mA"),
             .init("@r", "\\rho", "mA"), .init("@m", "\\mu", "mA"),
+            .init("ome", "\\omega", "mA"), .init("Ome", "\\Omega", "mA"),
 
             // Text.
             .init("text", "\\text{$0}$1", "mAw"),
@@ -213,6 +269,7 @@ struct MathSnippet {
             .init("_", "_{$0}$1", "mA"),
             .init("sts", "_\\text{$0}$1", "mA"),
             .init("sq", "\\sqrt{ $0 }$1", "mAw"),
+            .init(#"(\d)rt"#, "\\sqrt[[[0]]]{ $0 }$1", "rmA"),
             .init("//", "\\frac{$0}{$1}$2", "mA"),
             .init("ee", "e^{ $0 }$1", "mAw"),
             .init("invs", "^{-1}", "mA"),
@@ -222,12 +279,17 @@ struct MathSnippet {
             .init("bf", "\\mathbf{$0}$1", "mAw"),
             .init("rm", "\\mathrm{$0}$1", "mAw"),
             .init("trace", "\\mathrm{Tr}", "mAw"),
+            .init("pmod", "\\pmod{${0:n}}$1", "mA"),
 
-            // A lone letter and a digit: x1 → x_{1}; a second digit joins it.
-            .init(#"(?<![\\A-Za-z])([A-Za-z])(\d)"#, "[[0]]_{[[1]]}", "rmA", priority: -1),
-            .init(#"(?<![\\A-Za-z])([A-Za-z])_\{(\d+)\}(\d)"#, "[[0]]_{[[1]][[2]]}", "rmA"),
+            // Letters then a digit: x1 → x_{1}, CO2 → CO_{2}, \alpha1 → \alpha_{1}; a second digit
+            // joins it. After another command the digit just gets a space: \sin2 → \sin 2.
+            .init(#"(?<![\\A-Za-z])([A-Za-z]+)(\d)"#, "[[0]]_{[[1]]}", "rmA", priority: -1),
+            .init(#"\\("# + greek.joined(separator: "|") + #")(\d)"#, "\\[[0]]_{[[1]]}", "rmA", priority: -1),
+            .init(#"\\([A-Za-z]+)(\d)"#, "\\[[0]] [[1]]", "rmA", priority: -2),
+            .init(#"(\\(?:"# + greek.joined(separator: "|") + #")|(?<![\\A-Za-z])[A-Za-z]+)_\{(\d+)\}(\d)"#, "[[0]]_{[[1]][[2]]}", "rmA"),
             .init(#"(?<![\\A-Za-z])([A-Za-z])_(\d\d)"#, "[[0]]_{[[1]]}", "rmA"),
-            .init(#"\\(hat|vec|bar|mathbf)\{([A-Za-z])\}(\d)"#, "\\[[0]]{[[1]]}_{[[2]]}", "rmA"),
+            .init(#"\\("# + accents + #")\{(\\(?:"# + greek.joined(separator: "|") + #")|[A-Za-z])\}(?:_\{(\d+)\})?(\d)"#,
+                  "\\[[0]]{[[1]]}_{[[2]][[3]]}", "rmA"),
 
             // Accents, after a letter (xhat) or on their own (hat, then the letter).
             .init(#"(?<![\\A-Za-z])([A-Za-z])hat"#, "\\hat{[[0]]}", "rmA"),
@@ -252,6 +314,8 @@ struct MathSnippet {
 
             // Symbols.
             .init("ooo", "\\infty", "mA"),
+            .init("nabl", "\\nabla", "mA"),
+            .init("deg", "\\degree", "mAw"),
             .init("sum", "\\sum", "mAw"),
             .init("prod", "\\prod", "mAw"),
             .init("\\sum", "\\sum_{${0:i}=${1:1}}^{${2:N}} $3", "m"),
@@ -296,6 +360,8 @@ struct MathSnippet {
 
             // Derivatives and integrals.
             .init("par", "\\frac{ \\partial ${0:y} }{ \\partial ${1:x} } $2", "mw"),
+            .init(#"(?<![\\A-Za-z])par(\d)"#, "\\frac{ \\partial^{[[0]]} ${0:y} }{ \\partial ${1:x}^{[[0]]} } $2", "rmA"),
+            .init("parn", "\\frac{ \\partial^{${0:n}} ${1:y} }{ \\partial ${2:x}^{${0:n}} } $3", "mAw"),
             .init(#"(?<![\\A-Za-z])pa([A-Za-z])([A-Za-z])"#, "\\frac{ \\partial [[0]] }{ \\partial [[1]] } ", "rm"),
             .init("ddt", "\\frac{d}{dt} ", "mAw"),
             .init("\\int", "\\int $0 \\, d${1:x} $2", "m"),
@@ -308,9 +374,31 @@ struct MathSnippet {
 
             // Physics.
             .init("kbt", "k_{B}T", "mAw"),
+            .init("msun", "M_{\\odot}", "mAw"),
             .init("dag", "^{\\dagger}", "mAw"),
             .init("o+", "\\oplus ", "mA"),
             .init("ox", "\\otimes ", "mAw"),
+            .init("bra", "\\bra{$0} $1", "mAw"),
+            .init("ket", "\\ket{$0} $1", "mAw"),
+            .init("brk", "\\braket{ $0 | $1 } $2", "mAw"),
+            .init("outer", "\\ket{${0:\\psi}} \\bra{${0:\\psi}} $1", "mAw"),
+            .init("tayl", "${0:f}(${1:x} + ${2:h}) = ${0:f}(${1:x}) + ${0:f}'(${1:x})${2:h} + ${0:f}''(${1:x}) \\frac{${2:h}^{2}}{2!} + \\dots$3", "mAw"),
+
+            // Chemistry (isotopes; \ce and \pu need mhchem, which the typesetter doesn't have).
+            .init("he4", "{}^{4}_{2}He ", "mAw", priority: 1),
+            .init("he3", "{}^{3}_{2}He ", "mAw", priority: 1),
+            .init("iso", "{}^{${0:4}}_{${1:2}}${2:He}", "mAw"),
+
+            // An N×N identity matrix: iden3.
+            .init(#"(?<![\\A-Za-z])iden(\d)"#, "", "rmA", compute: { captures, display in
+                let n = max(1, min(9, Int(captures[0]) ?? 1))
+                let rows = (0..<n).map { r in (0..<n).map { $0 == r ? "1" : "0" }.joined(separator: " & ") }
+                return display ? "\\begin{pmatrix}\n" + rows.joined(separator: " \\\\\n") + "\n\\end{pmatrix}"
+                               : "\\begin{pmatrix}" + rows.joined(separator: " \\\\ ") + "\\end{pmatrix}"
+            }),
+            // Any environment: beg, then its name (typed into \begin and \end at once).
+            .init(#"(^|[^\\\w])beg"#, "[[0]]\\begin{$0}\n$1\n\\end{$0}", "rMA"),
+            .init(#"(^|[^\\\w])beg"#, "[[0]]\\begin{$0} $1 \\end{$0}", "rnA"),
 
             // Environments: on their own lines in display math, on one line inline.
             .init("pmat", "\\begin{pmatrix}\n$0\n\\end{pmatrix}", "MAw"),
@@ -328,6 +416,9 @@ struct MathSnippet {
             .init("cases", "\\begin{cases}\n$0\n\\end{cases}", "MAw"),
             .init("cases", "\\begin{cases}$0\\end{cases}", "nAw"),
             .init("align", "\\begin{aligned}\n$0\n\\end{aligned}", "MAw"),
+            .init("align", "\\begin{aligned}$0\\end{aligned}", "nAw"),
+            .init("array", "\\begin{array}{${0:cc}}\n$1\n\\end{array}", "MAw"),
+            .init("array", "\\begin{array}{${0:cc}}$1\\end{array}", "nAw"),
 
             // Brackets.
             .init("avg", "\\langle $0 \\rangle $1", "mAw"),
@@ -355,10 +446,19 @@ struct MathSnippet {
         for (word, command) in [("hat", "hat"), ("bar", "bar"), ("dot", "dot"), ("vec", "vec"), ("tilde", "tilde"), ("und", "underline")] {
             s.append(.init(#"\\("# + letters + #") "# + word, "\\\(command){\\[[0]]}", "rmA", priority: 1))
         }
-        s.append(.init(#"\\("# + letters + #") sr"#, "\\[[0]]^{2}", "rmA", priority: 1))
-        s.append(.init(#"\\("# + letters + #") cb"#, "\\[[0]]^{3}", "rmA", priority: 1))
+        let named = (greek + symbols).joined(separator: "|")
+        s.append(.init(#"\\("# + named + #") sr"#, "\\[[0]]^{2}", "rmA", priority: 1))
+        s.append(.init(#"\\("# + named + #") cb"#, "\\[[0]]^{3}", "rmA", priority: 1))
+        s.append(.init(#"\\("# + named + #") rd"#, "\\[[0]]^{$0}$1", "rmA", priority: 1))
+        s.append(.init(#"\\("# + letters + #"),\."#, "\\boldsymbol{\\[[0]]}", "rmA", priority: 1))
+        s.append(.init(#"\\("# + letters + #")\.,"#, "\\boldsymbol{\\[[0]]}", "rmA", priority: 1))
+        // Inverse trig functions MathJax doesn't have built in.
+        for name in ["arccsc", "arcsec", "arccot"] { s.append(.init(name, "\\operatorname{\(name)}", "mAw", priority: 1)) }
         return s
     }()
+
+    /// Accents a digit after makes a subscript of (`\hat{x}1` → `\hat{x}_{1}`).
+    private static let accents = "hat|widehat|dot|ddot|vec|overrightarrow|bar|overline|tilde|widetilde|underline|mathbf|boldsymbol"
 
     /// Wrapping a selection in math: the key typed and what surrounds the selection.
     static let visual: [Character: String] = [
