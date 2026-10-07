@@ -64,6 +64,16 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            #if APPSTORE
+            Section {
+                Button("Import Note Icons from the Direct-Download Indium…") { IconImport.importWithPanel() }
+            } footer: {
+                Text("Copies the icons you chose in the direct-download Indium. Icons you've already chosen here are kept, and the original file isn't changed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            #endif
         }
         .formStyle(.grouped)
         .frame(width: 460)
