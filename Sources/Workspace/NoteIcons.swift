@@ -105,6 +105,23 @@ final class NoteIcons {
         persist()
     }
 
+    /// Adds icons from another copy of the store (the direct-download build's), keeping
+    /// every icon already chosen here. Returns how many were added.
+    @discardableResult
+    func merge(_ other: [String: [String: String]]) -> Int {
+        var added: [URL] = []
+        for (vault, icons) in other {
+            for (note, symbol) in icons where store[vault]?[note] == nil {
+                store[vault, default: [:]][note] = symbol
+                added.append(URL(fileURLWithPath: vault).appendingPathComponent(note))
+            }
+        }
+        guard !added.isEmpty else { return 0 }
+        persist()
+        for url in added { NotificationCenter.default.post(name: Self.didChange, object: url) }
+        return added.count
+    }
+
     private func persist() {
         if let data = try? JSONEncoder().encode(store) { try? data.write(to: fileURL, options: .atomic) }
     }

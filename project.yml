@@ -190,18 +190,8 @@ targets:
             echo "error: Build IndiumMAS with -configuration Debug-AppStore or Release-AppStore (it would overwrite the direct-download Indium.app)."
             exit 1
           fi
-    postBuildScripts:
-      # Moves icons.json from ~/Library/Application Support/Indium into the container on
-      # the first sandboxed launch. Only Release ships it: a test build must never pull
-      # the real app's files into a test container.
-      - name: Container migration manifest
-        basedOnDependencyAnalysis: false
-        script: |
-          dest="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/container-migration.plist"
-          rm -f "$dest"
-          src="$INDIUM_CONTAINER_MIGRATION"
-          case "$src" in ""|/*) ;; *) src="$SRCROOT/$src" ;; esac
-          if [ -n "$src" ]; then cp "$src" "$dest"; fi
+    # No container-migration.plist: macOS would move icons.json out of the direct-download
+    # build's Application Support. IconImport copies it on the first launch instead.
     settings:
       base:
         PRODUCT_NAME: Indium
@@ -209,7 +199,6 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: "$(INDIUM_MAS_BUNDLE_ID)"
         INDIUM_MAS_BUNDLE_ID: dev.garon.Indium
         INDIUM_APP_GROUP: "$(TeamIdentifierPrefix)dev.garon.Indium"
-        INDIUM_CONTAINER_MIGRATION: AppStore/container-migration.plist
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) APPSTORE"
         CODE_SIGN_ENTITLEMENTS: AppStore/Indium.entitlements
         MARKETING_VERSION: "1.0"
@@ -225,7 +214,6 @@ targets:
           INDIUM_MAS_BUNDLE_ID: dev.garon.Indium.mastest
           # No App Group without a real team (an unprovisioned group prompts or fails).
           INDIUM_APP_GROUP: ""
-          INDIUM_CONTAINER_MIGRATION: ""
           CODE_SIGN_ENTITLEMENTS: AppStore/Indium-Debug.entitlements
         # No debugger entitlement in what gets archived for the store.
         Release-AppStore:
