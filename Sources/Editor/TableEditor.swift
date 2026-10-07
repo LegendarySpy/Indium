@@ -24,6 +24,11 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     /// The cell whose text is being edited (nil while cells are selected as a block).
     var onFocusChange: ((Cell?) -> Void)?
     var onDeleteTable: (() -> Void)?
+    /// Formula… in a cell's menu.
+    var onFormula: (() -> Void)?
+    /// Called instead of `onChange` when rows or columns were inserted or deleted, with
+    /// what was done, so formulas can keep pointing at the same rows and columns.
+    var onStructureChange: ((String, TableFormulaUI.ShapeChange) -> Void)?
 
     private(set) var render: TableRender
     private var fields: [[CellField]] = []
@@ -504,7 +509,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
 
     func addRowAtEnd() {
         body.append(Array(repeating: "", count: columns))
-        commitStructure()
+        commitStructure(.insertRows(at: rowCount, count: 1))
         focusCell(row: rowCount - 1, column: 0)
     }
 
@@ -512,28 +517,28 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     func addRow(below row: Int? = nil) {
         let index = min(row ?? targetBounds.rows.upperBound - 1, rowCount - 1)
         body.insert(Array(repeating: "", count: columns), at: index)
-        commitStructure()
+        commitStructure(.insertRows(at: index + 2, count: 1))
     }
 
     /// A row above the header would take its place; it goes under it instead.
     func addRow(above row: Int? = nil) {
         let index = max((row ?? targetBounds.rows.lowerBound) - 1, 0)
         body.insert(Array(repeating: "", count: columns), at: index)
-        commitStructure()
+        commitStructure(.insertRows(at: index + 2, count: 1))
         if (row ?? targetBounds.rows.lowerBound) > 0 { focusCell(row: index + 1, column: focus.column) }
     }
 
     func addColumn(right column: Int? = nil) {
         let index = min((column ?? targetBounds.columns.upperBound - 1) + 1, columns)
         insertColumn(at: index)
-        commitStructure()
+        commitStructure(.insertColumns(at: index + 1, count: 1))
         focusCell(row: focus.row, column: index)
     }
 
     func addColumn(left column: Int? = nil) {
         let index = column ?? targetBounds.columns.lowerBound
         insertColumn(at: index)
-        commitStructure()
+        commitStructure(.insertColumns(at: index + 1, count: 1))
         focusCell(row: focus.row, column: index)
     }
 
@@ -559,7 +564,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         let rows = targetBounds.rows.filter { $0 > 0 }
         guard !rows.isEmpty else { NSSound.beep(); return }
         for r in rows.reversed() { body.remove(at: r - 1) }
-        commitStructure()
+        commitStructure(.deleteRows(at: rows.first! + 1, count: rows.count))
         focusCell(row: min(rows.first!, rowCount - 1), column: focus.column)
     }
 
@@ -572,7 +577,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
             if c < alignments.count { alignments.remove(at: c) }
             if var d = dashes, c < d.count { d.remove(at: c); dashes = d }
         }
-        commitStructure()
+        commitStructure(.deleteColumns(at: cols.lowerBound + 1, count: cols.count))
         focusCell(row: focus.row, column: min(cols.lowerBound, columns - 1))
     }
 
@@ -584,9 +589,10 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         if let kept { select(from: kept.anchor, to: kept.head) } else { focusCell(row: focus.row, column: focus.column) }
     }
 
-    private func commitStructure() {
+    /// `change` in TBLFM numbering (row 1 the header, column 1 the leftmost).
+    private func commitStructure(_ change: TableFormulaUI.ShapeChange? = nil) {
         selection = nil
-        onChange?(markdown, nil)
+        if let change, let onStructureChange { onStructureChange(markdown, change) } else { onChange?(markdown, nil) }
         rebuildFields()
     }
 
@@ -677,6 +683,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         menu.addItem(deleteColumns)
         menu.addItem(ClosureMenuItem(rows * cols > 1 ? "Clear Cells" : "Clear Cell") { [weak self] in self?.clearCells() })
         menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem("Formula…") { [weak self] in self?.onFormula?() })
         menu.addItem(ClosureMenuItem("Copy Table") { [weak self] in self?.copyTable() })
         menu.addItem(ClosureMenuItem("Delete Table") { [weak self] in self?.onDeleteTable?() })
         return menu
@@ -988,6 +995,8 @@ final class TableToolbarView: NSView {
     var onDeleteColumn: (() -> Void)?
     var onDeleteTable: (() -> Void)?
     var onCopyTable: (() -> Void)?
+    /// Formula… for the focused row or column.
+    var onFormula: (() -> Void)?
     var onDone: (() -> Void)?
     /// nil: full width; true/false: text wraps beside it on the right/left.
     var onPlace: ((Bool?) -> Void)?
@@ -1065,6 +1074,8 @@ final class TableToolbarView: NSView {
             }
         }
         let addMore = { [weak self] (menu: NSMenu) in
+            menu.addItem(ClosureMenuItem("Formula…") { self?.onFormula?() })
+            menu.addItem(.separator())
             menu.addItem(ClosureMenuItem("Delete Row") { self?.onDeleteRow?() })
             menu.addItem(ClosureMenuItem("Delete Column") { self?.onDeleteColumn?() })
             menu.addItem(.separator())

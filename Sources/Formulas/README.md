@@ -54,6 +54,36 @@ the table, with no blank line between, as Advanced Tables reads them. The block'
 `apply(tableMarkdown:…)` rewrites only rows that changed, as `| a | b |`. Reformatting the
 columns is up to the UI. Formula lines are never rewritten.
 
+## In the editor (`../Editor/TableFormulaUI.swift`)
+
+- **One block.** `MarkdownScanner` gives the TBLFM lines right under a table their own
+  `.tableFormulas` block, so they sit in the table's layout group: block drag, Wrap Text and
+  Delete Table move or delete them with it. The editor draws them as a dimmed caption,
+  "ƒ 2 formulas", or the first problem in red ("“Mass of water”, Copper: Can't subtract mol
+  from g"). With the caret on them they show as source. PDF export, Quick Look and floating
+  tables hide them.
+- **Recalculation** runs in the table editor only: after a change of shape, a paste, or
+  clearing cells at once, and when you leave a cell you typed in. The results go into the
+  same undo step as the edit, so one Undo restores the inputs and the outputs. On any issue
+  nothing changes (the engine is atomic) and the caption shows why. Only real `.table`
+  blocks are touched, never fenced code. Typing in the Markdown source doesn't recalculate.
+- **Formula…** (table toolbar's More menu, or a cell's menu) edits the focused row's or
+  column's formula: two operands and − + × ÷ "% of", or the formula typed in upstream syntax,
+  with a live preview. Row formulas leave out a label column (`@4$2..@4$>=(@2-@3)`), column
+  formulas the header (`$4=($2-$3)`). "% of" writes `((@A/@B)*100);%.1f`: a plain number from
+  0 to 100, to one decimal. Remove takes the formula out.
+- **References follow rows and columns** inserted or deleted *through the table editor*
+  (toolbar, cell menu, edge strips). The editor reports the operation and its index, and
+  absolute references (`@4`, `$2`) shift like a spreadsheet's. A formula whose destination
+  was deleted is removed. A reference to a deleted row or column becomes `#REF`, which
+  doesn't parse, so the table isn't recalculated until that formula is fixed or removed.
+  Ranges shrink with their rows. Relative references and `<`, `>`, `I` are left alone.
+  A line holding any formula the engine doesn't parse (unsupported or mistyped) is kept
+  byte for byte, and its references are **not** adjusted.
+- **Positional elsewhere.** Rows or columns added or removed by editing the Markdown
+  source, in another app, or by Advanced Tables don't move references: they keep their
+  numbers.
+
 ## Expression syntax (both features)
 
 - Numbers: `2`, `2.008`, `.5`, `6.022e23`. `+ - * / ^` (also `× · ÷ −`), parentheses.

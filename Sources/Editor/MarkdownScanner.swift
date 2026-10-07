@@ -96,6 +96,9 @@ enum BlockKind: Hashable {
     case code(language: String)
     case math(latex: String)
     case image(ImageRef)
+    /// Advanced Tables `<!-- TBLFM: … -->` lines directly below a table (no blank line
+    /// between). They belong to the table: drawn as a caption under it, never as text.
+    case tableFormulas
 
     var isMultiLine: Bool {
         switch self {
@@ -166,13 +169,20 @@ enum MarkdownScanner {
                 var j = i + 2
                 while j < lines.count {
                     let t = text.substring(with: lines[j].content)
-                    if !t.contains("|") || t.trimmingCharacters(in: .whitespaces).isEmpty { break }
+                    if !t.contains("|") || t.trimmingCharacters(in: .whitespaces).isEmpty || isTableFormulaLine(t) { break }
                     j += 1
                 }
                 let last = j - 1
                 let range = span(i, last)
                 blocks.append(MDBlock(range: range, kind: .table(tableSpec(text, lines: Array(lines[i...last]).map(\.content), base: range.location))))
                 i = last + 1
+                // Its formula lines, as one block.
+                var k = i
+                while k < lines.count, isTableFormulaLine(text.substring(with: lines[k].content)) { k += 1 }
+                if k > i {
+                    blocks.append(MDBlock(range: span(i, k - 1), kind: .tableFormulas))
+                    i = k
+                }
                 continue
             }
 
@@ -253,6 +263,11 @@ enum MarkdownScanner {
         }
         if let image = imageLine(line) { return .image(image) }
         return .paragraph
+    }
+
+    /// `<!-- TBLFM: … -->`, as `TableFormulas.isFormulaLine` reads it.
+    static func isTableFormulaLine(_ line: String) -> Bool {
+        line.range(of: #"^\s*<!--\s*TBLFM:.*-->\s*$"#, options: .regularExpression) != nil
     }
 
     static func isTableDelimiter(_ line: String) -> Bool {
