@@ -96,10 +96,12 @@ enum BlockKind: Hashable {
     case code(language: String)
     case math(latex: String)
     case image(ImageRef)
+    /// An Obsidian comment, `%% … %%`, on lines of its own (it may span several).
+    case comment
 
     var isMultiLine: Bool {
         switch self {
-        case .frontmatter, .code, .math: true
+        case .frontmatter, .code, .math, .comment: true
         default: false
         }
     }
@@ -152,6 +154,14 @@ enum MarkdownScanner {
 
         while i < lines.count {
             let line = text.substring(with: lines[i].content)
+
+            // A comment opening a line runs to the next `%%`, wherever it is; unclosed,
+            // it runs to the end of the note, as in Obsidian.
+            if let end = commentEnd(text, lines: lines, from: i) {
+                blocks.append(MDBlock(range: span(i, end), kind: .comment))
+                i = end + 1
+                continue
+            }
 
             if let fence = fenceOpening(line) {
                 var j = i + 1
@@ -209,6 +219,25 @@ enum MarkdownScanner {
             i += 1
         }
         return blocks
+    }
+
+    /// Last line of a block comment starting at line `i`: the line must begin with `%%`
+    /// and the comment must take the whole line (or continue onto later lines).
+    private static func commentEnd(_ text: NSString, lines: [(content: NSRange, full: NSRange)], from i: Int) -> Int? {
+        let first = text.substring(with: lines[i].content).trimmingCharacters(in: .whitespaces) as NSString
+        guard first.hasPrefix("%%") else { return nil }
+        let rest = first.substring(from: 2) as NSString
+        let close = rest.range(of: "%%")
+        if close.location != NSNotFound {
+            // Closed on the same line: a block only when nothing follows the comment.
+            return NSMaxRange(close) == rest.length ? i : nil
+        }
+        var j = i + 1
+        while j < lines.count {
+            if text.substring(with: lines[j].content).contains("%%") { return j }
+            j += 1
+        }
+        return lines.count - 1
     }
 
     private static func fenceOpening(_ line: String) -> (marker: String, language: String)? {
@@ -361,6 +390,8 @@ enum MarkdownScanner {
             case link(String)
             case wiki(String)
             case escape
+            /// `%%…%%` inside a line. Its delimiters aren't markers: the whole span hides.
+            case comment
         }
         var kind: Kind
         /// Whole span, absolute.
@@ -404,6 +435,12 @@ enum MarkdownScanner {
                               markers: [abs(NSRange(location: m.range.location, length: tick)),
                                         abs(NSRange(location: NSMaxRange(m.range) - tick, length: tick))],
                               content: abs(NSRange(location: m.range.location + tick, length: m.range.length - 2 * tick))))
+        }
+
+        // Comments hide everything inside them, so nothing else may match there.
+        for m in Regex.comment.matches(in: line as String, range: full) where free(m.range) {
+            consume(m.range)
+            spans.append(Span(kind: .comment, range: abs(m.range), markers: [], content: abs(m.range)))
         }
 
         // Math.
@@ -503,6 +540,7 @@ enum MarkdownScanner {
         static let imageLine = make(#"^[ \t]*!\[((?:\\.|[^\[\]\\])*)\]\((<[^>\n]*>|[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)(?:[ \t]+"[^"]*")?\)[ \t]*$"#)
         static let wikiImageLine = make(#"^[ \t]*!\[\[([^\[\]\n]+)\]\][ \t]*$"#)
 
+        static let comment = make(#"%%.*?%%"#)
         static let escape = make(#"\\[!-/:-@\[-`{-~]"#)
         static let codeSpan = make(#"(`+)(?!`)(.+?)(?<!`)\1(?!`)"#)
         static let displayMathInline = make(#"\$\$(.+?)\$\$"#)
