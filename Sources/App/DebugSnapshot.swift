@@ -85,9 +85,10 @@ enum DebugSnapshot {
             print("\(lines.count - failed)/\(lines.count) typeset")
             exit(0)
         }
-        // `-IndiumEvalCases quick_answers.tsv`: quick-answer regression cases (see FormulaSelfTest).
-        if let path = d.string(forKey: "IndiumEvalCases") {
-            let failed = FormulaSelfTest.runQuickAnswerCases(path: path)
+        // `-IndiumEvalCases a.tsv,b.tsv,c.md`: formula regression cases (quick answers, evaluator,
+        // table formulas; see FormulaSelfTest). `-IndiumEvalVerbose YES` prints every table result.
+        if let paths = d.string(forKey: "IndiumEvalCases") {
+            let failed = FormulaSelfTest.run(paths: paths.split(separator: ",").map(String.init), verbose: d.bool(forKey: "IndiumEvalVerbose"))
             exit(failed == 0 ? 0 : 1)
         }
         if d.bool(forKey: "IndiumMathTest") {
