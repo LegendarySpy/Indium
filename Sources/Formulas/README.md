@@ -70,12 +70,12 @@ columns is up to the UI. Formula lines are never rewritten.
 - **Frontmatter variables are inputs too.** A run of edits inside the frontmatter is one
   edit session: its first edit registers a single undo step that restores the frontmatter as
   it started, and the edits after it record nothing. When the session ends (the caret leaves
-  the frontmatter, the note is saved, switched or closed), tables whose formulas name a
+  the frontmatter, Save, or the note is switched or closed; autosave writes the text as it is and leaves the session open), tables whose formulas name a
   variable whose value changed are recalculated, and that same undo step grows to restore
   them too. An edit outside the frontmatter ends the session without recalculating (the
   caption then says "values out of date"). Never on every keystroke.
 - **Recalculate.** A caption that says "values out of date" (a note saved elsewhere, an edit
-  in the Markdown source) offers Recalculate: clicking the caption recalculates that table
+  in the Markdown source) offers Recalculate: clicking the word recalculates that table
   as one undo step, "Recalculate Formulas". With a problem nothing changes and the caption
   shows it instead.
 - **Formula…** (table toolbar's More menu, or a cell's menu) edits the focused row's or

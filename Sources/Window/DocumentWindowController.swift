@@ -699,6 +699,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc func saveNote(_ sender: Any?) {
+        editor.finishPendingEdits()
         if note?.isTemporary == true { saveTemporaryToVault(closeAfter: false) } else { editor.saveNow() }
     }
 
