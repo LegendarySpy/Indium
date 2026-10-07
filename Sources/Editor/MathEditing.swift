@@ -81,6 +81,7 @@ final class MathEditor {
     /// The shortcut ending `before`, as this text can hold it: a table cell is one line of a
     /// pipe table, so nothing that needs lines of its own, and no bare `|` (see `MathSnippet`).
     private func snippet(before: String, context: MathSnippet.Context, auto: Bool) -> MathSnippet.Expansion? {
+        MathSnippetConfig.shared.refresh()
         let single = host.mathSingleLine
         guard let expansion = MathSnippet.expansion(before: before, context: context, auto: auto, pipes: !single) else { return nil }
         return single && expansion.text.contains("\n") ? nil : expansion

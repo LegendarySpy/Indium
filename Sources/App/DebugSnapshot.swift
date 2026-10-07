@@ -385,6 +385,45 @@ enum DebugSnapshot {
             print("SNIPPETS: \(total - failed)/\(total) typeset")
             exit(0)
         }
+        // `-IndiumMathSnippetsFile path`: your math shortcuts from this file instead of the folder's.
+        if let path = d.string(forKey: "IndiumMathSnippetsFile") {
+            let config = MathSnippetConfig.shared
+            config.overrideURL = URL(fileURLWithPath: path)
+            config.refresh(force: true)
+            print("SNIPPET CONFIG: \(config.loadedCount) loaded")
+            for problem in config.problems { print("SNIPPET PROBLEM:", problem) }
+            // `-IndiumMathSnippetsCreate YES`: what Edit Math Shortcuts… does before opening the file
+            // (the alert it would show, printed instead).
+            if d.bool(forKey: "IndiumMathSnippetsCreate") {
+                print("SNIPPET CREATE:", config.prepareFile().map { "failed: " + $0.replacingOccurrences(of: "\n", with: " ") } ?? "ok")
+                exit(0)
+            }
+            // `-IndiumMathSnippetsReference out.md`: the Math Shortcuts note, written out.
+            if let out = d.string(forKey: "IndiumMathSnippetsReference") {
+                try? config.reference.write(toFile: out, atomically: true, encoding: .utf8)
+                exit(0)
+            }
+        }
+        // `-IndiumMathSnippetConfigCases cases.tsv`: `file<TAB>shortcuts loaded<TAB>problems`, the
+        // problems as `¦`-separated pieces of text each one must contain (files relative to the cases).
+        if let path = d.string(forKey: "IndiumMathSnippetConfigCases"), let cases = try? String(contentsOfFile: path, encoding: .utf8) {
+            let dir = URL(fileURLWithPath: path).deletingLastPathComponent()
+            var failed = 0, total = 0
+            for line in cases.components(separatedBy: "\n") where !line.isEmpty && !line.hasPrefix("#") {
+                let parts = line.components(separatedBy: "\t")
+                guard parts.count >= 2 else { continue }
+                total += 1
+                let text = (try? String(contentsOf: dir.appendingPathComponent(parts[0]), encoding: .utf8)) ?? ""
+                let result = MathSnippetConfig.parse(text)
+                let expected = parts.count < 3 || parts[2].isEmpty ? [] : parts[2].components(separatedBy: "¦").map { $0.trimmingCharacters(in: .whitespaces) }
+                let ok = String(result.snippets.count) == parts[1] && result.problems.count == expected.count
+                    && zip(result.problems, expected).allSatisfy { $0.contains($1) }
+                if !ok { failed += 1 }
+                print(ok ? "PASS" : "FAIL", parts[0], "→", result.snippets.count, "loaded;", result.problems.isEmpty ? "no problems" : result.problems.joined(separator: " ¦ "))
+            }
+            print("SNIPPET CONFIG CASES: \(total - failed)/\(total) passed")
+            exit(0)
+        }
         // `-IndiumMathCellSnippets YES`: every math shortcut as a table cell writes it: one line,
         // no bare `|` (it would split the row), and it still typesets.
         if d.bool(forKey: "IndiumMathCellSnippets") {
