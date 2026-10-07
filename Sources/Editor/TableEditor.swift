@@ -102,12 +102,14 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     }
 
     var markdown: String {
-        TableSpec.markdown(header: header, body: body, alignments: alignments, dashes: dashes)
+        TableSpec.markdown(header: header.map(TableSpec.escapeCell), body: body.map { $0.map(TableSpec.escapeCell) },
+                           alignments: alignments, dashes: dashes)
     }
 
-    /// `a \| b` in the file is `a | b` in the cell; pipes are escaped again on the way out.
+    /// `a \| b` in the file is `a | b` in the cell, `a<br>b` two lines; they're written
+    /// back the same way (`TableSpec.escapeCell`).
     private static func unescape(_ text: String) -> String {
-        text.replacingOccurrences(of: #"\|"#, with: "|")
+        TableSpec.unescapeCell(text)
     }
 
     /// Adopts a fresh layout after the note re-rendered the table.
