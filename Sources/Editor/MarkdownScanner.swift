@@ -421,6 +421,13 @@ enum MarkdownScanner {
             case comment
             /// `#tag`, without its `#`.
             case tag(String)
+            /// The few HTML tags notes use: `<br>`, `<sup>`, `<sub>`, `<u>`, `<mark>`, `<kbd>`.
+            /// The tags aren't listed as markers (they're the span's range around its
+            /// content), so renderers that don't know HTML, like table cells, leave them as written.
+            case html(HTMLTag)
+        }
+        enum HTMLTag: String {
+            case br, sup, sub, u, mark, kbd
         }
         var kind: Kind
         /// Whole span, absolute.
@@ -489,6 +496,22 @@ enum MarkdownScanner {
             consume(m.range)
             spans.append(Span(kind: .escape, range: abs(m.range), markers: [abs(NSRange(location: m.range.location, length: 1))],
                               content: abs(NSRange(location: m.range.location + 1, length: 1))))
+        }
+
+        // Inline HTML: only the tags notes actually use; anything else stays as written.
+        for m in Regex.lineBreakTag.matches(in: line as String, range: full) where free(m.range) {
+            consume(m.range)
+            spans.append(Span(kind: .html(.br), range: abs(m.range), markers: [], content: abs(m.range)))
+        }
+        for m in Regex.htmlTag.matches(in: line as String, range: full) {
+            guard let tag = Span.HTMLTag(rawValue: line.substring(with: m.range(at: 1)).lowercased()) else { continue }
+            let inner = m.range(at: 2)
+            let open = NSRange(location: m.range.location, length: inner.location - m.range.location)
+            let close = NSRange(location: NSMaxRange(inner), length: NSMaxRange(m.range) - NSMaxRange(inner))
+            guard free(open), free(close) else { continue }
+            consume(open)
+            consume(close)
+            spans.append(Span(kind: .html(tag), range: abs(m.range), markers: [], content: abs(inner)))
         }
 
         // Wiki links and embeds.
@@ -582,6 +605,8 @@ enum MarkdownScanner {
         static let wikiImageLine = make(#"^[ \t]*!\[\[([^\[\]\n]+)\]\][ \t]*$"#)
 
         static let comment = make(#"%%.*?%%"#)
+        static let lineBreakTag = make(#"<br\s*/?>"#, .caseInsensitive)
+        static let htmlTag = make(#"<(sup|sub|u|mark|kbd)>(.+?)</\1>"#, .caseInsensitive)
         static let tag = make(#"(?<![^\s])#([\p{L}\p{N}_/\-]+)"#)
         static let escape = make(#"\\[!-/:-@\[-`{-~]"#)
         static let codeSpan = make(#"(`+)(?!`)(.+?)(?<!`)\1(?!`)"#)
