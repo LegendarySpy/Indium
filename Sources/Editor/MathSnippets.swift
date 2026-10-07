@@ -229,9 +229,11 @@ struct MathSnippet {
     /// After these, a letter starts a new word: `\alpha` then `x` makes `\alpha x`.
     static let spaceAfter = Set(greek + symbols + functions + ["leq", "geq", "neq", "gg", "ll", "equiv", "sim", "propto", "to",
                                                                 "mapsto", "cap", "cup", "in", "sum", "prod", "dots", "pm", "mp",
-                                                                "iint", "iiint", "oint", "lim", "setminus", "parallel", "dagger"])
+                                                                "iint", "iiint", "oint", "lim", "setminus", "parallel", "dagger",
+                                                                // Closing bars and brackets (`\lvert x\rvert y`).
+                                                                "rvert", "rVert", "rangle", "rceil", "rfloor", "mid"])
     /// Commands that start with one of those words, so typing on doesn't split them.
-    private static let longerCommands = ["int", "infty", "inf", "injlim", "intercal", "top", "simeq", "subseteq", "subsetneq",
+    private static let longerCommands = ["int", "middle", "infty", "inf", "injlim", "intercal", "top", "simeq", "subseteq", "subsetneq",
                                          "supseteq", "supsetneq", "cdots", "dotsc", "dotsb", "dotsm", "dotsi", "dotso", "lnot",
                                          "sinh", "cosh", "tanh", "coth", "sech", "csch", "liminf", "limsup", "approxeq",
                                          "leqslant", "geqslant", "leqq", "geqq", "veebar", "negthinspace", "negmedspace",

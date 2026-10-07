@@ -227,14 +227,14 @@ final class MathEditor {
             if !rest.isEmpty { mathWordTail = (caret, rest) }
             return true
         }
-        // Right after `$‸$` was closed for you: a second `$` makes `$$`, and a space
-        // means it wasn't an equation after all.
+        // Right after `$‸$` was closed for you: a second `$` makes `$$`, and a space or a
+        // digit means it wasn't an equation after all (`$5` is a price).
         if paired == caret, caret < source.length, source.character(at: caret) == 0x24 {
             if ch == "$" {
                 textView.setSelectedRange(NSRange(location: caret + 1, length: 0))
                 return true
             }
-            if ch.isWhitespace {
+            if ch.isWhitespace || ch.isNumber {
                 replace(NSRange(location: caret, length: 1), with: typed, select: NSRange(location: caret + 1, length: 0), actionName: "Typing")
                 return true
             }
