@@ -223,6 +223,103 @@ enum DebugSnapshot {
                 }
                 print("TABLE MD:\n" + ((target.editor.text as NSString).substring(with: target.editor.styler.blocks.first(where: { if case .table = $0.kind { return true }; return false })!.range)))
             }
+            // `-IndiumPointerSteps "move:R,10,20;click:L,-30,40;scroll:300"`: the pointer, relative to a
+            // corner of a table's grid (L top-left, R top-right, B bottom-left; `-IndiumPointerTable n`
+            // picks the table). `move` hovers (entering whatever strip is there), `click` sends a
+            // mouse-down to the view hit testing picks, `scroll` scrolls the note to a y offset.
+            if let steps = d.string(forKey: "IndiumPointerSteps") {
+                let editor = target.editor, tv = editor.textView
+                func tableRect() -> NSRect? {
+                    let tables = editor.styler.blocks.filter { if case .table = $0.kind { return true }; return false }
+                    let n = d.integer(forKey: "IndiumPointerTable")
+                    guard n < tables.count else { return nil }
+                    if let open = editor.tableEditor, let loc = editor.styler.editingTableLocation, loc == tables[n].range.location {
+                        return NSRect(origin: open.frame.origin, size: NSSize(width: open.render.width, height: open.render.height))
+                    }
+                    return editor.layoutManager.blockRects(in: NSRange(location: tables[n].range.location, length: 1), origin: tv.textContainerOrigin).first?.content
+                }
+                func mouse(_ type: NSEvent.EventType, _ p: NSPoint) -> NSEvent {
+                    NSEvent.mouseEvent(with: type, location: tv.convert(p, to: nil), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                       windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+                }
+                // Each step its own undo group, as each click or key would be.
+                let undo = tv.undoManager
+                if let undo, undo.groupingLevel > 0 { undo.endUndoGrouping() }
+                undo?.groupsByEvent = false
+                for step in steps.split(separator: ";").map(String.init) {
+                    let parts = step.split(separator: ":", maxSplits: 1).map(String.init)
+                    let args = parts.count > 1 ? parts[1].split(separator: ",").map(String.init) : []
+                    let mutates = ["click", "stripkey", "divider"].contains(parts[0])
+                    if mutates { undo?.beginUndoGrouping() }
+                    defer { if mutates { undo?.endUndoGrouping() } }
+                    if parts[0] == "undo" {
+                        undo?.undo()
+                    } else if parts[0] == "text" {
+                        print("NOTE TEXT:", editor.text.debugDescription)
+                    } else if parts[0] == "focus", args.count == 2, let r = Int(args[0]), let c = Int(args[1]) {
+                        editor.tableEditor?.focusCell(row: r, column: c)
+                    } else if parts[0] == "stripkey" {
+                        // `stripkey:row|column`: focus a strip as keyboard navigation would, then press Space.
+                        let strip = editor.tableEditor?.subviews.compactMap { $0 as? TableEdgeStrip }.first { "\($0.adds)" == args.first }
+                        let took = strip.map { window.makeFirstResponder($0) } ?? false
+                        print("STRIPKEY", args.first ?? "-", "keyView:", strip?.canBecomeKeyView ?? false, "focused:", took,
+                              "reached from last cell:", editor.tableEditor?.subviews.compactMap { $0 as? CellField }.last?.nextKeyView === strip || strip?.adds == .row)
+                        if let strip, let space = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                                                     context: nil, characters: " ", charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49) {
+                            strip.keyDown(with: space)
+                        }
+                    } else if parts[0] == "divider", args.count == 2, let c = Int(args[0]), let dx = Double(args[1]), let e = editor.tableEditor {
+                        // `divider:column,dx`: drags the divider right of a column by dx points.
+                        let x = e.render.columnWidths[...c].reduce(0, +), y = (e.render.rowHeights.first ?? 20) / 2
+                        func event(_ type: NSEvent.EventType, _ px: CGFloat) -> NSEvent {
+                            NSEvent.mouseEvent(with: type, location: e.convert(NSPoint(x: px, y: y), to: nil), modifierFlags: [], timestamp: 0,
+                                               windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+                        }
+                        let before = e.render.columnWidths.map { Int($0) }
+                        e.mouseDown(with: event(.leftMouseDown, x))
+                        e.mouseDragged(with: event(.leftMouseDragged, x + dx))
+                        e.mouseUp(with: event(.leftMouseUp, x + dx))
+                        print("DIVIDER widths:", before, "->", e.render.columnWidths.map { Int($0) })
+                    } else if parts[0] == "caret" {
+                        // The caret's views (macOS draws it in an insertion indicator) and frames.
+                        NSApp.activate(ignoringOtherApps: true)
+                        window.makeKeyAndOrderFront(nil)
+                        window.makeFirstResponder(tv)
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+                        print("CARET window:", window.windowNumber, "key:", window.isKeyWindow)
+                        let lm = editor.layoutManager, at = tv.selectedRange().location
+                        if at < editor.storage.length {
+                            let frag = lm.lineFragmentRect(forGlyphAt: lm.glyphIndexForCharacter(at: at), effectiveRange: nil)
+                            let line = frag.offsetBy(dx: tv.textContainerOrigin.x, dy: tv.textContainerOrigin.y)
+                            print("CARET line:", line, "drawn:", tv.caretRect(clamping: NSRect(x: line.minX, y: line.minY, width: 1, height: line.height)))
+                        }
+                        for v in tv.subviews where String(describing: type(of: v)).contains("Insertion") {
+                            print("CARET view:", type(of: v), v.frame, "hidden:", v.isHidden)
+                        }
+                    } else if parts[0] == "scroll", let y = Double(args.first ?? "") {
+                        editor.scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
+                        editor.scrollView.reflectScrolledClipView(editor.scrollView.contentView)
+                    } else if args.count == 3, let t = tableRect(), let dx = Double(args[1]), let dy = Double(args[2]) {
+                        let corner = args[0] == "R" ? NSPoint(x: t.maxX, y: t.minY) : args[0] == "B" ? NSPoint(x: t.minX, y: t.maxY) : t.origin
+                        let p = NSPoint(x: corner.x + dx, y: corner.y + dy)
+                        let hit = window.contentView?.superview?.hitTest(window.contentView!.superview!.convert(tv.convert(p, to: nil), from: nil))
+                        if parts[0] == "move" {
+                            tv.mouseMoved(with: mouse(.mouseMoved, p))
+                            let now = window.contentView?.superview?.hitTest(window.contentView!.superview!.convert(tv.convert(p, to: nil), from: nil))
+                            if let strip = now as? TableEdgeStrip { strip.mouseEntered(with: mouse(.mouseMoved, p)) }
+                        } else if parts[0] == "click" {
+                            NSApp.postEvent(mouse(.leftMouseUp, p), atStart: false)
+                            hit?.mouseDown(with: mouse(.leftMouseDown, p))
+                        }
+                        print("POINTER \(step) at:", p, "hit:", hit.map { String(describing: type(of: $0)) } ?? "nil")
+                    }
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+                    print("  table:", tableRect().map { "\($0)" } ?? "-", "caret:", NSStringFromRange(tv.selectedRange()),
+                          "editing:", editor.tableEditor.map { "\($0.focus)" } ?? "no", "cell:", editor.tableEditor?.cellEditor.map { NSStringFromRange($0.selectedRange()) } ?? "-",
+                          "toolbar:", editor.tableToolbar.map { "\($0.frame)" } ?? "-", "visible:", tv.visibleRect,
+                          "strips:", tv.subviews.compactMap { $0 as? TableEdgeStrip }.map { "\($0.adds) \($0.frame) inside=\($0.inside)" })
+                }
+            }
             // `-IndiumFormat bold,undo,strike,done`: each command walks the responder chain from
             // the focused view, as a menu item or ⌘-key would. `-IndiumTableCellSelect` selects in the cell.
             if let steps = d.string(forKey: "IndiumFormat") {
