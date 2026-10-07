@@ -710,6 +710,24 @@ enum DebugSnapshot {
                         NSPasteboard.general.setString(arg.replacingOccurrences(of: "\\t", with: "\t").replacingOccurrences(of: "\\n", with: "\n"), forType: .string)
                     case "type":
                         window.firstResponder?.insertText(arg)
+                    case "captionclick":
+                        // A click on the first caption offering Recalculate, through the note's mouseDown.
+                        let tv = target.editor.textView, lm = target.editor.layoutManager, st = target.editor.storage
+                        var spot: NSPoint?
+                        st.enumerateAttribute(.mdCaption, in: NSRange(location: 0, length: st.length)) { v, r, stop in
+                            guard let c = v as? CaptionDecoration, c.action != nil else { return }
+                            let frag = lm.lineFragmentRect(forGlyphAt: lm.glyphIndexForCharacter(at: r.location), effectiveRange: nil)
+                            spot = NSPoint(x: tv.textContainerOrigin.x + frag.minX + 120, y: tv.textContainerOrigin.y + frag.midY)
+                            stop.pointee = true
+                        }
+                        if let spot {
+                            func mouse(_ type: NSEvent.EventType) -> NSEvent {
+                                NSEvent.mouseEvent(with: type, location: tv.convert(spot, to: nil), modifierFlags: [], timestamp: 0,
+                                                   windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+                            }
+                            NSApp.postEvent(mouse(.leftMouseUp), atStart: false)
+                            tv.mouseDown(with: mouse(.leftMouseDown))
+                        } else { print("  no caption offers Recalculate") }
                     case "switchto":
                         // `switchto:/path.md`: opens another note in this editor, as the sidebar would,
                         // printing any change made to the note being left on the way out.
