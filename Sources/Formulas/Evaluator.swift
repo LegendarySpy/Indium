@@ -457,17 +457,6 @@ enum Evaluator {
         } catch let e as FormulaError { return .failure(e) } catch { return .failure(FormulaError(kind: .parse, message: "\(error)")) }
     }
 
-    /// Every variable name the expression uses.
-    static func identifiers(in node: FormulaNode) -> [String] {
-        switch node {
-        case .variable(let n): [n]
-        case .number, .constant, .reference, .range: []
-        case .negate(let n), .percent(let n), .unit(let n, _), .group(let n): identifiers(in: n)
-        case .binary(_, let a, let b), .implicitProduct(let a, let b): identifiers(in: a) + identifiers(in: b)
-        case .call(_, let args): args.flatMap(identifiers(in:))
-        }
-    }
-
     // MARK: Arithmetic
 
     /// For an error about a label like `g Zn`: how to write it so it works, as plain `g`

@@ -22,6 +22,11 @@ enum ExcelFormulas {
         return name
     }
 
+    /// A → 1, Z → 26, AA → 27. Letters only, either case.
+    static func columnNumber(_ letters: some StringProtocol) -> Int {
+        letters.uppercased().unicodeScalars.reduce(0) { $0 * 26 + Int($1.value) - 64 }
+    }
+
     static func name(_ cell: Cell) -> String { columnName(cell.column) + "\(cell.row)" }
 
     /// A whole area, `B4` or `B4:D4`.
@@ -554,7 +559,7 @@ enum ExcelFormulas {
                 return nil
             }
             if !fixedColumn, !fixedRow, variables.contains(columnText + rowText) { return nil }
-            let column = columnText.uppercased().unicodeScalars.reduce(0) { $0 * 26 + Int($1.value) - 64 }
+            let column = ExcelFormulas.columnNumber(columnText)
             guard let row = Int(rowText), row >= 1, row <= 100_000 else {
                 throw FormulaError(kind: .badReference, message: "\(columnText.uppercased())\(rowText) is outside the table", position: start)
             }

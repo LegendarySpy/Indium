@@ -31,7 +31,7 @@ struct FormulaError { kind: .parse | .unknownVariable | .unknownFunction | .divi
                       position: Int?    // character offset, for parse errors }
 
 // Variables
-NoteVariables.parse(noteText:) -> NoteVariables    // .values: [String: Quantity], .sources: [String: String]
+NoteVariables.parse(noteText:) -> NoteVariables    // .values: [String: Quantity]
 
 // Quick answers
 MathAnswer.suggest(lineBeforeCaret:inMath:variables:) -> MathAnswer.Result?   // insertion + display
@@ -93,7 +93,7 @@ columns is up to the UI. Formula lines are never rewritten.
   Fill Formula Right and Fill Formula Down (toolbar's More menu, or a cell's menu) copy
   the focused cell's formula to the end of its row or column, or across the selected
   cells, as a spreadsheet copies it: references move with each cell unless fixed with `$`
-  (`$B$2`). A row fill is stored the way the old row formulas were:
+  (`$B$2`). A row fill is stored as one row formula:
   `@4$2..@4$>=(@2-@3)`. Formulas that only filled cells the new one fills are dropped.
 - **Editing one cell of a filled formula** changes that cell only, as a spreadsheet
   does: a formula for just that cell is added after the others, where it wins. Typing
@@ -334,10 +334,10 @@ Indium -ApplePersistenceIgnoreState YES -IndiumSnapshot /tmp/x.png \
   [-IndiumEvalVerbose YES]
 ```
 
-- `quick_answers.tsv`: the behaviour of quick answers captured before the refactor. `# CHANGED:`
-  lines mark deliberate fixes. It also covers variables and lines that must stay quiet.
+- `quick_answers.tsv`: the expected behaviour of quick answers. `# CHANGED:` lines mark
+  deliberate fixes. It also covers variables and lines that must stay quiet.
 - `evaluator.tsv`: precedence, precision, units, errors and bounds. Every success must parse back.
-- `tblfm_cases.md`: whole notes in and out, including the Results table, upstream's doc
+- `tblfm_cases.md`: whole notes in and out, including the example table above, upstream's doc
   examples, atomicity, unsupported formulas left intact, cycles, bounds, and fenced code left untouched.
   A case's `--- edit` section types in the first table's cells first, as the table editor
   does (`B4 =B2-B3`, `C4 5`, `fill-right B4`), and `--- show` checks the formula a cell shows.
