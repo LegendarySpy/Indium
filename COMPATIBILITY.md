@@ -51,19 +51,19 @@ Indium's math shortcuts follow Obsidian's [LaTeX Suite](https://github.com/artis
 
 ## Table formulas
 
-Table formulas are Advanced Tables' `<!-- TBLFM: … -->` lines, right under a table. Indium evaluates a subset of them, and adds a few things Advanced Tables can't evaluate. The full reference is in [`Sources/Formulas/README.md`](Sources/Formulas/README.md).
+In Indium you type a formula in a cell the way you would in a spreadsheet, `=B2-B3` or `=SUM(B2:B5)`. The note stores it as Advanced Tables' `<!-- TBLFM: … -->` lines, right under the table, and the results as plain cell text, so Obsidian shows the values and Advanced Tables can recalculate them. Indium evaluates a subset of TBLFM, and adds a few things Advanced Tables can't evaluate. The full reference is in [`Sources/Formulas/README.md`](Sources/Formulas/README.md).
 
 **Shared with Advanced Tables**
 
 - References: `@2`, `$3`, `@>`, `$<`, `@I`, relative `@-1`, `$+1`, and ranges like `@2..@4`.
 - Destinations: a cell, a row, a column, or a range of cells.
-- `sum` and `mean`, numbers, and arithmetic where every operation has its own parentheses: `((@4/@2)*100)`.
+- `SUM` and `AVERAGE` (`sum` and `mean`), numbers, and arithmetic. Indium writes every operation in its own parentheses, `((@4/@2)*100)`, as Advanced Tables needs.
 - `::` to chain formulas, several TBLFM lines, and `;%.1f` to set the decimals.
 
 **Indium only** (Advanced Tables can't parse a line that uses these, so keep them on a line of their own)
 
 - Variables from the note's frontmatter, by name: `(@4/water_molar_mass)`.
-- `min`, `max`, `count`, comma arguments, and `sqrt sin cos tan log ln abs`.
+- `MIN`, `MAX`, `COUNT`, `SQRT`, `ABS`, `LN`, `LOG10`, `SIN`, `COS`, `TAN`, `^`, and a `ROUND` that isn't the whole formula (`=ROUND(B4, 1)*2`). A whole-formula `=ROUND(…, 1)` is stored as `;%.1f`, which Advanced Tables reads.
 - Units (`2.008 g − 0.715 g = 1.293 g`) and significant figures. Advanced Tables drops units and prints full precision.
 
 **Different on purpose**
@@ -72,7 +72,7 @@ Table formulas are Advanced Tables' `<!-- TBLFM: … -->` lines, right under a t
 - All or nothing: if any formula has a problem, no cell changes, and the table says why.
 - Formulas run in dependency order, like a spreadsheet, so running them twice changes nothing.
 
-**Not supported:** `if(…)` and comparisons, dates and times (`;dt`, `;hm`). Those lines are kept exactly as written.
+**Not supported:** `IF` and comparisons, text, dates and times (`;dt`, `;hm`). Lines with them are kept exactly as written.
 
 ## Quick Look
 
