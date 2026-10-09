@@ -174,7 +174,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController, Ima
         return false
     }
 
-    /// An honest stand-in for an image Quick Look isn't allowed to read.
+    /// Drawn in place of an image Quick Look isn't allowed to read.
     private static func unreadablePlaceholder(_ source: String) -> NSImage {
         let size = NSSize(width: 420, height: 96)
         return NSImage(size: size, flipped: false) { rect in

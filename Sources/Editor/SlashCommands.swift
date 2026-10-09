@@ -115,7 +115,7 @@ extension EditorController {
     // MARK: Answers
 
     func updateAnswerSuggestion() {
-        guard slash == nil else { answer = nil; textView.ghostIsAnswer = false; return }
+        guard slash == nil else { answer = nil; return }
         let sel = textView.selectedRange()
         guard textView.isEditable, sel.length == 0, !textView.hasMarkedText(), sel.location > 0 else { clearAnswer(); return }
         var inMath = false
@@ -141,14 +141,12 @@ extension EditorController {
         }
         guard sel.location != answerDismissedAt else { clearAnswer(); return }
         answer = (sel.location, result)
-        textView.ghostIsAnswer = true
         textView.ghost = (result.insertion.hasPrefix(" ") ? " " : "") + result.display
     }
 
     func clearAnswer() {
         guard answer != nil else { return }
         answer = nil
-        textView.ghostIsAnswer = false
         textView.ghost = nil
     }
 

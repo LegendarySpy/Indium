@@ -196,7 +196,6 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
         iconImage = image
         // While a suggestion runs the spinner holds the spot; the icon arrives when it ends.
         guard !iconSpinner.isAnimating, titleIcon.image != image else { return }
-        // Cross-fade to the new symbol.
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.1
             titleIcon.animator().alphaValue = 0.2

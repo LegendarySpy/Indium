@@ -49,13 +49,6 @@ final class HoverButton: NSButton {
         translatesAutoresizingMaskIntoConstraints = false
     }
 
-    func setText(_ text: String) {
-        attributedTitle = NSAttributedString(string: text, attributes: [
-            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
-            .foregroundColor: hovering ? Palette.text : restingTint,
-        ])
-    }
-
     override var mouseDownCanMoveWindow: Bool { false }
 
     override func updateTrackingAreas() {

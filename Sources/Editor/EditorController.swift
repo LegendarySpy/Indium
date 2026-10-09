@@ -728,9 +728,10 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
     }
 
+    #if DEBUG
     var cellTipCount: Int { cellTips.count }
 
-    /// The tooltip text of a computed cell under `point` on the rendered page, for the debug harness.
+    /// The tooltip text of a computed cell under `point` on the rendered page.
     func cellTip(at point: NSPoint) -> String? {
         for block in visibleBlocks() {
             guard case let .table(table) = block.decoration.content else { continue }
@@ -739,6 +740,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         return nil
     }
+    #endif
 
     // MARK: Typing formulas
 
@@ -1833,10 +1835,10 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return true
     }
 
-    // Object-style image selection: clicking an image selects it without revealing its source.
+    // MARK: Clicks on rendered blocks
 
     /// Rendered blocks on screen, floating ones first.
-    private func visibleBlocks() -> [(decoration: BlockDecoration, range: NSRange, area: NSRect, content: NSRect)] {
+    func visibleBlocks() -> [(decoration: BlockDecoration, range: NSRange, area: NSRect, content: NSRect)] {
         guard let container = textView.textContainer else { return [] }
         let origin = textView.textContainerOrigin
         let visible = textView.visibleRect.offsetBy(dx: -origin.x, dy: -origin.y)
@@ -1943,6 +1945,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return false
     }
 
+    /// Clicking an image selects it as an object, without revealing its source.
     private func selectImage(at location: Int) {
         let line = lineRange(at: location)
         textView.window?.makeFirstResponder(textView)

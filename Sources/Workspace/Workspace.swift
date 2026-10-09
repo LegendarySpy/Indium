@@ -4,7 +4,6 @@ final class FileNode {
     let url: URL
     let isFolder: Bool
     var children: [FileNode]
-    weak var parent: FileNode?
 
     init(url: URL, isFolder: Bool, children: [FileNode] = []) {
         self.url = url
@@ -23,7 +22,7 @@ final class Workspace {
     /// userInfo: "from": URL, "to": URL
     static let didMoveItem = Notification.Name("IndiumWorkspaceDidMoveItem")
     /// Posted as soon as files change, before the (debounced) rescan: open notes use
-    /// it to show another app's or an agent's edits live.
+    /// it to show another app's edits live.
     static let filesTouched = Notification.Name("IndiumWorkspaceFilesTouched")
 
     static let markdownExtensions: Set<String> = ["md", "markdown", "mdown"]
@@ -60,9 +59,7 @@ final class Workspace {
             let scan = withExtendedLifetime(access) { Workspace.scan(root) }
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.tree = scan.tree
-                self.notes = scan.notes
-                self.filesByName = scan.byName
+                self.apply(scan)
                 self.isScanning = false
                 NotificationCenter.default.post(name: Workspace.didChange, object: self, userInfo: ["paths": [String](), "initial": true])
             }
@@ -93,17 +90,13 @@ final class Workspace {
                 if name.hasPrefix(".") { continue }
                 let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
                 if isDir {
-                    let child = walk(item)
-                    child.parent = node
-                    folders.append(child)
+                    folders.append(walk(item))
                 } else {
                     byName[name.lowercased(), default: []].append(item)
                     if markdownExtensions.contains(item.pathExtension.lowercased()) {
                         notes.append(item)
                         byName[item.deletingPathExtension().lastPathComponent.lowercased(), default: []].append(item)
-                        let f = FileNode(url: item, isFolder: false)
-                        f.parent = node
-                        files.append(f)
+                        files.append(FileNode(url: item, isFolder: false))
                     }
                 }
             }
@@ -129,20 +122,21 @@ final class Workspace {
                 let scan = withExtendedLifetime(access) { Workspace.scan(root) }
                 DispatchQueue.main.async {
                     self.rescanPending = false
-                    self.tree = scan.tree
-                    self.notes = scan.notes
-                    self.filesByName = scan.byName
+                    self.apply(scan)
                     NotificationCenter.default.post(name: Workspace.didChange, object: self, userInfo: ["paths": paths])
                 }
             }
         }
     }
 
-    func rescanNow() {
-        let scan = Workspace.scan(root)
+    private func apply(_ scan: Scan) {
         tree = scan.tree
         notes = scan.notes
         filesByName = scan.byName
+    }
+
+    func rescanNow() {
+        apply(Workspace.scan(root))
         NotificationCenter.default.post(name: Workspace.didChange, object: self, userInfo: ["paths": [String]()])
     }
 

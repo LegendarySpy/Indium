@@ -5,7 +5,6 @@ import AppKit
 /// keeping references pointed at the same rows and columns when rows or columns are
 /// inserted or deleted, and the views around a cell a formula is typed in.
 enum TableFormulaUI {
-
     // MARK: Reading a table
 
     /// Header row first, delimiter left out: the grid `TableFormulas` works on.
@@ -15,13 +14,13 @@ enum TableFormulaUI {
     }
 
     /// The formula lines in `range` (the scanner's `.tableFormulas` block), without line breaks.
-    static func lines(in text: NSString, range: NSRange) -> [String] {
+    private static func lines(in text: NSString, range: NSRange) -> [String] {
         text.substring(with: range).components(separatedBy: .newlines).filter { TableFormulas.isFormulaLine($0) }
     }
 
     /// True when the first column holds row names ("Mass of water"), as in a transposed
     /// results table: row formulas then leave it out (`@4$2..@4$>`).
-    static func hasLabelColumn(_ grid: [[String]]) -> Bool {
+    private static func hasLabelColumn(_ grid: [[String]]) -> Bool {
         let labels = grid.dropFirst().compactMap(\.first)
         return !labels.isEmpty && labels.allSatisfy { !$0.isEmpty && Quantity.parse($0) == nil }
     }
@@ -88,13 +87,13 @@ enum TableFormulaUI {
     // MARK: Formulas in plain words
 
     /// A row by its label ("Mass of water"), or "Row 4" in a table without a label column.
-    static func rowName(_ row: Int, grid: [[String]], labelColumn: Bool) -> String {
+    private static func rowName(_ row: Int, grid: [[String]], labelColumn: Bool) -> String {
         let label = labelColumn && row >= 1 && row <= grid.count ? (grid[row - 1].first ?? "") : ""
         return label.isEmpty ? "Row \(row)" : label
     }
 
     /// A column by its header, or "Column 3".
-    static func columnName(_ column: Int, grid: [[String]]) -> String {
+    private static func columnName(_ column: Int, grid: [[String]]) -> String {
         let header = column >= 1 && column - 1 < (grid.first?.count ?? 0) ? grid[0][column - 1] : ""
         return header.isEmpty ? "Column \(column)" : header
     }
@@ -229,7 +228,7 @@ enum TableFormulaUI {
 
     /// Written in place of a reference to a row or column that was deleted. The formula
     /// no longer parses, so the table isn't recalculated until it's fixed or removed.
-    static let deletedMark = "#REF"
+    private static let deletedMark = "#REF"
 
     private static let reference = try! NSRegularExpression(pattern: #"(@(?:[<>I]|[-+]?\d+))?(\$(?:[<>]|[-+]?\d+))?"#)
 
@@ -275,13 +274,13 @@ enum TableFormulaUI {
         case let .insertColumns(a, c): (rows, at, count, inserting) = (false, a, c, true)
         case let .deleteColumns(a, c): (rows, at, count, inserting) = (false, a, c, false)
         }
-        /// The new index, or nil when a single reference's row or column was deleted.
-        /// Checked: an index that would overflow leaves the formula alone.
+        // Checked: an index that would overflow leaves the formula alone.
         func plus(_ a: Int, _ b: Int) throws -> Int {
             let (sum, overflow) = a.addingReportingOverflow(b)
             if overflow { throw Overflow() }
             return sum
         }
+        // The new index, or nil when a single reference's row or column was deleted.
         func shifted(_ n: Int, _ role: Role) throws -> Int? {
             if inserting { return n >= at ? try plus(n, count) : n }
             if n >= (try plus(at, count)) { return n - count }
@@ -292,7 +291,7 @@ enum TableFormulaUI {
             case .end: return at - 1
             }
         }
-        /// The index in `@4` or `$2`; nil for relative ones and `<`, `>`, `I`.
+        // The index in `@4` or `$2`; nil for relative ones and `<`, `>`, `I`.
         func absolute(_ r: NSRange) throws -> Int? {
             guard r.location != NSNotFound else { return nil }
             let digits = ns.substring(with: NSRange(location: r.location + 1, length: r.length - 1))
@@ -413,8 +412,9 @@ final class TableFormulaListPopover: NSViewController {
         onShowSource?()
     }
 
-    // For the debug harness.
+    #if DEBUG
     func debugEdit(_ n: Int) { if n < buttons.count { edit(buttons[n]) } }
+    #endif
 }
 
 /// Under a cell a formula is typed in: its value as it stands, or what's wrong, and how
@@ -461,7 +461,9 @@ final class TableFormulaHint: NSView {
         needsLayout = true
     }
 
+    #if DEBUG
     var text: String { [value.stringValue, help.isHidden ? "" : help.stringValue].filter { !$0.isEmpty }.joined(separator: " | ") }
+    #endif
 
     override var isFlipped: Bool { true }
     override var wantsUpdateLayer: Bool { true }
@@ -497,9 +499,11 @@ final class TableReferenceRuler: NSView {
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
+    #if DEBUG
     var labels: (columns: [String], rows: [String]) {
         (columns.indices.map { ExcelFormulas.columnName($0 + 1) }, rows.indices.map { "\($0 + 1)" })
     }
+    #endif
 
     override func draw(_ dirtyRect: NSRect) {
         let font = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .semibold)

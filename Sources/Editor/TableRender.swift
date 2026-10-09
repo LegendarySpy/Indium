@@ -25,8 +25,7 @@ final class TableRender {
         var row: Int
         var column: Int
     }
-    /// Computed cells. Only set on screen: paper, PDFs and Quick Look leave it empty, so
-    /// they stay clean.
+    /// Computed cells. Only set on screen; PDFs and Quick Look leave it empty.
     var marks: [Position: Mark] = [:]
 
     func mark(row: Int, column: Int) -> Mark? { marks[Position(row: row, column: column)] }
@@ -160,7 +159,7 @@ final class TableRender {
     }
 
     /// Rows sized to their tallest cell at the current column widths.
-    func measureRows() {
+    private func measureRows() {
         let pad = Self.padX * 2
         width = floor(columnWidths.reduce(0, +))
         for (r, row) in cells.enumerated() {
@@ -297,7 +296,7 @@ final class TableRender {
         style.alignment = [.natural, .left, .center, .right][min(alignment, 3)]
         style.lineBreakMode = .byWordWrapping
         style.lineSpacing = 2
-        let color = header ? Palette.text : Palette.text
+        let color = Palette.text
         func font(bold: Bool, italic: Bool, code: Bool) -> NSFont {
             let base = code ? typography.codeVariant(bold: bold || header, italic: italic)
                             : typography.text(bold: bold || header, italic: italic, size: size)

@@ -89,7 +89,7 @@ final class Typography {
     func heading(_ level: Int, italic: Bool = false) -> NSFont {
         let key = "h\(level)\(italic)"
         if let f = cache[key] { return f }
-        let weight: NSFont.Weight = choice == .mono ? .bold : (level <= 2 ? .semibold : .semibold)
+        let weight: NSFont.Weight = choice == .mono ? .bold : .semibold
         var f = Typography.baseFont(choice, size: headingSize(level), weight: weight)
         if italic { f = f.adding(.italic) }
         cache[key] = f
