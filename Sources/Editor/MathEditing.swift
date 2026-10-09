@@ -1114,6 +1114,4 @@ extension EditorController: MathEditingHost {
     }
 
     func mathSpan(at location: Int) -> MathEditor.MathSpan? { math.mathSpan(at: location) }
-    func clearMathStops() { math.clearStops() }
-    func handleMathNewline(shift: Bool) -> Bool { math.handleNewline(shift: shift) }
 }
