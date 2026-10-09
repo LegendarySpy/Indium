@@ -52,8 +52,9 @@ enum DebugSnapshot {
     /// icon suggestions (pair with `-IndiumIconStub` and `-IndiumIconStore`). Steps: `files` shows
     /// the sidebar, `open:rel` opens a note, `icon` clicks the title bar icon, `suggest` clicks the
     /// picker's Suggest/Try Again, `pick:symbol` picks one, `close` closes popovers, `menu:rel` is the
-    /// sidebar's Suggest New Icon, `retry` presses Try Again in a notice, `frontmatter:symbol` gives the open note that icon in frontmatter and saves it, `suggestAt:/abs/path` asks
-    /// for any file (vault = its folder), `wait:s`, `shot:path` (popovers included), `dump`.
+    /// sidebar's Suggest New Icon, `retry` presses Try Again in a notice, `frontmatter:symbol` gives
+    /// the open note that icon in frontmatter and saves it, `suggestAt:/abs/path` asks for any file
+    /// (vault = its folder), `wait:s`, `shot:path` (popovers included), `dump`.
     static func runIconSteps(_ steps: [String], controller: DocumentWindowController) {
         guard let window = controller.window, let frame = window.contentView?.superview else { exit(1) }
         func find<T: NSView>(_ type: T.Type, in view: NSView) -> T? {
@@ -103,43 +104,6 @@ enum DebugSnapshot {
                 print("  notice:", labels.joined(separator: " "))
             }
         }
-        func shot(_ path: String) {
-            frame.layoutSubtreeIfNeeded()
-            guard let base = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return }
-            frame.cacheDisplay(in: frame.bounds, to: base)
-            // Popovers are their own windows: draw each where it sits over the main window.
-            let pops = popoverWindows()
-            var canvas = window.frame
-            for w in pops { canvas = canvas.union(w.frame) }
-            let image = NSImage(size: canvas.size)
-            image.lockFocus()
-            NSColor.windowBackgroundColor.setFill()
-            NSRect(origin: .zero, size: canvas.size).fill()
-            base.draw(in: NSRect(x: window.frame.minX - canvas.minX, y: window.frame.minY - canvas.minY, width: window.frame.width, height: window.frame.height))
-            for w in pops {
-                // The popover's material doesn't render offscreen: its content on a plain backing.
-                guard let v = w.contentView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { continue }
-                NSGraphicsContext.saveGraphicsState()
-                NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-                NSColor.controlBackgroundColor.setFill()
-                v.bounds.fill()
-                NSGraphicsContext.restoreGraphicsState()
-                v.cacheDisplay(in: v.bounds, to: rep)
-                let content = v.convert(v.bounds, to: nil)
-                let r = content.offsetBy(dx: w.frame.minX - canvas.minX, dy: w.frame.minY - canvas.minY)
-                let shape = NSBezierPath(roundedRect: r, xRadius: 10, yRadius: 10)
-                NSColor.controlBackgroundColor.setFill()
-                shape.fill()
-                NSColor.separatorColor.setStroke()
-                shape.stroke()
-                rep.draw(in: r)
-            }
-            image.unlockFocus()
-            if let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) {
-                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
-            }
-            print("  shot:", path)
-        }
         func run(_ i: Int) {
             guard i < steps.count else { exit(0) }
             let step = steps[i]
@@ -182,7 +146,7 @@ enum DebugSnapshot {
                 print("  \(u.path): \(s)")
                 delay = 0.05
             case "wait": delay = Double(arg) ?? 1
-            case "shot": shot(arg); delay = 0.05
+            case "shot": debugShot(window: window, path: arg); delay = 0.05
             case "dump": dump(); delay = 0.05
             default: print("  unknown step")
             }
@@ -327,15 +291,7 @@ enum DebugSnapshot {
             let glyph = editor.layoutManager.glyphIndexForCharacter(at: max(0, tv.selectedRange().location - 1))
             return editor.layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).offsetBy(dx: 0, dy: tv.textContainerOrigin.y)
         }
-        func send(_ chars: String, code: UInt16) {
-            for type in [NSEvent.EventType.keyDown, .keyUp] {
-                if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                                            windowNumber: window.windowNumber, context: nil, characters: chars,
-                                            charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code) {
-                    window.sendEvent(e)
-                }
-            }
-        }
+        func send(_ chars: String, code: UInt16) { sendKey(chars, code: code, to: window) }
         func run(_ i: Int) {
             guard i < keys.count else {
                 sampler.invalidate()
@@ -406,6 +362,100 @@ enum DebugSnapshot {
         print("  shot:", path)
     }
 
+    /// `-IndiumMathCases /path`: one case per line, `before<TAB>keys<TAB>expected`. `‸` marks the
+    /// caret, `«…»` a selection and `↵` a line break. Keys: ⇥ Tab, ⏎ Return, ⇧ Shift-Return,
+    /// ⌫ Backspace, ↶ Undo, ↷ Redo. With `-IndiumMathRealKeys YES` keys go in as NSEvents, one
+    /// run-loop turn each, so undo groups by event exactly as it does for someone typing.
+    static func runMathCases(_ cases: String, editor: EditorController, window: NSWindow, realKeys: Bool) {
+        let tv = editor.textView
+        window.makeFirstResponder(tv)
+        let undo = tv.undoManager
+        func spin() { RunLoop.current.run(until: Date().addingTimeInterval(0.03)) }
+        func send(_ chars: String, _ flags: NSEvent.ModifierFlags = []) {
+            let codes: [String: UInt16] = ["\t": 48, "\r": 36, "\u{7f}": 51]
+            sendKey(chars, flags: flags, code: codes[chars] ?? 0, to: window)
+            spin()
+        }
+        if let undo, undo.groupingLevel > 0, !realKeys { undo.endUndoGrouping() }
+        if !realKeys { undo?.groupsByEvent = false }
+        var failed = 0, total = 0
+        for line in cases.components(separatedBy: "\n") where !line.isEmpty && !line.hasPrefix("#") {
+            let parts = line.components(separatedBy: "\t")
+            guard parts.count == 3 else { continue }
+            total += 1
+            let (start, sel) = unmark(parts[0].replacingOccurrences(of: "↵", with: "\n"))
+            editor.endTableEditing()
+            editor.clearMathStops()
+            if realKeys {
+                editor.replace(NSRange(location: 0, length: editor.storage.length), with: start)
+                tv.setSelectedRange(sel)
+                spin()
+                // Each case starts with nothing to undo, so ↶ can't reach into the one before.
+                undo?.removeAllActions()
+                for key in parts[1] {
+                    switch key {
+                    case "⇥": send("\t")
+                    case "⏎": send("\r")
+                    case "⇧": send("\r", .shift)
+                    case "⌫": send("\u{7f}")
+                    case "↶": undo?.undo(); spin()
+                    case "↷": undo?.redo(); spin()
+                    default: send(String(key))
+                    }
+                }
+            } else {
+                undo?.beginUndoGrouping()
+                editor.replace(NSRange(location: 0, length: editor.storage.length), with: start)
+                tv.setSelectedRange(sel)
+                undo?.endUndoGrouping()
+                for key in parts[1] {
+                    let isUndo = key == "↶" || key == "↷"
+                    if !isUndo { undo?.beginUndoGrouping() }
+                    switch key {
+                    case "⇥": tv.insertTab(nil)
+                    case "⏎": tv.insertNewline(nil)
+                    case "⇧": if !editor.handleMathNewline(shift: true) { tv.insertLineBreak(nil) }
+                    case "⌫": tv.deleteBackward(nil)
+                    case "↶": undo?.undo()
+                    case "↷": undo?.redo()
+                    default: tv.insertText(String(key), replacementRange: NSRange(location: NSNotFound, length: 0))
+                    }
+                    if !isUndo { undo?.endUndoGrouping() }
+                }
+            }
+            let r = tv.selectedRange()
+            let result = (editor.text as NSString).replacingCharacters(in: r, with: r.length == 0 ? "‸" : "«" + (editor.text as NSString).substring(with: r) + "»")
+                .replacingOccurrences(of: "\n", with: "↵")
+            let ok = result == parts[2]
+            if !ok { failed += 1 }
+            print(ok ? "PASS" : "FAIL", parts[0], "·", parts[1], "→", result, ok ? "" : "(expected \(parts[2]))")
+        }
+        print("MATH CASES: \(total - failed)/\(total) passed")
+    }
+
+    /// A case's starting text with its caret (`‸`) or selection (`«…»`) marks taken out;
+    /// no mark puts the caret at the end.
+    static func unmark(_ s: String) -> (String, NSRange) {
+        let ns = s as NSString
+        let caret = ns.range(of: "‸")
+        if caret.location != NSNotFound { return (ns.replacingCharacters(in: caret, with: ""), NSRange(location: caret.location, length: 0)) }
+        let a = ns.range(of: "«"), b = ns.range(of: "»")
+        let plain = ns.replacingOccurrences(of: "«", with: "").replacingOccurrences(of: "»", with: "")
+        return (plain, a.location == NSNotFound ? NSRange(location: (plain as NSString).length, length: 0)
+                                                   : NSRange(location: a.location, length: b.location - a.location - 1))
+    }
+
+    /// A key press (down and up) sent through the window, as typing would.
+    static func sendKey(_ chars: String, flags: NSEvent.ModifierFlags = [], code: UInt16 = 0, to window: NSWindow) {
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                                        windowNumber: window.windowNumber, context: nil, characters: chars,
+                                        charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code) {
+                window.sendEvent(e)
+            }
+        }
+    }
+
     /// Math typed in a table cell. Each case starts from a fresh note holding
     ///
     ///     | H1 | H2 |      the cell typed in is c1 (row 1, column 0), its text and
@@ -420,23 +470,8 @@ enum DebugSnapshot {
         let undo = editor.textView.undoManager
         func spin() { RunLoop.current.run(until: Date().addingTimeInterval(0.03)) }
         func send(_ chars: String, _ flags: NSEvent.ModifierFlags = [], code: UInt16 = 0) {
-            for type in [NSEvent.EventType.keyDown, .keyUp] {
-                if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
-                                            windowNumber: window.windowNumber, context: nil, characters: chars,
-                                            charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code) {
-                    window.sendEvent(e)
-                }
-            }
+            sendKey(chars, flags: flags, code: code, to: window)
             spin()
-        }
-        func unmark(_ s: String) -> (String, NSRange) {
-            let ns = s as NSString
-            let caret = ns.range(of: "‸")
-            if caret.location != NSNotFound { return (ns.replacingCharacters(in: caret, with: ""), NSRange(location: caret.location, length: 0)) }
-            let a = ns.range(of: "«"), b = ns.range(of: "»")
-            let plain = ns.replacingOccurrences(of: "«", with: "").replacingOccurrences(of: "»", with: "")
-            return (plain, a.location == NSNotFound ? NSRange(location: (plain as NSString).length, length: 0)
-                                                       : NSRange(location: a.location, length: b.location - a.location - 1))
         }
         if !realKeys {
             if let undo, undo.groupingLevel > 0 { undo.endUndoGrouping() }
@@ -701,7 +736,7 @@ enum DebugSnapshot {
     static func runIfRequested(_ controller: DocumentWindowController) {
         let d = UserDefaults.standard
         // Harness runs copy and paste on a board of their own, never the real clipboard.
-        if d.object(forKey: "IndiumSnapshot") != nil || d.object(forKey: "IndiumPDF") != nil {
+        if d.object(forKey: "IndiumSnapshot") != nil || d.object(forKey: "IndiumPDF") != nil || d.object(forKey: "IndiumClipboardCases") != nil {
             TableClipboard.board = NSPasteboard.withUniqueName()
             atexit { TableClipboard.board.releaseGlobally() }
         }
@@ -980,9 +1015,9 @@ enum DebugSnapshot {
                 for step in steps {
                     // Steps that only look (and Tab, as a real key) open no explicit undo group: an empty
                     // explicit group stays on the stack, where a real key event's empty group is dropped.
-                    let isUndo = ["undo", "redo", "noteundo", "tab", "text", "caption", "shot", "focus", "done", "notesel", "selectAll", "select", "pb", "pbhtml", "pbtsv", "copy", "copyTable", "keyev", "cmdev", "switchto", "idle", "cat", "tips", "list", "hint", "draft"].contains(step.split(separator: ":").first.map(String.init) ?? "")
-                    if !isUndo { undo?.beginUndoGrouping() }
-                    defer { if !isUndo { undo?.endUndoGrouping() } }
+                    let opensNoGroup = ["undo", "redo", "noteundo", "tab", "text", "caption", "shot", "focus", "done", "notesel", "selectAll", "select", "pb", "pbhtml", "pbtsv", "copy", "copyTable", "keyev", "cmdev", "switchto", "idle", "cat", "tips", "list", "hint", "draft"].contains(step.split(separator: ":").first.map(String.init) ?? "")
+                    if !opensNoGroup { undo?.beginUndoGrouping() }
+                    defer { if !opensNoGroup { undo?.endUndoGrouping() } }
                     let e = target.editor.tableEditor
                     let arg = step.split(separator: ":", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
                     switch step.split(separator: ":").first.map(String.init) ?? "" {
@@ -1191,13 +1226,13 @@ enum DebugSnapshot {
                 }
                 print("TABLE MD:\n" + ((target.editor.text as NSString).substring(with: target.editor.styler.blocks.first(where: { if case .table = $0.kind { return true }; return false })!.range)))
             }
+            if let steps = d.string(forKey: "IndiumDragSteps") {
+                runDragSteps(steps.split(separator: ";").map(String.init), editor: target.editor, window: window)
+            }
             // `-IndiumPointerSteps "move:R,10,20;click:L,-30,40;scroll:300"`: the pointer, relative to a
             // corner of a table's grid (L top-left, R top-right, B bottom-left; `-IndiumPointerTable n`
             // picks the table). `move` hovers (entering whatever strip is there), `click` sends a
             // mouse-down to the view hit testing picks, `scroll` scrolls the note to a y offset.
-            if let steps = d.string(forKey: "IndiumDragSteps") {
-                runDragSteps(steps.split(separator: ";").map(String.init), editor: target.editor, window: window)
-            }
             if let steps = d.string(forKey: "IndiumPointerSteps") {
                 let editor = target.editor, tv = editor.textView
                 func tableRect() -> NSRect? {
@@ -1322,92 +1357,8 @@ enum DebugSnapshot {
                     print("NOTE:\n" + target.editor.text)
                 }
             }
-            // `-IndiumMathCases /path`: one case per line, `before<TAB>keys<TAB>expected`. `‸` marks the
-            // caret and `«…»` a selection; in keys, ⇥ is Tab, ⏎ Return, ⌫ Backspace and ↶ Undo.
             if let path = d.string(forKey: "IndiumMathCases"), let cases = try? String(contentsOfFile: path, encoding: .utf8) {
-                let editor = target.editor
-                let tv = editor.textView
-                window.makeFirstResponder(tv)
-                let undo = tv.undoManager
-                // `-IndiumMathRealKeys YES`: keys go in as NSEvents, one run-loop turn each, so
-                // undo groups by event exactly as it does for someone typing.
-                let realKeys = d.bool(forKey: "IndiumMathRealKeys")
-                func spin() { RunLoop.current.run(until: Date().addingTimeInterval(0.03)) }
-                func send(_ chars: String, _ flags: NSEvent.ModifierFlags = []) {
-                    let codes: [String: UInt16] = ["\t": 48, "\r": 36, "\u{7f}": 51]
-                    for type in [NSEvent.EventType.keyDown, .keyUp] {
-                        if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
-                                                    windowNumber: window.windowNumber, context: nil, characters: chars,
-                                                    charactersIgnoringModifiers: chars, isARepeat: false, keyCode: codes[chars] ?? 0) {
-                            window.sendEvent(e)
-                        }
-                    }
-                    spin()
-                }
-                if let undo, undo.groupingLevel > 0, !realKeys { undo.endUndoGrouping() }
-                if !realKeys { undo?.groupsByEvent = false }
-                var failed = 0, total = 0
-                func unmark(_ s: String) -> (String, NSRange) {
-                    let ns = s.replacingOccurrences(of: "↵", with: "\n") as NSString
-                    let caret = ns.range(of: "‸")
-                    if caret.location != NSNotFound { return (ns.replacingCharacters(in: caret, with: ""), NSRange(location: caret.location, length: 0)) }
-                    let a = ns.range(of: "«"), b = ns.range(of: "»")
-                    let plain = ns.replacingOccurrences(of: "«", with: "").replacingOccurrences(of: "»", with: "")
-                    return (plain, a.location == NSNotFound ? NSRange(location: (plain as NSString).length, length: 0)
-                                                               : NSRange(location: a.location, length: b.location - a.location - 1))
-                }
-                for line in cases.components(separatedBy: "\n") where !line.isEmpty && !line.hasPrefix("#") {
-                    let parts = line.components(separatedBy: "\t")
-                    guard parts.count == 3 else { continue }
-                    total += 1
-                    let (start, sel) = unmark(parts[0])
-                    editor.endTableEditing()
-                    editor.clearMathStops()
-                    if realKeys {
-                        editor.replace(NSRange(location: 0, length: editor.storage.length), with: start)
-                        tv.setSelectedRange(sel)
-                        spin()
-                        // Each case starts with nothing to undo, so ↶ can't reach into the one before.
-                        undo?.removeAllActions()
-                        for key in parts[1] {
-                            switch key {
-                            case "⇥": send("\t")
-                            case "⏎": send("\r")
-                            case "⇧": send("\r", .shift)
-                            case "⌫": send("\u{7f}")
-                            case "↶": undo?.undo(); spin()
-                            case "↷": undo?.redo(); spin()
-                            default: send(String(key))
-                            }
-                        }
-                    } else {
-                    undo?.beginUndoGrouping()
-                    editor.replace(NSRange(location: 0, length: editor.storage.length), with: start)
-                    tv.setSelectedRange(sel)
-                    undo?.endUndoGrouping()
-                    for key in parts[1] {
-                        let isUndo = key == "↶" || key == "↷"
-                        if !isUndo { undo?.beginUndoGrouping() }
-                        switch key {
-                        case "⇥": tv.insertTab(nil)
-                        case "⏎": tv.insertNewline(nil)
-                        case "⇧": if !editor.handleMathNewline(shift: true) { tv.insertLineBreak(nil) }
-                        case "⌫": tv.deleteBackward(nil)
-                        case "↶": undo?.undo()
-                        case "↷": undo?.redo()
-                        default: tv.insertText(String(key), replacementRange: NSRange(location: NSNotFound, length: 0))
-                        }
-                        if !isUndo { undo?.endUndoGrouping() }
-                    }
-                    }
-                    let r = tv.selectedRange()
-                    let result = (editor.text as NSString).replacingCharacters(in: r, with: r.length == 0 ? "‸" : "«" + (editor.text as NSString).substring(with: r) + "»")
-                        .replacingOccurrences(of: "\n", with: "↵")
-                    let ok = result == parts[2]
-                    if !ok { failed += 1 }
-                    print(ok ? "PASS" : "FAIL", parts[0], "·", parts[1], "→", result, ok ? "" : "(expected \(parts[2]))")
-                }
-                print("MATH CASES: \(total - failed)/\(total) passed")
+                runMathCases(cases, editor: target.editor, window: window, realKeys: d.bool(forKey: "IndiumMathRealKeys"))
             }
             // `-IndiumMathCellCases /path`: the same kind of cases, typed into a table cell (see runMathCellCases).
             if let path = d.string(forKey: "IndiumMathCellCases"), let cases = try? String(contentsOfFile: path, encoding: .utf8) {
