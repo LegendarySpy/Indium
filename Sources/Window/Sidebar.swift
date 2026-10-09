@@ -662,6 +662,26 @@ private final class SidebarRowView: NSTableRowView {
 
     /// Text on the soft gray selection keeps its normal style (no bold selected look).
     override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
+
+    #if DEBUG
+    /// Hidden harness windows can't draw the selection material (it caches as black), so
+    /// they show the same rounded selection in a plain color instead.
+    private var debugSelection: NSView?
+    override func layout() {
+        super.layout()
+        guard DebugSnapshot.isHidden else { return }
+        for case let v as NSVisualEffectView in subviews where !v.isHidden {
+            v.isHidden = true
+            let plain = debugSelection ?? NSView()
+            plain.wantsLayer = true
+            plain.layer?.backgroundColor = NSColor.unemphasizedSelectedContentBackgroundColor.cgColor
+            plain.layer?.cornerRadius = v.layer?.cornerRadius ?? 8
+            plain.frame = v.frame
+            if debugSelection == nil { addSubview(plain, positioned: .below, relativeTo: nil); debugSelection = plain }
+        }
+        debugSelection?.isHidden = !isSelected
+    }
+    #endif
 }
 
 private final class SidebarCell: NSTableCellView {
