@@ -434,12 +434,24 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         var visible = textView.visibleRect.insetBy(dx: 0, dy: 4)
         visible.origin.y += 40
         visible.size.height -= 40
-        let range = styler.blockIndex(containing: location).map { styler.blocks[$0].range } ?? NSRange(location: location, length: 0)
+        var range = NSRange(location: location, length: 0)
+        // Below the table, the bar also clears its formulas' caption ("ƒ 3 formulas").
+        var bottom = table.maxY + (editor.stripRoom.below ? TableEdgeStrip.outset : 0)
+        if let i = styler.blockIndex(containing: location) {
+            range = styler.blocks[i].range
+            if i + 1 < styler.blocks.count, case .tableFormulas = styler.blocks[i + 1].kind {
+                let formulas = styler.blocks[i + 1].range
+                range = NSUnionRange(range, formulas)
+                let glyphs = layoutManager.glyphRange(forCharacterRange: formulas, actualCharacterRange: nil)
+                layoutManager.enumerateLineFragments(forGlyphRange: glyphs) { line, _, _, _, _ in
+                    bottom = max(bottom, line.maxY + self.textView.textContainerOrigin.y)
+                }
+            }
+        }
         // Roomy spots first, then the same ones snug against the grid (below, it clears
-        // the add-row strip).
-        let strip = editor.stripRoom.below ? TableEdgeStrip.outset : 0
-        let spots = [(at(table.minY - size.height - 8), 6.0), (at(table.maxY + strip + 6), 6.0),
-                     (at(table.minY - size.height - 3), 1.0), (at(table.maxY + strip + 2), 1.0)]
+        // the add-row strip and the caption).
+        let spots = [(at(table.minY - size.height - 8), 6.0), (at(bottom + 6), 6.0),
+                     (at(table.minY - size.height - 3), 1.0), (at(bottom + 2), 1.0)]
         if let spot = spots.first(where: { visible.contains($0.0) && tableToolbarRoomIsFree($0.0.insetBy(dx: 0, dy: -$0.1), table: range) }) {
             bar.frame = spot.0
         } else if table.minY < visible.minY + size.height + 8 {
