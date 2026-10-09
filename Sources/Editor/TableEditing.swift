@@ -208,11 +208,22 @@ extension EditorController {
         return free
     }
 
+    /// A table editor cell (header row 0, first column 0) in TBLFM numbering (both from 1).
+    private static func formulaCell(_ cell: TableEditorView.Cell) -> TableFormulas.Cell {
+        TableFormulas.Cell(row: cell.row + 1, column: cell.column + 1)
+    }
+
+    /// Block `i`'s range, with the formula lines right under it when there are some.
+    private func rangeWithFormulas(ofBlock i: Int) -> NSRange {
+        let range = styler.blocks[i].range
+        guard i + 1 < styler.blocks.count, case .tableFormulas = styler.blocks[i + 1].kind else { return range }
+        return NSUnionRange(range, styler.blocks[i + 1].range)
+    }
+
     /// A table's Markdown with its formula lines, without the line break after them.
     private func tableSource(at location: Int) -> NSRange? {
         guard let i = styler.blockIndex(containing: location), case .table = styler.blocks[i].kind else { return nil }
-        var range = styler.blocks[i].range
-        if i + 1 < styler.blocks.count, case .tableFormulas = styler.blocks[i + 1].kind { range = NSUnionRange(range, styler.blocks[i + 1].range) }
+        var range = rangeWithFormulas(ofBlock: i)
         while range.length > 0, [0x0A, 0x0D].contains(ns.character(at: NSMaxRange(range) - 1)) { range.length -= 1 }
         return range
     }
@@ -238,8 +249,7 @@ extension EditorController {
         let old = ns.substring(with: parts.range)
         var table = markdown, formulas = parts.formulas
         if let (a, b) = tableValuesReplaced, !formulas.isEmpty, let grid = TableFormulaUI.grid(of: parts.table)?.grid {
-            formulas = ExcelFormulas.removing(from: TableFormulas.Cell(row: a.row + 1, column: a.column + 1),
-                                              to: TableFormulas.Cell(row: b.row + 1, column: b.column + 1), in: formulas, grid: grid)
+            formulas = ExcelFormulas.removing(from: Self.formulaCell(a), to: Self.formulaCell(b), in: formulas, grid: grid)
         }
         tableValuesReplaced = nil
         if cell == nil, !formulas.isEmpty {
@@ -450,7 +460,7 @@ extension EditorController {
     private func formula(at cell: TableEditorView.Cell) -> String? {
         guard let location = styler.editingTableLocation, let parts = tableParts(at: location), !parts.formulas.isEmpty,
               let grid = TableFormulaUI.grid(of: parts.table)?.grid else { return nil }
-        return ExcelFormulas.formula(at: TableFormulas.Cell(row: cell.row + 1, column: cell.column + 1), grid: grid, formulaLines: parts.formulas)
+        return ExcelFormulas.formula(at: Self.formulaCell(cell), grid: grid, formulaLines: parts.formulas)
     }
 
     /// A formula typed in a cell, or a value typed over a computed one, goes into the note
@@ -459,7 +469,7 @@ extension EditorController {
         recalculateEditedTable()
         guard let editor = tableEditor, let location = styler.editingTableLocation, let parts = tableParts(at: location),
               let grid = TableFormulaUI.grid(of: parts.table)?.grid else { return nil }
-        let at = TableFormulas.Cell(row: cell.row + 1, column: cell.column + 1)
+        let at = Self.formulaCell(cell)
         guard text.hasPrefix("=") else {
             let formulas = ExcelFormulas.removing(from: at, to: at, in: parts.formulas, grid: grid)
             setTableFormulas(formulas, table: editor.markdown, actionName: "Typing")
@@ -484,7 +494,7 @@ extension EditorController {
         let from: TableEditorView.Cell = editor.selection.map { s in (min(s.anchor.row, s.head.row), min(s.anchor.column, s.head.column)) } ?? editor.focus
         let to = editor.selection.map { s in down ? max(s.anchor.row, s.head.row) : max(s.anchor.column, s.head.column) }
         let through = to.flatMap { $0 > (down ? from.row : from.column) ? $0 + 1 : nil }
-        switch ExcelFormulas.filling(from: TableFormulas.Cell(row: from.row + 1, column: from.column + 1), down: down, through: through,
+        switch ExcelFormulas.filling(from: Self.formulaCell(from), down: down, through: through,
                                      grid: grid, formulaLines: parts.formulas, variables: NoteVariables.parse(noteText: storage.string)) {
         case .failure(let e):
             NSSound.beep()
@@ -504,7 +514,7 @@ extension EditorController {
         }
         guard let draft, let location = styler.editingTableLocation, let parts = tableParts(at: location),
               let grid = TableFormulaUI.grid(of: parts.table)?.grid else { return hideFormulaHint() }
-        let at = TableFormulas.Cell(row: draft.cell.row + 1, column: draft.cell.column + 1)
+        let at = Self.formulaCell(draft.cell)
         let stored = ExcelFormulas.formula(at: at, grid: grid, formulaLines: parts.formulas)
         let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.hasPrefix("=") else {
@@ -667,9 +677,8 @@ extension EditorController {
 
     private func deleteEditedTable() {
         guard let location = styler.editingTableLocation, let i = styler.blockIndex(containing: location) else { return }
-        var range = styler.blocks[i].range
         // Its formula lines go with it.
-        if i + 1 < styler.blocks.count, case .tableFormulas = styler.blocks[i + 1].kind { range = NSUnionRange(range, styler.blocks[i + 1].range) }
+        let range = rangeWithFormulas(ofBlock: i)
         endTableEditing()
         replace(range, with: "", select: NSRange(location: range.location, length: 0), actionName: "Delete Table")
     }
@@ -694,8 +703,7 @@ extension EditorController {
         textView.window?.makeFirstResponder(textView)
         if caretAfter, let i = styler.blockIndex(containing: location) {
             // Past the formula lines too, so leaving the table doesn't open their source.
-            var end = NSMaxRange(styler.blocks[i].range)
-            if i + 1 < styler.blocks.count, case .tableFormulas = styler.blocks[i + 1].kind { end = NSMaxRange(styler.blocks[i + 1].range) }
+            let end = NSMaxRange(rangeWithFormulas(ofBlock: i))
             textView.setSelectedRange(NSRange(location: min(end, storage.length), length: 0))
         } else if caretBefore {
             textView.setSelectedRange(NSRange(location: max(0, location - 1), length: 0))
