@@ -80,19 +80,21 @@ final class FindBarHost: NSView, NSTextFinderBarContainer {
         textView?.enclosingScrollView
     }
 
+    private static let inset: CGFloat = 6
+
     private func layoutBar() {
         guard let bar = findBarView else { return }
-        let inset: CGFloat = 6
-        let height = bar.frame.height
-        heightConstraint.constant = height + inset * 2
+        heightConstraint.constant = bar.frame.height + Self.inset * 2
         superview?.layoutSubtreeIfNeeded()
-        bar.frame = NSRect(x: inset, y: inset, width: max(content.bounds.width - inset * 2, 100), height: height)
+        placeBar(bar)
+    }
+
+    private func placeBar(_ bar: NSView) {
+        bar.frame = NSRect(x: Self.inset, y: Self.inset, width: max(content.bounds.width - Self.inset * 2, 100), height: bar.frame.height)
     }
 
     override func layout() {
         super.layout()
-        if let bar = findBarView {
-            bar.frame = NSRect(x: 6, y: 6, width: max(content.bounds.width - 12, 100), height: bar.frame.height)
-        }
+        if let bar = findBarView { placeBar(bar) }
     }
 }

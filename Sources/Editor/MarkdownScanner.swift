@@ -145,13 +145,6 @@ enum BlockKind: Hashable {
     case footnote(label: String, markerLength: Int)
     /// An Obsidian comment, `%% … %%`, on lines of its own (it may span several).
     case comment
-
-    var isMultiLine: Bool {
-        switch self {
-        case .frontmatter, .code, .math, .comment: true
-        default: false
-        }
-    }
 }
 
 /// A styling unit: one line, or a fenced region (code, math, frontmatter).

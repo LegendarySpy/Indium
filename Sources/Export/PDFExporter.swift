@@ -1,10 +1,6 @@
 import AppKit
 import PDFKit
 
-/// Typesets a note onto pages using the exact styling and drawing code of the editor.
-/// Lines are laid out at the editor's column width and the whole page is scaled to
-/// the paper, so line breaks match what you saw while writing. Text and equations
-/// stay vector; nothing is rasterized.
 /// Choices offered when exporting; remembered between exports.
 struct PDFOptions {
     enum Appearance: String, CaseIterable { case light, dark, editor }
@@ -40,6 +36,10 @@ struct PDFOptions {
     }
 }
 
+/// Typesets a note onto pages using the exact styling and drawing code of the editor.
+/// Lines are laid out at the editor's column width and the whole page is scaled to
+/// the paper, so line breaks match what you saw while writing. Text and equations
+/// stay vector; nothing is rasterized.
 enum PDFExporter {
     private static let margin: CGFloat = 64
 

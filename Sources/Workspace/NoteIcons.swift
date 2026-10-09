@@ -296,8 +296,6 @@ final class NoteIcons {
         }
     }
 
-    private struct ModelError: Error {}
-
     private static func ask(title: String, opening: String, current: String?) async throws -> String {
         #if DEBUG
         if let stub = Stub.current { return try await stub.answer(current: current) }
@@ -326,6 +324,8 @@ final class NoteIcons {
     }
 
     #if DEBUG
+    private struct ModelError: Error {}
+
     /// `-IndiumIconStub success:star|same|fail|unavailable|slow[:star]` stands in for the
     /// model so every state can be exercised without Apple Intelligence.
     /// `-IndiumIconStubDelay 2` sets how long it "thinks" (default 1s, slow 4s).

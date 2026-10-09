@@ -10,7 +10,8 @@ import AppKit
 final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidations {
     typealias Cell = (row: Int, column: Int)
 
-    /// Cell text as you see it while editing: Markdown, with pipes unescaped.
+    /// Cell text as you see it while editing: Markdown, with `\|` as `|` and `<br>` as
+    /// a line break (`TableSpec.escapeCell` writes them back).
     var header: [String]
     var body: [[String]]
     var alignments: [Int]
@@ -81,8 +82,8 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
 
     init(render: TableRender) {
         self.render = render
-        header = render.spec.header.map(Self.unescape)
-        body = render.spec.body.map { $0.map(Self.unescape) }
+        header = render.spec.header.map(TableSpec.unescapeCell)
+        body = render.spec.body.map { $0.map(TableSpec.unescapeCell) }
         alignments = render.spec.alignments
         dashes = render.spec.widthFractions != nil ? render.spec.dashes : nil
         super.init(frame: NSRect(x: 0, y: 0, width: render.width + Self.margin, height: render.height + Self.margin))
@@ -123,12 +124,6 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
                            alignments: alignments, dashes: dashes)
     }
 
-    /// `a \| b` in the file is `a | b` in the cell, `a<br>b` two lines; they're written
-    /// back the same way (`TableSpec.escapeCell`).
-    private static func unescape(_ text: String) -> String {
-        TableSpec.unescapeCell(text)
-    }
-
     /// Adopts a fresh layout after the note re-rendered the table.
     func update(render: TableRender) {
         self.render = render
@@ -143,8 +138,8 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     /// Takes on the note's version of the table when it changed underneath (undo, redo,
     /// another app). Text that only differs by spaces at its ends is left as typed.
     private func adopt(_ spec: TableSpec) {
-        let newHeader = spec.header.map(Self.unescape)
-        let newBody = spec.body.map { $0.map(Self.unescape) }
+        let newHeader = spec.header.map(TableSpec.unescapeCell)
+        let newBody = spec.body.map { $0.map(TableSpec.unescapeCell) }
         let newColumns = max(spec.alignments.count, spec.rows.map(\.count).max() ?? 0, 1)
         func cell(_ r: Int, _ c: Int) -> String {
             let row = r == 0 ? newHeader : newBody[r - 1]
@@ -929,9 +924,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
             insertReference(from: start, to: start, in: editor)
             while let next = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]), next.type == .leftMouseDragged {
                 autoscroll(with: next)
-                let q = convert(next.locationInWindow, from: nil)
-                let inside = NSPoint(x: min(max(q.x, 0), max(render.width - 1, 0)), y: min(max(q.y, 0), max(render.height - 1, 0)))
-                insertReference(from: start, to: render.cell(at: inside) ?? start, in: editor)
+                insertReference(from: start, to: nearestCell(to: next) ?? start, in: editor)
             }
             return
         }
@@ -952,9 +945,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         // Dragging selects text inside the cell; leaving it selects cells instead.
         while let next = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]), next.type == .leftMouseDragged {
             autoscroll(with: next)
-            let q = convert(next.locationInWindow, from: nil)
-            let inside = NSPoint(x: min(max(q.x, 0), max(render.width - 1, 0)), y: min(max(q.y, 0), max(render.height - 1, 0)))
-            let over = render.cell(at: inside) ?? start
+            let over = nearestCell(to: next) ?? start
             if selecting || over != start {
                 selecting = true
                 select(from: start, to: over)
@@ -964,6 +955,12 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
                 editor.setSelectedRange(NSRange(location: lo, length: hi - lo))
             }
         }
+    }
+
+    /// The cell under a drag, or the edge cell nearest to it once it leaves the grid.
+    private func nearestCell(to event: NSEvent) -> Cell? {
+        let p = convert(event.locationInWindow, from: nil)
+        return render.cell(at: NSPoint(x: min(max(p.x, 0), max(render.width - 1, 0)), y: min(max(p.y, 0), max(render.height - 1, 0))))
     }
 
     private func characterIndex(in editor: NSTextView, at windowPoint: NSPoint) -> Int {
@@ -1424,10 +1421,6 @@ final class TableEdgeStrip: NSView {
 
 /// The glass bar shown above a table while editing it.
 final class TableToolbarView: NSView {
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .arrow)
-    }
-
     var onAddRow: (() -> Void)?
     var onAddColumn: (() -> Void)?
     var onAlign: ((Int) -> Void)?
@@ -1577,6 +1570,7 @@ final class TableToolbarView: NSView {
         button.setAccessibilityLabel(title)
     }
 
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .arrow) }
     override func cursorUpdate(with event: NSEvent) { NSCursor.arrow.set() }
 
     private func divider() -> NSView {

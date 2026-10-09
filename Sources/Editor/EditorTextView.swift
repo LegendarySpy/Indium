@@ -216,12 +216,10 @@ final class EditorTextView: NSTextView {
         return super.performDragOperation(sender)
     }
 
-    // MARK: Keys
+    // MARK: Drawing
 
-    /// Soft suggestion drawn after the caret (slash commands).
+    /// Soft suggestion drawn after the caret: a slash command or a quick answer.
     var ghost: String? { didSet { if ghost != oldValue { needsDisplay = true } } }
-    /// A computed answer (drawn like any other suggestion: soft gray after the caret).
-    var ghostIsAnswer = false
 
     /// Where each exported page after the first begins (character offsets), shown as
     /// dashed lines when Show Page Lines is on.
@@ -265,6 +263,8 @@ final class EditorTextView: NSTextView {
         let point = NSPoint(x: origin.x + box.maxX + 1, y: origin.y + frag.minY + baseline - font.ascender)
         (ghost as NSString).draw(at: point, withAttributes: [.font: font, .foregroundColor: Palette.tertiaryText])
     }
+
+    // MARK: Keys
 
     override func moveUp(_ sender: Any?) {
         if editor?.handleSlashKey(#selector(moveUp(_:))) == true { return }

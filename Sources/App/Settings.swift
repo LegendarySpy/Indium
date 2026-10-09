@@ -63,7 +63,7 @@ enum SyntaxVisibility: String, CaseIterable, Identifiable {
     }
 }
 
-/// The whole preference surface of the app. Deliberately tiny.
+/// The app's preferences.
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
     static let textSizes: ClosedRange<Double> = 14...22

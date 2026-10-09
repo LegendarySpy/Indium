@@ -19,7 +19,7 @@ enum IconImport {
     /// The direct-download build's icons.json, outside the container.
     static var directStore: URL? {
         #if DEBUG
-        // Test builds only ever look at a fixture (`-IndiumDirectIconStore /tmp/x/icons.json`).
+        // Debug builds never read the real file, only one named by `-IndiumDirectIconStore`.
         return UserDefaults.standard.string(forKey: "IndiumDirectIconStore").map { URL(fileURLWithPath: $0) }
         #else
         guard let home = getpwuid(getuid())?.pointee.pw_dir else { return nil }
@@ -37,7 +37,7 @@ enum IconImport {
         let data: Data
         do {
             data = try Data(contentsOf: source)
-        } catch let error as NSError where isPermissionError(error) {
+        } catch let error as NSError where FolderAccess.isPermissionError(error) {
             FolderAccess.log("icons: read refused (\(error.domain) \(error.code)), offer: \(usedDirectBuild)")
             d.set(usedDirectBuild ? "pending" : "refused", forKey: stateKey)
             return
@@ -114,14 +114,6 @@ enum IconImport {
     private static func importIcons(_ data: Data) throws -> Int {
         let icons = try JSONDecoder().decode([String: [String: String]].self, from: data)
         return try NoteIcons.shared.merge(icons)
-    }
-
-    private static func isPermissionError(_ error: Error) -> Bool {
-        let ns = error as NSError
-        if ns.domain == NSCocoaErrorDomain, ns.code == NSFileReadNoPermissionError { return true }
-        if ns.domain == NSPOSIXErrorDomain, ns.code == Int(EPERM) || ns.code == Int(EACCES) { return true }
-        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? Error { return isPermissionError(underlying) }
-        return false
     }
 }
 #endif

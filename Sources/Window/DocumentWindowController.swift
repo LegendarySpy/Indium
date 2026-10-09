@@ -169,7 +169,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             if event.window === self?.window { self?.titleBar.setChromeVisible(true) }
             return event
         } as Any)
-
     }
 
     private func wireEditor() {
@@ -221,7 +220,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     /// Asks for the note's folder, remembers it (so reopening this note later needs no
     /// panel) and keeps it open while this window shows the note.
-    @objc func grantFolderAccess() {
+    private func grantFolderAccess() {
         guard let folder = note?.url?.deletingLastPathComponent() else { return }
         guard let lease = FolderAccess.requestFolder(
             folder, message: "Allow Indium to read “\(folder.lastPathComponent)” so the images beside this note show. Click Grant Access.",
@@ -413,7 +412,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         noteOrder.append(key)
         if noteOrder.count > 24 { noteCache.removeValue(forKey: noteOrder.removeFirst()) }
 
-        // Switching notes is instant: no transition between pages.
         // A note whose edits couldn't be saved stays until that's resolved (the editor
         // shows why and what you can do).
         if editor.note !== note, !editor.load(note) { return }
@@ -718,7 +716,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     @objc func setHeading2(_ sender: Any?) { editor.setHeading(2) }
     @objc func setHeading3(_ sender: Any?) { editor.setHeading(3) }
 
-
     @objc func insertImage(_ sender: Any?) {
         guard let window else { return }
         let panel = NSOpenPanel()
@@ -839,7 +836,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
-    func discardAndClose() {
+    private func discardAndClose() {
         editor.load(nil, discardingEdits: true)
         window?.close()
     }
@@ -872,7 +869,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         // folder beside it, which the App Store build may only write once you allow
         // that folder too (inside the open vault it already can).
         var folderAccess: FolderAccess.Lease?
-        let ws = self.workspace.flatMap { $0.contains(url) ? $0 : nil }
+        let ws = workspace.flatMap { $0.contains(url) ? $0 : nil }
         if FolderAccess.isSandboxed, ws == nil, !note.memoryImages.isEmpty {
             let parent = url.deletingLastPathComponent()
             folderAccess = FolderAccess.requestFolder(
@@ -887,7 +884,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             }
         }
         do {
-            var text = self.editor.text
+            var text = editor.text
             let root = ws?.root ?? url.deletingLastPathComponent()
             let folder = ws?.attachmentFolder(for: url) ?? root.appendingPathComponent("attachments")
             for (path, data) in note.memoryImages {
@@ -901,12 +898,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             }
             try note.becomePermanent(at: url, text: text)
             withExtendedLifetime(folderAccess) {}
-            if closeAfter {
-                self.editor.load(nil, discardingEdits: true)
-                window.close()
-            } else {
-                window.close()
-            }
+            if closeAfter { editor.load(nil, discardingEdits: true) }
+            window.close()
             if let ws, ws.contains(url) {
                 ws.rescanNow()
                 AppDelegate.shared.openInMainWindow(url)

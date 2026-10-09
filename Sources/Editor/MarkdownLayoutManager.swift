@@ -12,6 +12,11 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     var floatFrames: [Int: NSRect] = [:]
     /// A floating table being edited is drawn by its editor instead.
     var hiddenFloat: Int?
+    var typoParagraphGap: CGFloat = 5
+    var captionFont = NSFont.systemFont(ofSize: 13)
+    /// The text view's selection, so rendered blocks (tables, equations, images) can show
+    /// they're selected with a tint instead of revealing their source.
+    var selectedRanges: [NSRange] = []
 
     override init() {
         super.init()
@@ -285,7 +290,6 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
             let last = glyphIndexForCharacter(at: max(full.location, NSMaxRange(full) - 1))
             guard let container = textContainer(forGlyphAt: first, effectiveRange: nil) else { return }
             let top = lineFragmentUsedRect(forGlyphAt: first, effectiveRange: nil)
-            let bottom = lineFragmentRect(forGlyphAt: last, effectiveRange: nil)
             let used = lineFragmentUsedRect(forGlyphAt: last, effectiveRange: nil)
             let col = contentColumn(glyph: first, container: container, origin: origin)
             let pad = embed.padding
@@ -411,12 +415,6 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         }
     }
 
-    var typoParagraphGap: CGFloat = 5
-    var captionFont = NSFont.systemFont(ofSize: 13)
-    /// The text view's selection, so rendered blocks (tables, equations, images) can show
-    /// they're selected with a tint instead of revealing their source.
-    var selectedRanges: [NSRange] = []
-
     private func drawInlineBoxes(in chars: NSRange, storage: NSTextStorage, origin: NSPoint) {
         storage.enumerateAttribute(.mdInlineBox, in: chars) { value, range, _ in
             guard let box = value as? InlineBox else { return }
@@ -467,7 +465,7 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
             let cx = origin.x + glyphBox.midX
             let cy = origin.y + frag.minY + loc.y - font.xHeight / 2
             let circle = NSRect(x: cx - d / 2, y: cy - d / 2, width: d, height: d)
-            let color = (storage.attribute(.foregroundColor, at: max(NSMaxRange(range), 0) < storage.length ? NSMaxRange(range) : range.location,
+            let color = (storage.attribute(.foregroundColor, at: NSMaxRange(range) < storage.length ? NSMaxRange(range) : range.location,
                                            effectiveRange: nil) as? NSColor) ?? Palette.text
             let bulletColor = color.withAlphaComponent(color.alphaComponent * 0.75)
             switch depth % 3 {
@@ -650,53 +648,51 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     }
 
     private func drawBlock(_ deco: BlockDecoration, range: NSRange, area: NSRect, content: NSRect) {
-        do {
-            defer {
-                if deco.placement != .below, selectedRanges.contains(where: { $0.length > 0 && NSIntersectionRange($0, range).length > 0 }) {
-                    NSColor.selectedTextBackgroundColor.withAlphaComponent(0.35).setFill()
-                    NSBezierPath(roundedRect: content.insetBy(dx: -4, dy: -4), xRadius: 9, yRadius: 9).fill()
-                }
+        defer {
+            if deco.placement != .below, selectedRanges.contains(where: { $0.length > 0 && NSIntersectionRange($0, range).length > 0 }) {
+                NSColor.selectedTextBackgroundColor.withAlphaComponent(0.35).setFill()
+                NSBezierPath(roundedRect: content.insetBy(dx: -4, dy: -4), xRadius: 9, yRadius: 9).fill()
             }
-            switch deco.content {
-            case let .math(render, _):
-                let scale = content.width / max(render.width, 1)
-                render.draw(baselineAt: NSPoint(x: content.minX, y: content.minY + render.ascent * scale),
-                            color: Palette.text, scale: scale)
-            case let .table(table):
-                table.draw(in: content)
-            case let .image(image, _, caption, name):
-                if let image, !(image is UnreadableImage) {
-                    NSGraphicsContext.saveGraphicsState()
-                    let path = NSBezierPath(roundedRect: content, xRadius: 6, yRadius: 6)
-                    path.addClip()
-                    image.draw(in: content, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true,
-                               hints: [.interpolation: NSNumber(value: NSImageInterpolation.high.rawValue)])
-                    NSGraphicsContext.restoreGraphicsState()
-                    Palette.separator.setStroke()
-                    let border = NSBezierPath(roundedRect: content.insetBy(dx: 0.25, dy: 0.25), xRadius: 6, yRadius: 6)
-                    border.lineWidth = 0.5
-                    border.stroke()
-                } else {
-                    Palette.fill.setFill()
-                    NSBezierPath(roundedRect: content, xRadius: 6, yRadius: 6).fill()
-                    let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: Palette.tertiaryText]
-                    let label = (image is UnreadableImage ? "Indium doesn't have access to this image · \(name)" : "Image not found · \(name)") as NSString
-                    let size = label.size(withAttributes: attrs)
-                    label.draw(at: NSPoint(x: content.midX - size.width / 2, y: content.midY - size.height / 2), withAttributes: attrs)
-                }
-                if deco.isSelected {
-                    Palette.accentRing.setStroke()
-                    let ring = NSBezierPath(roundedRect: content.insetBy(dx: -3, dy: -3), xRadius: 8, yRadius: 8)
-                    ring.lineWidth = 2
-                    ring.stroke()
-                }
-                if let caption {
-                    let style = NSMutableParagraphStyle()
-                    style.alignment = .center
-                    let attrs: [NSAttributedString.Key: Any] = [.font: captionFont, .foregroundColor: Palette.secondaryText, .paragraphStyle: style]
-                    let rect = NSRect(x: area.minX, y: content.maxY + 8, width: area.width, height: captionFont.lineHeight + 2)
-                    (caption as NSString).draw(in: rect, withAttributes: attrs)
-                }
+        }
+        switch deco.content {
+        case let .math(render, _):
+            let scale = content.width / max(render.width, 1)
+            render.draw(baselineAt: NSPoint(x: content.minX, y: content.minY + render.ascent * scale),
+                        color: Palette.text, scale: scale)
+        case let .table(table):
+            table.draw(in: content)
+        case let .image(image, _, caption, name):
+            if let image, !(image is UnreadableImage) {
+                NSGraphicsContext.saveGraphicsState()
+                let path = NSBezierPath(roundedRect: content, xRadius: 6, yRadius: 6)
+                path.addClip()
+                image.draw(in: content, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true,
+                           hints: [.interpolation: NSNumber(value: NSImageInterpolation.high.rawValue)])
+                NSGraphicsContext.restoreGraphicsState()
+                Palette.separator.setStroke()
+                let border = NSBezierPath(roundedRect: content.insetBy(dx: 0.25, dy: 0.25), xRadius: 6, yRadius: 6)
+                border.lineWidth = 0.5
+                border.stroke()
+            } else {
+                Palette.fill.setFill()
+                NSBezierPath(roundedRect: content, xRadius: 6, yRadius: 6).fill()
+                let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: Palette.tertiaryText]
+                let label = (image is UnreadableImage ? "Indium doesn't have access to this image · \(name)" : "Image not found · \(name)") as NSString
+                let size = label.size(withAttributes: attrs)
+                label.draw(at: NSPoint(x: content.midX - size.width / 2, y: content.midY - size.height / 2), withAttributes: attrs)
+            }
+            if deco.isSelected {
+                Palette.accentRing.setStroke()
+                let ring = NSBezierPath(roundedRect: content.insetBy(dx: -3, dy: -3), xRadius: 8, yRadius: 8)
+                ring.lineWidth = 2
+                ring.stroke()
+            }
+            if let caption {
+                let style = NSMutableParagraphStyle()
+                style.alignment = .center
+                let attrs: [NSAttributedString.Key: Any] = [.font: captionFont, .foregroundColor: Palette.secondaryText, .paragraphStyle: style]
+                let rect = NSRect(x: area.minX, y: content.maxY + 8, width: area.width, height: captionFont.lineHeight + 2)
+                (caption as NSString).draw(in: rect, withAttributes: attrs)
             }
         }
     }

@@ -74,10 +74,9 @@ extension EditorController {
             default: return nil
             }
         }
-        guard content.count == 1, let block = content.first else { return nil }
+        guard content.count == 1 else { return nil }
         var body = group.text
         if right != nil, let newline = body.firstIndex(of: "\n") { body = String(body[body.index(after: newline)...]) }
-        _ = block
         return (group, body, right)
     }
 
@@ -102,6 +101,18 @@ extension EditorController {
         return (region, group, c == 1, region.columns[1 - c].groups)
     }
 
+    private static func floatMarker(right: Bool) -> String {
+        "<!-- float \(right ? "right" : "left") -->\n"
+    }
+
+    /// `replace`, with the page left where it was scrolled.
+    private func replaceKeepingScroll(_ range: NSRange, with text: String, select: NSRange, actionName: String) {
+        let offset = scrollView.contentView.bounds.origin
+        replace(range, with: text, select: select, actionName: actionName)
+        scrollView.contentView.scroll(to: offset)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
     /// Column widths dragged for another context (full width, a column) don't carry
     /// over when a table starts floating: it starts at its natural size.
     private func naturalWidths(_ text: String) -> String {
@@ -121,23 +132,20 @@ extension EditorController {
         endTableEditing()
         var edit: (range: NSRange, text: String, body: String, bodyOffset: Int)?
         if let side, let w = wrappable([group]) {
-            let marker = "<!-- float \(side ? "right" : "left") -->\n"
+            let marker = Self.floatMarker(right: side)
             let table = naturalWidths(w.group.text)
             let text = ([marker + table] + w.rest.map(\.text)).joined(separator: "\n\n")
             edit = (w.region.range, text, table, (marker as NSString).length)
         } else if let f = floatable([group]) {
-            let marker = side.map { "<!-- float \($0 ? "right" : "left") -->\n" } ?? ""
+            let marker = side.map(Self.floatMarker) ?? ""
             let body = side != nil && f.right == nil ? naturalWidths(f.body) : f.body
             edit = (f.group.range, marker + body, body, (marker as NSString).length)
         } else if side == nil, let unwrap = layoutModel.unwrapRegion(containing: group) {
             edit = (unwrap.range, unwrap.text, group.text, (unwrap.text as NSString).range(of: group.text).location)
         }
         guard let edit else { NSSound.beep(); return }
-        let offset = scrollView.contentView.bounds.origin
-        replace(edit.range, with: edit.text, select: NSRange(location: edit.range.location + max(edit.bodyOffset, 0), length: 0),
-                actionName: side == nil ? "Full Width" : "Wrap Text")
-        scrollView.contentView.scroll(to: offset)
-        scrollView.reflectScrolledClipView(scrollView.contentView)
+        replaceKeepingScroll(edit.range, with: edit.text, select: NSRange(location: edit.range.location + max(edit.bodyOffset, 0), length: 0),
+                             actionName: side == nil ? "Full Width" : "Wrap Text")
         // Keep editing the same table in its new place.
         let tableStart = edit.range.location + max(edit.bodyOffset, 0)
         if let i = styler.blockIndex(containing: tableStart), case .table = styler.blocks[i].kind {
@@ -147,15 +155,12 @@ extension EditorController {
 
     private func performFloatAction(_ action: SelectionBarView.Action, groups: [LayoutGroup]) -> Bool {
         if action == .wrap, let w = wrappable(groups) {
-            let marker = "<!-- float \(w.right ? "right" : "left") -->\n"
+            let marker = Self.floatMarker(right: w.right)
             let table = naturalWidths(w.group.text)
             let text = ([marker + table] + w.rest.map(\.text)).joined(separator: "\n\n")
-            let offset = scrollView.contentView.bounds.origin
-            replace(w.region.range, with: text,
-                    select: NSRange(location: w.region.range.location + (marker as NSString).length, length: (table as NSString).length),
-                    actionName: "Wrap Text")
-            scrollView.contentView.scroll(to: offset)
-            scrollView.reflectScrolledClipView(scrollView.contentView)
+            replaceKeepingScroll(w.region.range, with: text,
+                                 select: NSRange(location: w.region.range.location + (marker as NSString).length, length: (table as NSString).length),
+                                 actionName: "Wrap Text")
             updateSelectionBar()
             return true
         }
@@ -165,7 +170,7 @@ extension EditorController {
         case .wrap:
             return false
         case .left, .right:
-            text = "<!-- float \(action == .right ? "right" : "left") -->\n" + (f.right == nil ? naturalWidths(f.body) : f.body)
+            text = Self.floatMarker(right: action == .right) + (f.right == nil ? naturalWidths(f.body) : f.body)
             name = action == .right ? "Place Right" : "Place Left"
         case .fullWidth:
             guard f.right != nil else { return false }
@@ -173,16 +178,13 @@ extension EditorController {
             name = "Full Width"
         case .swap:
             guard let right = f.right else { return false }
-            text = "<!-- float \(right ? "left" : "right") -->\n" + f.body
+            text = Self.floatMarker(right: !right) + f.body
             name = "Swap Sides"
         }
         let ns = text as NSString
         let markerLength = text.hasPrefix("<!--") ? ns.range(of: "\n").location + 1 : 0
-        let offset = scrollView.contentView.bounds.origin
-        replace(f.group.range, with: text, select: NSRange(location: f.group.range.location + markerLength, length: ns.length - markerLength),
-                actionName: name)
-        scrollView.contentView.scroll(to: offset)
-        scrollView.reflectScrolledClipView(scrollView.contentView)
+        replaceKeepingScroll(f.group.range, with: text, select: NSRange(location: f.group.range.location + markerLength, length: ns.length - markerLength),
+                             actionName: name)
         updateSelectionBar()
         return true
     }
@@ -216,10 +218,7 @@ extension EditorController {
             ? NSRange(location: edit.range.location + inner.location, length: inner.length)
             : NSRange(location: edit.range.location, length: 0)
         // Stay where the reader was; only nudge if the moved block went out of view.
-        let offset = scrollView.contentView.bounds.origin
-        replace(edit.range, with: edit.text, select: select, actionName: name)
-        scrollView.contentView.scroll(to: offset)
-        scrollView.reflectScrolledClipView(scrollView.contentView)
+        replaceKeepingScroll(edit.range, with: edit.text, select: select, actionName: name)
         textView.scrollRangeToVisible(select)
         updateSelectionBar()
     }
@@ -267,11 +266,7 @@ extension EditorController {
 
     /// Rendered tables on screen (text view coordinates), floating ones first.
     func visibleTables() -> [(location: Int, content: NSRect, headerHeight: CGFloat)] {
-        guard let container = textView.textContainer else { return [] }
-        let origin = textView.textContainerOrigin
-        let visible = textView.visibleRect.offsetBy(dx: -origin.x, dy: -origin.y)
-        let chars = layoutManager.characterRange(forGlyphRange: layoutManager.glyphRange(forBoundingRect: visible, in: container), actualGlyphRange: nil)
-        return (layoutManager.floatBlocks(origin: origin) + layoutManager.blockRects(in: chars, origin: origin)).compactMap { block in
+        visibleBlocks().compactMap { block in
             guard case let .table(table) = block.decoration.content, block.decoration.placement != .below else { return nil }
             return (block.range.location, block.content, table.rowHeights.first ?? 30)
         }
@@ -468,10 +463,7 @@ extension EditorController {
             if case .table = block.kind { return NSLocationInRange(block.range.location, group.range) }
             return false
         }
-        let offset = scrollView.contentView.bounds.origin
-        replace(edit.range, with: edit.text, select: NSRange(location: edit.range.location + edit.movedOffset, length: 0),
-                actionName: isTable ? "Move Table" : "Move Block")
-        scrollView.contentView.scroll(to: offset)
-        scrollView.reflectScrolledClipView(scrollView.contentView)
+        replaceKeepingScroll(edit.range, with: edit.text, select: NSRange(location: edit.range.location + edit.movedOffset, length: 0),
+                             actionName: isTable ? "Move Table" : "Move Block")
     }
 }

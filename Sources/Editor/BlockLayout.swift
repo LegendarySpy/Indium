@@ -148,13 +148,13 @@ struct LayoutModel {
         let lo = min(src, dst), hi = max(src, dst)
         var slice = Array(items[lo...hi])
 
-        // 1. Take the dragged block out of wherever it lives.
+        // Take the dragged block out of wherever it lives.
         slice.removeAll { if case let .group(g) = $0 { return g === dragged }; return false }
         for case let .region(r) in slice {
             for column in r.columns { column.groups.removeAll { $0 === dragged } }
         }
 
-        // 2. Tidy regions: empty columns go; a single remaining column becomes full width.
+        // Empty columns go; a single remaining column becomes full width.
         func normalize() {
             var out: [LayoutItem] = []
             for item in slice {
@@ -172,7 +172,7 @@ struct LayoutModel {
         }
         normalize()
 
-        // 3. Put it back next to, or beside, the anchor.
+        // Put it back next to, or beside, the anchor.
         var placed = false
         for (k, item) in slice.enumerated() where !placed {
             switch item {
@@ -208,7 +208,6 @@ struct LayoutModel {
         }
         guard placed else { return nil }
 
-        // 4. Serialize the rewritten span.
         var text = ""
         var movedOffset = 0
         for (k, item) in slice.enumerated() {
@@ -281,7 +280,7 @@ struct LayoutModel {
 
 // MARK: - Views
 
-/// The grip that appears beside a block on hover.
+/// The grip that appears beside a table's header on hover.
 final class BlockHandleView: NSView {
     static let size = NSSize(width: 18, height: 24)
     var onDrag: ((NSEvent) -> Void)?

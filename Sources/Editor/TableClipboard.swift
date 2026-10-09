@@ -124,7 +124,6 @@ enum TableClipboard {
             .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
     }
 
-
     /// HTML for copied note text that holds a table, so documents and mail paste a real
     /// table instead of pipes. nil when there's no table in it (plain text is enough).
     static func noteHTML(_ markdown: String) -> String? {
@@ -280,6 +279,9 @@ enum TableClipboard {
         return rows.map { $0 + Array(repeating: "", count: width - $0.count) }
     }
 
+    /// Tags that end a line of a cell's text.
+    private static let blockTags: Set<String> = ["p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6"]
+
     private static func matches(_ pattern: String, in text: String) -> [[String]] {
         let ns = text as NSString
         return (try! NSRegularExpression(pattern: pattern)).matches(in: text, range: NSRange(location: 0, length: ns.length)).map { m in
@@ -329,7 +331,7 @@ enum TableClipboard {
                     for entry in stack[k...].reversed() { close(entry) }
                     stack.removeSubrange(k...)
                 }
-                if ["p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6"].contains(name), !out.isEmpty, !out.hasSuffix("\n") { out += "\n" }
+                if blockTags.contains(name), !out.isEmpty, !out.hasSuffix("\n") { out += "\n" }
                 continue
             }
             switch name {
@@ -361,7 +363,7 @@ enum TableClipboard {
                 closer = String(opener.reversed())
             default: break
             }
-            if ["p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6"].contains(name), !out.isEmpty, !out.hasSuffix("\n") { out += "\n" }
+            if blockTags.contains(name), !out.isEmpty, !out.hasSuffix("\n") { out += "\n" }
             if attrs.hasSuffix("/") { continue }
             stack.append((name, closer, out.count, opener.count))
             out += opener

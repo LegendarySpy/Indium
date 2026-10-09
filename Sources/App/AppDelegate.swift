@@ -79,7 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         FolderAccess.log("panel shown: first run")
         var chosen: URL?
         #if DEBUG
-        // `-IndiumPanelDirectory /tmp/x`: tests open the panel on their fixture folder.
+        // `-IndiumPanelDirectory /tmp/x`: tests open the panel on a folder of their own.
         if let dir = d.string(forKey: "IndiumPanelDirectory") { panel.directoryURL = URL(fileURLWithPath: dir, isDirectory: true) }
         if d.bool(forKey: "IndiumNoAccessPanels") {
             FolderAccess.log("panel suppressed: first run")

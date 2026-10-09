@@ -470,8 +470,6 @@ final class MarkdownStyler {
         ceil((string as NSString).size(withAttributes: [.font: font]).width)
     }
 
-    // MARK: Columns
-
     /// Footnote texts by label, shown when the pointer rests on a reference.
     private var footnotes: [String: String] = [:]
 
@@ -560,6 +558,8 @@ final class MarkdownStyler {
         let content = NSRange(location: NSMaxRange(marker), length: first.length - marker.length)
         inline(content, in: s, font: { self.typo.text(bold: $0, italic: $1) }, color: Palette.text)
     }
+
+    // MARK: Columns and floats
 
     private func computeRegions() {
         computeCallouts()
@@ -702,7 +702,7 @@ final class MarkdownStyler {
             // Layout markers are arranged from the page, never typed over: they only
             // show when the writer asked to always see Markdown.
             if config.printing || config.syntax != .always || !touches(first) {
-                collapse(r, in: s, height: currentCell == nil ? 1 : 1)
+                collapse(r, in: s)
             } else {
                 let font = NSFont.monospacedSystemFont(ofSize: round(typo.size * 0.72), weight: .regular)
                 s.addAttributes([.font: font, .foregroundColor: Palette.syntax,
@@ -1270,9 +1270,7 @@ final class MarkdownStyler {
                     attrs[.underlineColor] = Palette.linkUnderline
                 }
                 deferred.append((span.content, attrs))
-                for m in span.markers where m.length > 0 {
-                    deferred.append((m, hide ? [.mdHidden: true] : [.foregroundColor: Palette.syntax]))
-                }
+                styleMarkers()
             case let .wiki(target):
                 var attrs: [NSAttributedString.Key: Any] = [.foregroundColor: Palette.link]
                 if hide, let link = Self.wikiURL(target) {

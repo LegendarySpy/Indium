@@ -605,7 +605,6 @@ final class MathEditor {
         let before = text.substring(with: NSRange(location: span.content.location, length: caret - span.content.location))
         if !argument(in: span, at: caret).words,
            let expansion = snippet(before: before, context: .math(display: span.display), auto: false) {
-            textView.breakUndoCoalescing()
             separateUndo()
             applyExpansion(expansion.text, stops: expansion.stops, copies: expansion.copies,
                            replacing: NSRange(location: caret - expansion.length, length: expansion.length), undoSelection: sel)
@@ -888,7 +887,6 @@ final class MathEditor {
             path.lineWidth = 1
             path.stroke()
         }
-        guard !mathStops.isEmpty else { return }
         for stop in mathStops {
             guard let rect = markRect(stop) else { continue }
             if stop.length == 0 {

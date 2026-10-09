@@ -359,7 +359,7 @@ final class SidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate,
                        symbol: item.isFolder ? nil : NoteIcons.shared.icon(for: item.url, in: workspace))
     }
 
-    // Dragging notes and folders between folders.
+    // MARK: Dragging between folders
 
     func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
         (item as? SidebarItem)?.url as NSURL?
@@ -609,14 +609,6 @@ final class SidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate,
         }
     }
 
-    #if DEBUG
-    /// "Suggest New Icon" from a row's menu.
-    func debugSuggestIcon(_ url: URL) {
-        guard let workspace, let text = try? Note.read(url) else { print("no note at", url.path); return }
-        NoteIcons.shared.suggest(for: url, text: text, in: workspace, force: true)
-    }
-    #endif
-
     @objc private func revealClicked() {
         if let item = clickedItem { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
     }
@@ -674,10 +666,10 @@ private final class SidebarRowView: NSTableRowView {
 
 private final class SidebarCell: NSTableCellView {
     private let icon = NSImageView()
+    /// Not the cell's standard text field: the list would restyle it (bold) when selected.
     let label = NSTextField(labelWithString: "")
     /// Only the open note is bold; selection doesn't change the weight.
     private var isCurrent = false
-
 
     private func applyFont() {
         label.font = NSFont.systemFont(ofSize: 13, weight: isCurrent ? .semibold : .regular)
@@ -693,7 +685,6 @@ private final class SidebarCell: NSTableCellView {
         label.focusRingType = .none
         addSubview(icon)
         addSubview(label)
-        // Not the cell's standard text field: the list would restyle it (bold) when selected.
         NSLayoutConstraint.activate([
             icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -728,6 +719,12 @@ private final class SidebarCell: NSTableCellView {
 
 #if DEBUG
 extension SidebarView {
+    /// "Suggest New Icon" from a row's menu.
+    func debugSuggestIcon(_ url: URL) {
+        guard let workspace, let text = try? Note.read(url) else { print("no note at", url.path); return }
+        NoteIcons.shared.suggest(for: url, text: text, in: workspace, force: true)
+    }
+
     /// `-IndiumSidebarSteps click:Chem,newFolder,type:Physics,return,wait`: drives the
     /// sidebar the way clicks and keys would. Paths are relative to the folder.
     func debugStep(_ step: String) {

@@ -185,7 +185,7 @@ enum FolderAccess {
 
     /// The re-grant panel: an Open panel showing the folder's old place, so a single
     /// click on Open grants it again.
-    static func askAgain(for path: String, reason: Reason) -> URL? {
+    private static func askAgain(for path: String, reason: Reason) -> URL? {
         #if DEBUG
         if UserDefaults.standard.bool(forKey: "IndiumNoAccessPanels") {
             log("panel suppressed: regrant \(path)")
