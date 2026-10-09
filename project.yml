@@ -174,6 +174,7 @@ targets:
         NSHumanReadableCopyright: "Plain Markdown, beautifully."
         NSPrincipalClass: NSApplication
         IndiumAppGroup: "$(INDIUM_APP_GROUP)"
+        ITSAppUsesNonExemptEncryption: false
         CFBundleDocumentTypes:
           - CFBundleTypeName: Folder
             CFBundleTypeRole: Editor
