@@ -349,7 +349,8 @@ enum MarkdownScanner {
         return .paragraph
     }
 
-    /// `<!-- TBLFM: … -->`, as `TableFormulas.isFormulaLine` reads it.
+    /// `<!-- TBLFM: … -->`, as `TableFormulas.isFormulaLine` reads it (Quick Look doesn't
+    /// compile Sources/Formulas, so the scanner keeps its own copy).
     static func isTableFormulaLine(_ line: String) -> Bool {
         line.range(of: #"^\s*<!--\s*TBLFM:.*-->\s*$"#, options: .regularExpression) != nil
     }
