@@ -101,6 +101,7 @@ targets:
       - Sources/App/Theme.swift
       - Sources/Editor/MarkdownScanner.swift
       - Sources/Editor/MarkdownStyler.swift
+      - Sources/Editor/MarkdownDecorations.swift
       - Sources/Editor/MarkdownLayoutManager.swift
       - Sources/Editor/MathRenderer.swift
       - Sources/Editor/TableRender.swift
@@ -232,6 +233,7 @@ targets:
       - Sources/App/Theme.swift
       - Sources/Editor/MarkdownScanner.swift
       - Sources/Editor/MarkdownStyler.swift
+      - Sources/Editor/MarkdownDecorations.swift
       - Sources/Editor/MarkdownLayoutManager.swift
       - Sources/Editor/MathRenderer.swift
       - Sources/Editor/TableRender.swift
