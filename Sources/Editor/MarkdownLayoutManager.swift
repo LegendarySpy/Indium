@@ -16,7 +16,10 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     override init() {
         super.init()
         delegate = self
-        allowsNonContiguousLayout = true
+        // Laid out in pieces, the lines after a block that renders again (an embed, a float)
+        // sit at estimated heights: the page jolted while typing below one, and text wrapped
+        // beside a float at the wrong height, over it.
+        allowsNonContiguousLayout = false
     }
 
     required init?(coder: NSCoder) { fatalError() }
