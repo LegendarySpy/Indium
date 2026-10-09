@@ -1,42 +1,98 @@
 {
-  "fill-specializations" : [
-    { "value" : { "automatic-gradient" : "srgb:0.96078,0.94510,0.91373,1.00000" } },
-    { "appearance" : "dark", "value" : { "automatic-gradient" : "srgb:0.16863,0.16078,0.14902,1.00000" } }
-  ],
-  "groups" : [
+  "fill-specializations": [
     {
-      "layers" : [
-        {
-          "fill-specializations" : [
-            { "value" : { "solid" : "srgb:0.78039,0.39216,0.23137,1.00000" } },
-            { "appearance" : "dark", "value" : { "solid" : "srgb:0.88235,0.52157,0.35294,1.00000" } }
-          ],
-          "glass" : false,
-          "image-name" : "dot.png",
-          "name" : "dot"
-        },
-        {
-          "fill-specializations" : [
-            { "value" : { "solid" : "srgb:0.14902,0.13725,0.12157,1.00000" } },
-            { "appearance" : "dark", "value" : { "solid" : "srgb:0.96863,0.94902,0.90980,1.00000" } }
-          ],
-          "glass" : false,
-          "image-name" : "cursor.png",
-          "name" : "cursor"
-        },
-        {
-          "fill-specializations" : [
-            { "value" : { "solid" : "srgb:0.14902,0.13725,0.12157,0.50000" } },
-            { "appearance" : "dark", "value" : { "solid" : "srgb:0.96863,0.94902,0.90980,0.50000" } }
-          ],
-          "glass" : false,
-          "image-name" : "number.png",
-          "name" : "number"
+      "value": {
+        "linear-gradient": [
+          "srgb:0.96471,0.96078,0.94902,1.00000",
+          "srgb:0.91373,0.90588,0.88627,1.00000"
+        ],
+        "orientation": {
+          "start": {
+            "x": 0.5,
+            "y": 0
+          },
+          "stop": {
+            "x": 0.5,
+            "y": 1
+          }
         }
-      ],
-      "shadow" : { "kind" : "neutral", "opacity" : 0.35 },
-      "translucency" : { "enabled" : false, "value" : 0.5 }
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "linear-gradient": [
+          "srgb:0.18039,0.17647,0.16863,1.00000",
+          "srgb:0.13333,0.12941,0.12549,1.00000"
+        ],
+        "orientation": {
+          "start": {
+            "x": 0.5,
+            "y": 0
+          },
+          "stop": {
+            "x": 0.5,
+            "y": 1
+          }
+        }
+      }
     }
   ],
-  "supported-platforms" : { "squares" : "shared" }
+  "groups": [
+    {
+      "name": "seal",
+      "layers": [
+        {
+          "name": "seal",
+          "image-name": "seal.png",
+          "glass": false,
+          "fill-specializations": [
+            {
+              "value": {
+                "solid": "srgb:0.11373,0.10980,0.10196,1.00000"
+              }
+            },
+            {
+              "appearance": "dark",
+              "value": {
+                "solid": "srgb:0.92549,0.91765,0.89804,1.00000"
+              }
+            }
+          ]
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.28
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      },
+      "specular": false
+    },
+    {
+      "name": "grain",
+      "layers": [
+        {
+          "name": "grain",
+          "image-name": "grain.png",
+          "glass": false,
+          "blend-mode": "overlay",
+          "opacity": 0.05
+        }
+      ],
+      "shadow": {
+        "kind": "none",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
 }
