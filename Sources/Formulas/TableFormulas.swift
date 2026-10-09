@@ -347,7 +347,7 @@ enum TableFormulas {
 
     /// The first and last cell a destination covers (destinations are never relative);
     /// nil for a column destination in a table with no body rows. Not bounds-checked.
-    private static func corners(of destination: Destination, width: Int, height: Int) -> (Cell, Cell)? {
+    static func corners(of destination: Destination, width: Int, height: Int) -> (Cell, Cell)? {
         func resolve(_ index: CellReference.Index, rows: Bool) -> Int {
             switch index {
             case .absolute(let n): n

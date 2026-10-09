@@ -1,0 +1,91 @@
+# kind: excel
+# Spreadsheet syntax (Sources/Formulas/ExcelFormulas.swift) to and from TBLFM, in a table of 6 rows (header = row 1) by 4 columns.
+# tblfm<TAB>cell<TAB>fill<TAB>typed<TAB>stored[<TAB>shown, when it differs from typed]
+# excel<TAB>cell<TAB><TAB>TBLFM formula<TAB>shown
+# message<TAB>kind<TAB><TAB>engine message<TAB>as the table editor says it
+# One cell: every reference absolute, every operation in its own parentheses
+tblfm	B4	cell	=B2-B3	@4$2=(@2$2-@3$2)
+tblfm	B5	cell	=(B4/B2)*100	@5$2=((@4$2/@2$2)*100)	=B4/B2*100
+tblfm	B5	cell	=B4/B2*100	@5$2=((@4$2/@2$2)*100)
+tblfm	B5	cell	=B2+B3*B4	@5$2=(@2$2+(@3$2*@4$2))
+tblfm	B5	cell	=(B2+B3)*B4	@5$2=((@2$2+@3$2)*@4$2)
+tblfm	B5	cell	=B2-(B3-B4)	@5$2=(@2$2-(@3$2-@4$2))
+tblfm	B5	cell	=B2-B3-B4	@5$2=((@2$2-@3$2)-@4$2)
+tblfm	B5	cell	=B2/(B3*B4)	@5$2=(@2$2/(@3$2*@4$2))
+tblfm	B5	cell	=-B2^2	@5$2=-(@2$2^2)
+tblfm	B5	cell	=(-B2)^2	@5$2=((-@2$2)^2)
+tblfm	B5	cell	=B2^-2	@5$2=(@2$2^-2)	=B2^(-2)
+tblfm	B5	cell	=2^3^2	@5$2=(2^(3^2))
+tblfm	B5	cell	=b2 - b3	@5$2=(@2$2-@3$2)	=B2-B3
+tblfm	B5	cell	=$B$2-B$3	@5$2=(@2$2-@3$2)	=B2-B3
+tblfm	B5	cell	=B2	@5$2=@2$2
+tblfm	B5	cell	=2.5	@5$2=2.5
+tblfm	B5	cell	=50%*B2	@5$2=((50/100)*@2$2)	=50/100*B2
+# Functions
+tblfm	B6	cell	=SUM(B2:B5)	@6$2=sum(@2$2..@5$2)
+tblfm	D2	cell	=AVERAGE(B2:C2)	@2$4=mean(@2$2..@2$3)
+tblfm	D2	cell	=MIN(B2, C2)	@2$4=min(@2$2,@2$3)
+tblfm	D2	cell	=MAX(B2:C3)	@2$4=max(@2$2..@3$3)
+tblfm	D2	cell	=COUNT(B2:C2)	@2$4=count(@2$2..@2$3)
+tblfm	D2	cell	=SQRT(B2)	@2$4=sqrt(@2$2)
+tblfm	D2	cell	=SQRT(B2+C2)	@2$4=sqrt(@2$2+@2$3)
+tblfm	D2	cell	=ABS(B2-C2)	@2$4=abs(@2$2-@2$3)
+tblfm	D2	cell	=LN(B2)^2	@2$4=((ln(@2$2))^2)
+tblfm	D2	cell	=LOG(B2)	@2$4=log(@2$2)	=LOG10(B2)
+tblfm	D2	cell	=POWER(B2, 2)	@2$4=(@2$2^2)	=B2^2
+tblfm	D2	cell	=PI()*B2^2	@2$4=(pi*(@2$2^2))
+tblfm	D2	cell	=sum(b2:c2)	@2$4=sum(@2$2..@2$3)	=SUM(B2:C2)
+# A top-level ROUND is the ;%.Nf directive; anywhere else it is Indium's round()
+tblfm	B5	cell	=ROUND(B4/B2*100, 1)	@5$2=((@4$2/@2$2)*100);%.1f
+tblfm	B5	cell	=ROUND(B4, 0)	@5$2=@4$2;%.0f
+tblfm	B5	cell	=ROUND(B4, 1)*2	@5$2=(round(@4$2,1)*2)
+tblfm	B5	cell	=ROUND(B4, -1)	@5$2=round(@4$2,-1)
+# Note variables by name, also one shaped like a cell when the note defines it
+tblfm	B6	cell	=B4/water_molar_mass	@6$2=(@4$2/water_molar_mass)
+tblfm	B6	cell	=x1*2	@6$2=(x1*2)
+tblfm	B6	cell	=X1*2	@6$2=(@1$24*2)	nil
+# Filled along a row or down a column: references move with the fill unless fixed with $
+tblfm	B4	row	=B2-B3	@4$2..@4$>=(@2-@3)
+tblfm	B5	row	=ROUND(B4/B2*100, 1)	@5$2..@5$>=((@4/@2)*100);%.1f
+tblfm	B5	row	=B4/$B$2	@5$2..@5$>=(@4/@2$2)	=B4/$B2
+tblfm	C5	row	=B5*2	@5$3..@5$>=(@5$-1*2)
+tblfm	B6	row	=SUM(B2:B5)	@6$2..@6$>=sum(@2..@5)
+tblfm	C6	row	=SUM(B2:C5)	@6$3..@6$>=sum(@2$-1..@5$+0)
+tblfm	D2	column	=B2*C2	@2$4..@>$4=($2*$3)
+tblfm	D3	column	=B3-C2	@3$4..@>$4=($2-@-1$3)
+tblfm	B6	column	=SUM(B2:B5)	@6$2..@>$2=sum(@-4$2..@-1$2)
+tblfm	B5	column	=SUM(B$2:B4)	@5$2..@>$2=sum(@2$2..@-1$2)
+# Refused, with a reason
+tblfm	B5	cell	=	ERROR:parse
+tblfm	B5	cell	=B2-	ERROR:parse
+tblfm	B5	cell	=(B2-B3	ERROR:parse
+tblfm	B5	cell	=B2-B3)	ERROR:parse
+tblfm	B5	cell	=B2>B3	ERROR:parse
+tblfm	B5	cell	=IF(B2>0, 1, 2)	ERROR:unsupported
+tblfm	B5	cell	=FOO(B2)	ERROR:unknownFunction
+tblfm	B5	cell	=SQRT(B2, B3)	ERROR:parse
+tblfm	B5	cell	=B0	ERROR:badReference
+tblfm	B5	cell	="a"	ERROR:parse
+tblfm	B5	cell	=@2$2	ERROR:parse
+# Stored formulas, shown from the cell they fill
+excel	B4		@4$2..@4$>=(@2-@3)	=B2-B3
+excel	D4		@4$2..@4$>=(@2-@3)	=D2-D3
+excel	C5		@5$2..@5$>=((@4/@2)*100);%.1f	=ROUND(C4/C2*100, 1)
+excel	C6		@6$2..@6$>=(@4/water_molar_mass)	=C4/water_molar_mass
+excel	D3		$4=($2-$3)	=B3-C3
+excel	B6		@>$2=sum(@I..@-1)	=SUM(B2:B5)
+excel	C6		@6=sum(@I..@-1)	=SUM(C2:C5)
+excel	B6		$2=sum(@I..@-1)	=SUM(B$2:B5)
+excel	C4		@4$2..@4$>=(@2$2-@3)	=$B2-C3
+excel	B3		@3$2=(@2$2*2)	=B2*2
+excel	B3		@3$2=((@2$2+1)*(@1$2-1))	=(B2+1)*(B1-1)
+excel	B3		@3$2=-((@2$2+1))	=-(B2+1)
+excel	B3		@3$2=(max(@2$2,@1$2)*pi)	=MAX(B2, B1)*PI()
+excel	B2		@2$2=(@-1$2*2)	=B1*2
+excel	B1		@1$2=(@-1$2*2)	nil
+# Problems, as the table editor words them
+message	divisionByZero		Division by zero	#DIV/0! Division by zero
+message	notNumeric		@3$2 isn't a number (“Mass”)	#VALUE! B3 isn't a number (“Mass”)
+message	cycle		Formulas depend on themselves: @4$2 → @5$2 → @4$2	Circular reference: B4 → B5 → B4
+message	unknownVariable		Unknown name “mass”	#NAME? Unknown name “mass”. Define it in the note's properties
+message	badReference		Row 9 is outside the table (rows 1–6, counting the header as 1)	#REF! Row 9 is outside the table (rows 1–6, counting the header as 1)
