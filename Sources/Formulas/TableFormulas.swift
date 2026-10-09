@@ -81,6 +81,11 @@ enum TableFormulas {
 
     static func isFormulaLine(_ line: String) -> Bool { formulaText(ofLine: line) != nil }
 
+    /// One TBLFM line holding `formulas`, chained with `::`.
+    static func formulaLine(_ formulas: [String]) -> String {
+        "<!-- TBLFM: " + formulas.joined(separator: "::") + " -->"
+    }
+
     /// Parses TBLFM lines. Formulas on one line are chained with `::`; lines run top to bottom.
     static func parse(formulaLines: [String]) -> [ParsedFormula] {
         var out: [ParsedFormula] = []

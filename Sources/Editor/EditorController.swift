@@ -520,7 +520,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// inserted or deleted) moves the formulas' references along and recalculates;
     /// typing recalculates when the cell is left (`recalculateEditedTable`). Either way
     /// the results join the edit's undo step, which restores table and formulas whole.
-    private func commitTable(_ markdown: String, typingIn cell: TableEditorView.Cell?, shape: TableFormulaUI.ShapeChange? = nil) {
+    private func commitTable(_ markdown: String, typingIn cell: TableEditorView.Cell?, shape: TableFormulas.ShapeChange? = nil) {
         guard let location = styler.editingTableLocation, let parts = tableParts(at: location) else { return }
         let old = ns.substring(with: parts.range)
         var table = markdown, formulas = parts.formulas
@@ -530,7 +530,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         tableValuesReplaced = nil
         if cell == nil, !formulas.isEmpty {
-            if let shape { formulas = TableFormulaUI.adjust(formulas, for: shape) }
+            if let shape { formulas = TableFormulas.adjust(formulas, for: shape) }
             table = TableFormulaUI.recalculate(tableMarkdown: markdown, formulaLines: formulas, noteText: storage.string)
         }
         tableFormulasPending = cell != nil && !formulas.isEmpty

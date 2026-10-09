@@ -42,7 +42,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     var onValuesReplaced: ((Cell, Cell) -> Void)?
     /// Called instead of `onChange` when rows or columns were inserted or deleted, with
     /// what was done, so formulas can keep pointing at the same rows and columns.
-    var onStructureChange: ((String, TableFormulaUI.ShapeChange) -> Void)?
+    var onStructureChange: ((String, TableFormulas.ShapeChange) -> Void)?
 
     private(set) var render: TableRender
     private var fields: [[CellField]] = []
@@ -894,7 +894,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     }
 
     /// `change` in TBLFM numbering (row 1 the header, column 1 the leftmost).
-    private func commitStructure(_ change: TableFormulaUI.ShapeChange? = nil) {
+    private func commitStructure(_ change: TableFormulas.ShapeChange? = nil) {
         selection = nil
         if let change, let onStructureChange { onStructureChange(markdown, change) } else { onChange?(markdown, nil) }
         rebuildFields()

@@ -11,6 +11,7 @@ comment under the table. Pure Foundation, no UI. Tables are found with the edito
 | `Variables.swift` | `NoteVariables`: numbers from the note's frontmatter |
 | `TableFormulas.swift` | The TBLFM engine: parse formula lines, evaluate against a grid, Markdown helpers |
 | `ExcelFormulas.swift` | Spreadsheet syntax (`=SUM(B2:B5)`) to and from TBLFM, and changing a table's formula lines cell by cell |
+| `TableShapes.swift` | Keeping references on the same rows and columns when the table editor inserts or deletes some |
 | `FormulaSelfTest.swift` | DEBUG regression runners (`-IndiumEvalCases`) |
 | `../Editor/MathAnswers.swift` | Quick answers: LaTeX to plain syntax, then the evaluator |
 
@@ -44,6 +45,8 @@ TableFormulas.trailingFormulaRange(in: NSString, tableRange: NSRange) -> NSRange
 TableFormulas.targets(grid:formulaLines:) -> [Cell: Int]                       // computed cells → index into parse(formulaLines:)
 TableFormulas.parse(formulaLines:) -> [ParsedFormula]                          // for UI: each formula, verbatim text + result
 TableFormulas.formulaText(ofLine:) / isFormulaLine(_:) / cells(ofRow:)
+TableFormulas.formulaLine(_ formulas: [String]) -> String                  // "<!-- TBLFM: a::b -->"
+TableFormulas.adjust(_ formulaLines:, for: .insertRows(at:count:) | .deleteRows | .insertColumns | .deleteColumns) -> [String]
 struct Outcome { grid; formulas; issues: [Issue]; changed: [Cell]; blanks: [Cell]; succeeded: Bool }
 struct Issue { formula: String; cell: Cell?; error: FormulaError }             // Cell: TBLFM numbering, row 1 = header
 
