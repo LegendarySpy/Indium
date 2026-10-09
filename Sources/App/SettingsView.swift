@@ -5,75 +5,72 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Picker("Appearance", selection: $settings.appearance) {
-                ForEach(AppearanceSetting.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
+            Section {
+                Picker("Appearance", selection: $settings.appearance) {
+                    ForEach(AppearanceSetting.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
 
-            LabeledContent("Font") {
-                HStack(spacing: 8) {
-                    ForEach(FontChoice.allCases) { choice in
-                        FontSwatch(choice: choice, selected: settings.font == choice) { settings.font = choice }
+                LabeledContent("Font") {
+                    HStack(spacing: 8) {
+                        ForEach(FontChoice.allCases) { choice in
+                            FontSwatch(choice: choice, selected: settings.font == choice) { settings.font = choice }
+                        }
                     }
                 }
-            }
 
-            LabeledContent("Text Size") {
-                HStack {
-                    Slider(value: $settings.textSize, in: AppSettings.textSizes, step: 1)
-                    Text("\(Int(settings.textSize)) pt")
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                        .frame(width: 40, alignment: .trailing)
+                LabeledContent("Text size") {
+                    HStack {
+                        Slider(value: $settings.textSize, in: AppSettings.textSizes, step: 1)
+                        Text("\(Int(settings.textSize)) pt")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .frame(width: 40, alignment: .trailing)
+                    }
                 }
+
+                Picker("Line width", selection: $settings.lineWidth) {
+                    ForEach(LineWidth.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
             }
 
-            Picker("Line Width", selection: $settings.lineWidth) {
-                ForEach(LineWidth.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
+            Section("Editing") {
+                Picker("Show Markdown", selection: $settings.syntax) {
+                    ForEach(SyntaxVisibility.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .help("Show Markdown symbols like ** and # only on the line you're editing, or everywhere.")
 
-            Picker("Show Markdown", selection: $settings.syntax) {
-                ForEach(SyntaxVisibility.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
+                Toggle("Check spelling while typing", isOn: $settings.spellcheck)
 
-            Toggle("Check spelling while typing", isOn: $settings.spellcheck)
-
-            Section {
                 Toggle("Math shortcuts", isOn: $settings.mathShortcuts)
-            } footer: {
-                Text("Write LaTeX faster, like Obsidian's LaTeX Suite. Type mk for an equation, x/ for a fraction, sr to square, @a for α. Tab moves to the next blank, then out of the equation.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+                    .help("Type mk for an equation, x/ for a fraction and more, as in Obsidian's LaTeX Suite.")
 
-            Section {
-                Toggle("Show page lines", isOn: $settings.showPageLines)
-            } footer: {
-                Text("Dashed lines show where each page of an exported PDF starts. Type /page break to start a new page yourself.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Toggle("Show PDF page breaks", isOn: $settings.showPageLines)
+                    .help("Dashed lines show where each page of an exported PDF starts.")
             }
 
             Section {
                 Toggle("Suggest note icons", isOn: $settings.suggestIcons)
                     .disabled(!NoteIcons.isAvailable)
-            } footer: {
-                Text(NoteIcons.unavailableReason ?? "Apple Intelligence picks a symbol for each note, on this Mac. Icons are kept by Indium, not written into your notes. Add icon: to a note's frontmatter to choose your own.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+                    .help("Apple Intelligence picks a symbol for each note, on this Mac. Icons aren't written into your notes.")
 
-            #if APPSTORE
-            Section {
-                Button("Import Note Icons from the Direct-Download Indium…") { IconImport.importWithPanel() }
+                #if APPSTORE
+                LabeledContent("Icons from the direct-download Indium") {
+                    Button("Import…") { IconImport.importWithPanel() }
+                }
+                .help("Adds the icons you chose in the direct-download Indium. Icons you've chosen here are kept.")
+                #endif
+            } header: {
+                Text("Note Icons")
             } footer: {
-                Text("Copies the icons you chose in the direct-download Indium. Icons you've already chosen here are kept, and the original file isn't changed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if let reason = NoteIcons.unavailableReason {
+                    Text(reason)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
-            #endif
         }
         .formStyle(.grouped)
         .frame(width: 460)
