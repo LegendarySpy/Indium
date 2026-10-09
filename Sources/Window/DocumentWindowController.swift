@@ -42,6 +42,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                               backing: .buffered, defer: false)
         super.init(window: window)
+        #if DEBUG
+        DebugSnapshot.hideIfRequested(window)
+        #endif
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.titlebarSeparatorStyle = .none
