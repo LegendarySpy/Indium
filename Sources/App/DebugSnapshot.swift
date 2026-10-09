@@ -385,7 +385,7 @@ enum DebugSnapshot {
             total += 1
             let (start, sel) = unmark(parts[0].replacingOccurrences(of: "↵", with: "\n"))
             editor.endTableEditing()
-            editor.clearMathStops()
+            editor.math.clearStops()
             if realKeys {
                 editor.replace(NSRange(location: 0, length: editor.storage.length), with: start)
                 tv.setSelectedRange(sel)
@@ -414,7 +414,7 @@ enum DebugSnapshot {
                     switch key {
                     case "⇥": tv.insertTab(nil)
                     case "⏎": tv.insertNewline(nil)
-                    case "⇧": if !editor.handleMathNewline(shift: true) { tv.insertLineBreak(nil) }
+                    case "⇧": if !editor.math.handleNewline(shift: true) { tv.insertLineBreak(nil) }
                     case "⌫": tv.deleteBackward(nil)
                     case "↶": undo?.undo()
                     case "↷": undo?.redo()
