@@ -302,6 +302,72 @@ enum DebugSnapshot {
         run(0)
     }
 
+    /// `-IndiumTypeAtEnd "abc⏎⏎‖def"`: puts the caret at the end of the note and types there as
+    /// key events, `-IndiumTypeInterval` seconds apart (⏎ Return, ⌫ Backspace, ‖ a pause long
+    /// enough for the deferred layout and autosave to run). Typing at the end may only scroll
+    /// down: every move up, and every key that leaves the caret out of view, is a jump, and
+    /// any jump fails the run. `-IndiumTypeShot path` saves the window when it's done.
+    static func runTypeAtEnd(_ keys: [Character], editor: EditorController, window: NSWindow, interval: Double) {
+        let tv = editor.textView, clip = editor.scrollView.contentView
+        window.makeFirstResponder(tv)
+        tv.setSelectedRange(NSRange(location: editor.storage.length, length: 0))
+        tv.scrollRangeToVisible(tv.selectedRange())
+        var step = "start", last = clip.bounds.minY, jumps = 0, offsets: [String] = []
+        // Sampled between events, where the window draws: a scroll AppKit undoes within the
+        // same call (resizing the view after a keystroke does) never reaches the screen.
+        let sampler = Timer(timeInterval: 0.004, repeats: true) { _ in
+            let y = clip.bounds.minY
+            if y < last - 0.5 {
+                jumps += 1
+                print(String(format: "  JUMP after %@: %.1f -> %.1f", step, last, y))
+            }
+            last = y
+        }
+        func caretLine() -> NSRect {
+            let glyph = editor.layoutManager.glyphIndexForCharacter(at: max(0, tv.selectedRange().location - 1))
+            return editor.layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).offsetBy(dx: 0, dy: tv.textContainerOrigin.y)
+        }
+        func send(_ chars: String, code: UInt16) {
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                            windowNumber: window.windowNumber, context: nil, characters: chars,
+                                            charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code) {
+                    window.sendEvent(e)
+                }
+            }
+        }
+        func run(_ i: Int) {
+            guard i < keys.count else {
+                sampler.invalidate()
+                print("OFFSETS:", offsets.joined(separator: " "))
+                print("TYPE AT END: \(keys.count) keys, \(jumps) jumps")
+                if let path = UserDefaults.standard.string(forKey: "IndiumTypeShot") { debugShot(window: window, path: path) }
+                exit(jumps == 0 ? 0 : 1)
+            }
+            var delay = interval
+            switch keys[i] {
+            case "⏎": send("\r", code: 36)
+            case "⌫": send("\u{7f}", code: 51)
+            case "‖": delay = 0.8
+            default: send(String(keys[i]), code: 0)
+            }
+            step = "key \(i) [\(keys[i])]"
+            DispatchQueue.main.async {
+                offsets.append(String(format: "%.0f", clip.bounds.minY))
+                if !clip.bounds.intersects(caretLine()) {
+                    jumps += 1
+                    print("  CARET OUT OF VIEW after \(step): offset \(clip.bounds.minY)")
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { run(i + 1) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            last = clip.bounds.minY
+            RunLoop.main.add(sampler, forMode: .common)
+            run(0)
+        }
+    }
+
     /// The window and any popovers over it, as a PNG.
     static func debugShot(window: NSWindow, path: String) {
         guard let frame = window.contentView?.superview else { return }
@@ -663,6 +729,17 @@ enum DebugSnapshot {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 runIconSteps(steps.split(separator: ";").map(String.init), controller: controller)
             }
+            return
+        }
+        if let keys = d.string(forKey: "IndiumTypeAtEnd"), let window = controller.window {
+            if let size = d.string(forKey: "IndiumSize")?.split(separator: "x").compactMap({ Double($0) }), size.count == 2 {
+                window.setContentSize(NSSize(width: size[0], height: size[1]))
+            }
+            // Invisible: the run takes a while and needs no one to watch it.
+            window.alphaValue = 0
+            window.ignoresMouseEvents = true
+            let interval = d.object(forKey: "IndiumTypeInterval") != nil ? d.double(forKey: "IndiumTypeInterval") : 0.05
+            runTypeAtEnd(Array(keys), editor: controller.editor, window: window, interval: interval)
             return
         }
         if let out = d.string(forKey: "IndiumPickerShot") {
