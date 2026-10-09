@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import SwiftUI
 import SwiftMath
 
 /// Development aid: `-IndiumSnapshot /tmp/out.png` renders the main window to a PNG
@@ -676,6 +677,23 @@ enum DebugSnapshot {
                 try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out))
             }
             exit(0)
+        }
+        // `-IndiumSettingsShot /tmp/settings.png [-IndiumSettingsDark YES]`: the Settings window's content, drawn offscreen.
+        if let out = d.string(forKey: "IndiumSettingsShot") {
+            let view = NSHostingView(rootView: SettingsView())
+            view.appearance = NSAppearance(named: d.bool(forKey: "IndiumSettingsDark") ? .darkAqua : .aqua)
+            view.setFrameSize(view.fittingSize)
+            view.layoutSubtreeIfNeeded()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                view.setFrameSize(view.fittingSize)
+                view.layoutSubtreeIfNeeded()
+                if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                    view.cacheDisplay(in: view.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out))
+                }
+                exit(0)
+            }
+            return
         }
         if d.bool(forKey: "IndiumLayoutTest") { runLayoutTests(); exit(0) }
         if d.bool(forKey: "IndiumMathWidths") {
