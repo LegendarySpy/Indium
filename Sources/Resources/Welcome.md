@@ -25,4 +25,4 @@ $$
 
 ## Your notes
 
-This note lives in **Documents › Indium**. To use a different folder, like an existing Obsidian vault, choose **File › Open Folder…** (`⇧⌘O`).
+This note is a plain Markdown file in your notes folder. To use another folder, like an existing Obsidian vault, choose **File › Open Folder…** (`⇧⌘O`).
