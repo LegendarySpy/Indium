@@ -469,3 +469,195 @@ asks for too many decimal places (15 at most)
 | rate | 2.0 mol/L | 6.0 mol/L |
 | inverse | 4.0 g^-1 | 8.0 g^-1 |
 <!-- TBLFM: @2$3=(@2$2*200)::@3$3=(@3$2*3)::@4$3=(@4$2*2) -->
+
+=== typing =B2-B3 in a cell stores it as that cell's formula and fills in the result
+| Quantity | CuSO₄ | MgSO₄ |
+| --- | --- | --- |
+| Mass of hydrated salt | 2.008 g | 1.502 g |
+| Mass of anhydrous salt | 0.715 g | 0.733 g |
+| Mass of water | | |
+--- edit
+B4 =B2-B3
+--- expect
+| Quantity | CuSO₄ | MgSO₄ |
+| --- | --- | --- |
+| Mass of hydrated salt | 2.008 g | 1.502 g |
+| Mass of anhydrous salt | 0.715 g | 0.733 g |
+| Mass of water | 1.293 g |  |
+<!-- TBLFM: @4$2=(@2$2-@3$2) -->
+--- show
+B4 =B2-B3
+C4 ∅
+
+=== Fill Right turns a cell's formula into a row formula, replacing it
+| Quantity | CuSO₄ | MgSO₄ |
+| --- | --- | --- |
+| Mass of hydrated salt | 2.008 g | 1.502 g |
+| Mass of anhydrous salt | 0.715 g | 0.733 g |
+| Mass of water | | |
+| Percent water | | |
+--- edit
+B4 =B2-B3
+fill-right B4
+B5 =ROUND(B4/B2*100, 1)
+fill-right B5
+--- expect
+| Quantity | CuSO₄ | MgSO₄ |
+| --- | --- | --- |
+| Mass of hydrated salt | 2.008 g | 1.502 g |
+| Mass of anhydrous salt | 0.715 g | 0.733 g |
+| Mass of water | 1.293 g | 0.769 g |
+| Percent water | 64.4 | 51.2 |
+<!-- TBLFM: @4$2..@4$>=(@2-@3) -->
+<!-- TBLFM: @5$2..@5$>=((@4/@2)*100);%.1f -->
+--- show
+C4 =C2-C3
+C5 =ROUND(C4/C2*100, 1)
+
+=== existing TBLFM lines show as spreadsheet formulas, and typing the same formula changes nothing
+---
+water_molar_mass: 18.02 g/mol
+---
+| Quantity | CuSO₄ | MgSO₄ |
+| --- | --- | --- |
+| Mass of hydrated salt | 2.008 g | 1.502 g |
+| Mass of anhydrous salt | 0.715 g | 0.733 g |
+| Mass of water | 1.293 g | 0.769 g |
+| Moles of water | 0.07175 mol | 0.0427 mol |
+<!-- TBLFM: @4$2..@4$>=(@2-@3) -->
+<!-- TBLFM: @5$2..@5$>=(@4/water_molar_mass) -->
+--- edit
+C4 =C2-C3
+B5 =B4/water_molar_mass
+--- expect
+---
+water_molar_mass: 18.02 g/mol
+---
+| Quantity | CuSO₄ | MgSO₄ |
+| --- | --- | --- |
+| Mass of hydrated salt | 2.008 g | 1.502 g |
+| Mass of anhydrous salt | 0.715 g | 0.733 g |
+| Mass of water | 1.293 g | 0.769 g |
+| Moles of water | 0.07175 mol | 0.0427 mol |
+<!-- TBLFM: @4$2..@4$>=(@2-@3) -->
+<!-- TBLFM: @5$2..@5$>=(@4/water_molar_mass) -->
+--- show
+B4 =B2-B3
+C4 =C2-C3
+C5 =C4/water_molar_mass
+A4 ∅
+
+=== a different formula in one cell of a row formula applies to that cell only
+| Quantity | A | B | C |
+| --- | --- | --- | --- |
+| x | 2 | 4 | 6 |
+| y | 1 | 1 | 1 |
+| x − y | 1 | 3 | 5 |
+<!-- TBLFM: @4$2..@4$>=(@2-@3) -->
+--- edit
+C4 =C2+C3
+--- expect
+| Quantity | A | B | C |
+| --- | --- | --- | --- |
+| x | 2 | 4 | 6 |
+| y | 1 | 1 | 1 |
+| x − y | 1 | 5 | 5 |
+<!-- TBLFM: @4$2..@4$>=(@2-@3) -->
+<!-- TBLFM: @4$3=(@2$3+@3$3) -->
+--- show
+C4 =C2+C3
+D4 =D2-D3
+
+=== a value typed over a computed cell replaces its formula there, and the rest of the row keeps it
+| Quantity | A | B | C |
+| --- | --- | --- | --- |
+| x | 2 | 4 | 6 |
+| y | 1 | 1 | 1 |
+| x − y | 1 | 3 | 5 |
+<!-- TBLFM: @4$2..@4$>=(@2-@3) -->
+--- edit
+C4 9
+D2 10
+--- expect
+| Quantity | A | B | C |
+| --- | --- | --- | --- |
+| x | 2 | 4 | 10 |
+| y | 1 | 1 | 1 |
+| x − y | 1 | 9 | 9 |
+<!-- TBLFM: @4$2=(@2-@3)::@4$4..@4$>=(@2-@3) -->
+--- show
+B4 =B2-B3
+C4 ∅
+D4 =D2-D3
+
+=== clearing a cell's own formula removes it, and its line with it
+| q | v |
+| --- | --- |
+| a | 2 |
+| b | 4 |
+<!-- TBLFM: @3$2=(@2$2*2) -->
+--- edit
+B3
+--- expect
+| q | v |
+| --- | --- |
+| a | 2 |
+| b |  |
+
+=== Fill Down copies a formula down its column, moving with each row
+| Item | Qty | Price | Total |
+| --- | --- | --- | --- |
+| Pens | 3 | 1.50 | |
+| Paper | 2 | 4.25 | |
+| Ink | 1 | 12.00 | |
+| Total | | | |
+--- edit
+D2 =B2*C2
+fill-down D2
+D5 =SUM(D2:D4)
+--- expect
+| Item | Qty | Price | Total |
+| --- | --- | --- | --- |
+| Pens | 3 | 1.50 | 4.50 |
+| Paper | 2 | 4.25 | 8.50 |
+| Ink | 1 | 12.00 | 12.00 |
+| Total |  |  | 25.00 |
+<!-- TBLFM: @2$4..@>$4=($2*$3) -->
+<!-- TBLFM: @5$4=sum(@2$4..@4$4) -->
+--- show
+D3 =B3*C3
+D4 =B4*C4
+D5 =SUM(D2:D4)
+
+=== a formula with a problem the table didn't have is refused, and nothing changes
+| q | v |
+| --- | --- |
+| a | 2 |
+| b | 0 |
+| label | text |
+| c | |
+<!-- TBLFM: @5$2=(@2$2*2) -->
+--- edit
+B5 =B2/B3
+B5 =B2-B4
+B5 =B5+1
+B5 =B2*mass
+B5 =B2-
+B5 =Z9
+--- expect
+| q | v |
+| --- | --- |
+| a | 2 |
+| b | 0 |
+| label | text |
+| c | 4 |
+<!-- TBLFM: @5$2=(@2$2*2) -->
+--- issues
+refused: #DIV/0! Division by zero
+refused: #VALUE! B4 isn't a number (“text”)
+refused: Circular reference: B5 → B5
+refused: #NAME? Unknown name “mass”
+refused: The formula ends too soon
+refused: #REF! Row 9 is outside the table
+--- show
+B5 =B2*2
