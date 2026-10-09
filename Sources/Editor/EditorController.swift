@@ -526,7 +526,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return (NSRange(location: start, length: a.length - start - end), NSRange(location: start, length: b.length - start - end))
     }
 
-    /// Another app (or an agent) changed the note: apply just the changed span, as one
+    /// Another app changed the note: apply just the changed span, as one
     /// undoable step, keeping the caret and the text at the top of the window in place.
     private func applyExternal(_ disk: String) {
         guard let note else { return }

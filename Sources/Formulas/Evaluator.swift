@@ -96,7 +96,7 @@ struct FormulaUnit: Equatable, CustomStringConvertible {
     }
 
     /// The unit of `a·b^k` (k = 1 multiplies, -1 divides). `unit` nil with `defined`
-    /// true means dimensionless (g/g). `defined` false means there's no honest answer
+    /// true means dimensionless (g/g). `defined` false means there's no meaningful answer
     /// (an opaque label times anything but a plain number, or an absurd exponent); the
     /// caller must report an error rather than drop the unit.
     static func combine(_ a: FormulaUnit?, _ b: FormulaUnit?, power k: Int) -> (unit: FormulaUnit?, defined: Bool) {
