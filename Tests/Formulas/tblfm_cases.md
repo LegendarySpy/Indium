@@ -3,7 +3,7 @@ Table formula cases for Sources/Formulas/TableFormulas.swift. Each case is a who
 (frontmatter, table, TBLFM lines), the whole note out, and the issues it must report.
 Run: Indium -IndiumEvalCases Tests/Formulas/tblfm_cases.md -IndiumEvalVerbose YES -IndiumSnapshot /tmp/x.png
 
-=== owner's Results table: rows from rows, explicit column ranges keep the label column out
+=== a results table: rows from rows, explicit column ranges keep the label column out
 ---
 course: CHEM 101
 water_molar_mass: 18.02 g/mol

@@ -1,6 +1,6 @@
 # Quick answers: line ending in "=" -> ghost text. Run: Indium -IndiumEvalCases Tests/Formulas/quick_answers.tsv -IndiumSnapshot /tmp/x.png
 # mode<TAB>line before caret<TAB>display<TAB>insertion (what Tab writes). ∅ = no suggestion, ␠ = space.
-# Captured from MathAnswers.swift at cae2d9e (before the evaluator refactor); lines after '# CHANGED:' differ on purpose.
+# A '# CHANGED:' line explains a case whose answer was changed on purpose ("was" is the old answer).
 prose	1 + 2 =␠	∅	∅
 prose	3 + 4 =␠␠	∅	∅
 prose	1 + 2 =␠3	∅	∅
@@ -129,8 +129,7 @@ math	\frac{1.293\text{ g}}{2.008\text{ g}} \times 100 =	64.39	␠64.39
 # CHANGED: rounding half up: 15.25 -> 15.3 (was 15.2)
 math	10.0\text{ mL} + 5.25\text{ mL} =	15.3␠mL	␠15.3\text{␠mL}
 math	a = 2 + 2 =	4	␠4
-# --- Added with the evaluator ---
-# Precedence and precision (reviewer)
+# Precedence and precision
 prose	(-2)^2 =	4	␠4
 prose	2^-2 =	0.25	␠0.25
 prose	0.100 + 0.200 =	0.300	␠0.300
