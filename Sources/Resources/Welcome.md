@@ -20,7 +20,7 @@ $$
 
 - Math shortcuts, like Obsidian's LaTeX Suite: `mk` starts an equation, `x/` makes a fraction, `sr` squares, `@a` is α, and Tab jumps to the next blank.
 - End a line with **=** (try `12 * 4 =`) and the answer shows up. Tab keeps it.
-- Click a table to edit it like a spreadsheet. The layout button lets text wrap beside it.
+- Click a table to edit it like a spreadsheet, and type `=` in a cell for a formula like `=SUM(B2:B5)`. The layout button lets text wrap beside it.
 - Drag or paste images straight in, and `⇧⌘E` exports a clean PDF. Type `/page break` to start a new page.
 
 ## Your notes

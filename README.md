@@ -34,7 +34,7 @@ So Indium shows one note at a time. There are no tabs or split views, just the n
 - **Quick answers.** End a line with `=` and the answer shows up. Tab keeps it.
 - **Tables you can click.** Edit cells directly, add rows and columns, drag to resize.
 - **Math in tables.** Write `$…$` in a cell with the same shortcuts as everywhere else.
-- **Table formulas.** Type `=B2-B3` or `=SUM(B2:B5)` in a cell, as in a spreadsheet, and fill it across a row. They're saved as Advanced Tables formulas so Obsidian can read them, and they can use units, significant figures, and numbers from the note's frontmatter.
+- **Table formulas.** Type `=B2-B3` or `=SUM(B2:B5)` in a cell, as in a spreadsheet, and fill it across a row or down a column. They're saved as Advanced Tables formulas so Obsidian can read them, and they can use units, significant figures, and numbers from the note's frontmatter.
 - **Text beside tables and images.** Let writing wrap around a table, or put two blocks side by side.
 - **Obsidian's extras.** Callouts, embedded notes (`![[Note]]`), `#tags`, `%% comments %%` and footnotes, drawn the way Obsidian draws them.
 - **Slash commands.** Type `/` for tables, headings, equations, and more.
