@@ -82,3 +82,15 @@ sum(1 g, 2 mol)	ERROR:incompatibleUnits
 (1 + 2	ERROR:parse
 1.2.3	ERROR:parse
 if(1, 2, 3)	ERROR:unsupported
+# round(x, n): half away from zero, never more decimals than a measured input had
+round(2.345, 2)	2.35
+round(1/3, 2)	0.33
+round(2.5)	3
+round(-2.5, 0)	-3
+round(1234.5, -2)	1200
+round(1.2, 3)	1.2
+round(2.008 g - 0.715 g, 1)	1.3 g
+round(64.39, 1) * 2	129
+round(2, 1.5)	ERROR:parse
+round(2, 16)	ERROR:parse
+round 2	ERROR:parse

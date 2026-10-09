@@ -412,11 +412,13 @@ enum Evaluator {
     static let mathFunctions: Set<String> = ["sqrt", "sin", "cos", "tan", "log", "ln", "abs"]
     /// Aggregates over ranges and argument lists.
     static let aggregateFunctions: Set<String> = ["sum", "mean", "min", "max", "count"]
+    /// `round(x, n)`: x to n decimal places (n may be negative). Written with parentheses.
+    static let roundFunction = "round"
     static let constants: Set<String> = ["pi", "e", "π"]
     /// Names a variable can't take (compared case-insensitively).
     static func isReserved(_ name: String) -> Bool {
         let n = name.lowercased()
-        return mathFunctions.contains(n) || aggregateFunctions.contains(n) || constants.contains(n) || n == "if"
+        return mathFunctions.contains(n) || aggregateFunctions.contains(n) || constants.contains(n) || n == roundFunction || n == "if"
     }
 
     /// Unit words recognised right after a number in prose (anything goes inside `\text{}`
@@ -589,6 +591,7 @@ enum Evaluator {
         case .call(let rawName, let args):
             let name = rawName.lowercased()
             if aggregateFunctions.contains(name) { return try aggregate(name, args, env) }
+            if name == roundFunction { return try rounded(args, env) }
             guard mathFunctions.contains(name) else {
                 throw FormulaError(kind: .unknownFunction, message: "Unknown function “\(rawName)”")
             }
@@ -621,6 +624,28 @@ enum Evaluator {
             }
             return Quantity(try checked(v, "\(name)(\(q.numberText()))"), unit: unit, precision: .product([q.precision], value: v))
         }
+    }
+
+    /// Half away from zero, as by hand. The result claims no more decimals than a measured
+    /// input had: round(1.2, 3) is 1.2.
+    private static func rounded(_ args: [FormulaNode], _ env: Environment) throws -> Quantity {
+        guard args.count == 1 || args.count == 2 else {
+            throw FormulaError(kind: .parse, message: "round takes a value and a number of decimal places: round(x, 2)")
+        }
+        let q = try value(args[0], env)
+        var places = 0
+        if args.count == 2 {
+            let p = try value(args[1], env)
+            guard p.unit == nil, p.value.rounded() == p.value, abs(p.value) <= 15 else {
+                throw FormulaError(kind: .parse, message: "round needs a whole number of decimal places, from -15 to 15")
+            }
+            places = Int(p.value)
+        }
+        let v = try checked(Quantity.roundHalfUp(q.value, places: places), "The result")
+        let decimals = q.precision.isExact ? places : min(places, q.precision.decimals)
+        let precision = FormulaPrecision(isExact: false, decimals: decimals,
+                                         significantFigures: max(1, FormulaPrecision.magnitude(v) + 1 + decimals), style: .decimals)
+        return Quantity(v, unit: q.unit, precision: precision)
     }
 
     private static func aggregate(_ name: String, _ args: [FormulaNode], _ env: Environment) throws -> Quantity {
@@ -812,7 +837,7 @@ enum Evaluator {
                 i = j
                 let lower = name.lowercased()
                 let callFollows = i < chars.count && chars[i] == "("
-                if Evaluator.aggregateFunctions.contains(lower) || (callFollows && lower == "if") {
+                if Evaluator.aggregateFunctions.contains(lower) || lower == Evaluator.roundFunction || (callFollows && lower == "if") {
                     guard callFollows else { throw error("\(name) needs parentheses: \(name)(…)", at: start) }
                     if lower == "if" {
                         throw FormulaError(kind: .unsupported, message: "if() isn't supported yet", position: start)
