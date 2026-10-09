@@ -18,6 +18,19 @@ enum DebugSnapshot {
         window.ignoresMouseEvents = true
     }
 
+    /// A bitmap to cache `view` into: the window's own scale, or `-IndiumSnapshotScale 3`
+    /// for a sharper image than the screen's (for zoomed-in screenshots).
+    static func cachingRep(_ view: NSView) -> NSBitmapImageRep? {
+        let scale = UserDefaults.standard.double(forKey: "IndiumSnapshotScale")
+        guard scale > 0 else { return view.bitmapImageRepForCachingDisplay(in: view.bounds) }
+        let b = view.bounds
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(b.width * scale), pixelsHigh: Int(b.height * scale),
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        rep.size = b.size
+        return rep
+    }
+
     static func runLayoutTests() {
         let doc = "# Title\n\nAlpha paragraph.\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\nBeta paragraph.\n\nGamma.\n"
         func model(_ text: String) -> LayoutModel {
@@ -384,9 +397,14 @@ enum DebugSnapshot {
         guard let frame = window.contentView?.superview else { return }
         frame.layoutSubtreeIfNeeded()
         frame.displayIfNeeded()
-        guard let base = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return }
+        guard let base = cachingRep(frame) else { return }
         frame.cacheDisplay(in: frame.bounds, to: base)
         let pops = NSApp.windows.filter { $0 !== window && $0.isVisible && String(describing: type(of: $0)).contains("Popover") }
+        if pops.isEmpty, UserDefaults.standard.double(forKey: "IndiumSnapshotScale") > 0 {
+            try? base.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            print("  shot:", path)
+            return
+        }
         var canvas = window.frame
         for w in pops { canvas = canvas.union(w.frame) }
         let image = NSImage(size: canvas.size)
@@ -1491,7 +1509,7 @@ enum DebugSnapshot {
                 }
                 if !out.isEmpty, let view = window.contentView?.superview {
                     view.layoutSubtreeIfNeeded()
-                    if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                    if let rep = cachingRep(view) {
                         view.cacheDisplay(in: view.bounds, to: rep)
                         try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out))
                     }
