@@ -224,6 +224,8 @@ final class MarkdownStyler {
     var editingTableWidths: [CGFloat]?
     /// Its cell being typed in, measured with the Markdown markers it shows.
     var editingTableCell: (row: Int, column: Int)?
+    /// What that cell shows instead of its stored text: the formula being typed in it.
+    var editingTableCellText: String?
     /// The caption under a table with formulas (TableFormulaUI): given the note, the
     /// table's block and its formula lines. Without it (Quick Look) the lines just hide.
     var tableFormulaCaption: ((NSString, MDBlock, NSRange) -> CaptionDecoration)?
@@ -962,8 +964,9 @@ final class MarkdownStyler {
         let reveal = editing ? editingTableCell : nil
         let render = currentFloat != nil
             ? TableRender(spec: spec, typography: typo, maxWidth: floatMaxWidth, fractionBase: config.columnWidth, naturalCap: floatNaturalWidth,
-                          fixedWidths: fixed, revealing: reveal)
-            : TableRender(spec: spec, typography: typo, maxWidth: contentWidth, fixedWidths: fixed, revealing: reveal)
+                          fixedWidths: fixed, revealing: reveal, revealingText: editing ? editingTableCellText : nil)
+            : TableRender(spec: spec, typography: typo, maxWidth: contentWidth, fixedWidths: fixed, revealing: reveal,
+                          revealingText: editing ? editingTableCellText : nil)
         if !config.printing, let marks = tableFormulaMarks, let i = blockIndex(containing: block.range.location),
            i + 1 < blocks.count, blocks[i + 1].kind == .tableFormulas {
             render.marks = marks(text, block, blocks[i + 1].range)

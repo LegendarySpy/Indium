@@ -365,6 +365,12 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         editor.onFocusChange = { [weak self] cell in self?.tableFocusChanged(cell) }
         editor.onDeleteTable = { [weak self] in self?.deleteEditedTable() }
+        editor.formulaOf = { [weak self] cell in self?.formula(at: cell) }
+        editor.onEnter = { [weak self] cell, text in self?.enterInTable(text, at: cell) }
+        editor.onDraft = { [weak self] draft in self?.formulaDraftChanged(draft) }
+        editor.onProblem = { [weak self] cell, problem in self?.showFormulaHint(problem, isError: true, help: "", at: cell) }
+        editor.onValuesReplaced = { [weak self] a, b in self?.tableValuesReplaced = (a, b) }
+        editor.onFill = { [weak self] down in self?.fillTableFormula(down: down) }
         editor.noteSource = { [weak self] in
             guard let self, let at = self.styler.editingTableLocation, let range = self.tableSource(at: at) else { return nil }
             return self.ns.substring(with: range)
@@ -387,8 +393,12 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         bar.onDone = { [weak self] in self?.endTableEditing(caretAfter: true) }
         bar.placement = floatSide
         bar.onPlace = { [weak self] side in self?.placeEditedTable(float: side) }
-        bar.onFormula = { [weak self] in self?.showFormulaPopover() }
-        editor.onFormula = { [weak self] in self?.showFormulaPopover() }
+        bar.onFormula = { [weak editor] in editor?.startFormula() }
+        bar.onFill = { [weak self] down in self?.fillTableFormula(down: down) }
+        bar.canFill = { [weak self, weak editor] in
+            guard let self, let editor else { return false }
+            return self.formula(at: editor.selection?.anchor ?? editor.focus) != nil
+        }
         textView.addSubview(bar)
         tableToolbar = bar
         positionTableToolbar()
@@ -489,6 +499,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     /// The cell last typed in: more typing there joins the same undo step.
     private var tableTypingCell: TableEditorView.Cell?
+    /// Cells values were just typed, pasted or cleared over, whose formulas give way.
+    private var tableValuesReplaced: (TableEditorView.Cell, TableEditorView.Cell)?
     /// Typing waits until the cell is left to recalculate the table's formulas.
     private var tableFormulasPending = false
 
@@ -500,6 +512,11 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard let location = styler.editingTableLocation, let parts = tableParts(at: location) else { return }
         let old = ns.substring(with: parts.range)
         var table = markdown, formulas = parts.formulas
+        if let (a, b) = tableValuesReplaced, !formulas.isEmpty, let grid = TableFormulaUI.grid(of: parts.table)?.grid {
+            formulas = ExcelFormulas.removing(from: TableFormulas.Cell(row: a.row + 1, column: a.column + 1),
+                                              to: TableFormulas.Cell(row: b.row + 1, column: b.column + 1), in: formulas, grid: grid)
+        }
+        tableValuesReplaced = nil
         if cell == nil, !formulas.isEmpty {
             if let shape { formulas = TableFormulaUI.adjust(formulas, for: shape) }
             table = TableFormulaUI.recalculate(tableMarkdown: markdown, formulaLines: formulas, noteText: storage.string)
@@ -640,16 +657,13 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
               let grid = TableFormulaUI.grid(of: parts.table)?.grid else { return }
         let table = styler.blocks[i].range.location
         let rows = TableFormulaUI.summaries(grid: grid, formulaLines: parts.formulas)
-        let list = TableFormulaListPopover(rows: rows.map { ($0.text, $0.target != nil) })
+        let list = TableFormulaListPopover(rows: rows.map { ($0.text, $0.cell != nil) })
         let popover = NSPopover()
         list.presentingPopover = popover
         list.onEdit = { [weak self] n in
             guard let self else { return }
-            if let target = rows[n].target {
-                let labels = TableFormulaUI.hasLabelColumn(grid)
-                let cell = target.isRow ? (target.index - 1, labels ? 1 : 0) : (0, target.index - 1)
-                self.beginTableEditing(at: table, row: cell.0, column: cell.1)
-                self.showFormulaPopover(cell: cell, target: target)
+            if let cell = rows[n].cell {
+                self.beginTableEditing(at: table, row: cell.row - 1, column: cell.column - 1)
             } else {
                 self.revealFormulaLine(rows[n].line, formulasAt: location)
             }
@@ -714,44 +728,127 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return nil
     }
 
-    /// "This cell is calculated…" under a computed cell being edited, with Edit Formula….
-    private(set) var calculatedNote: TableCalculatedNote?
-    private var calculatedFocus: TableRender.Position?
+    // MARK: Typing formulas
 
-    private func updateCalculatedNote() {
-        guard let editor = tableEditor, editor.selection == nil, let location = styler.editingTableLocation,
-              editor.render.mark(row: editor.focus.row, column: editor.focus.column) != nil else {
-            calculatedNote?.removeFromSuperview()
-            calculatedNote = nil
+    /// The formula a cell of the edited table shows while it's edited (`=B2-B3`), from the note.
+    private func formula(at cell: TableEditorView.Cell) -> String? {
+        guard let location = styler.editingTableLocation, let parts = tableParts(at: location), !parts.formulas.isEmpty,
+              let grid = TableFormulaUI.grid(of: parts.table)?.grid else { return nil }
+        return ExcelFormulas.formula(at: TableFormulas.Cell(row: cell.row + 1, column: cell.column + 1), grid: grid, formulaLines: parts.formulas)
+    }
+
+    /// A formula typed in a cell, or a value typed over a computed one, goes into the note
+    /// with the table's results: one undo step. What's wrong instead, when it can't.
+    private func enterInTable(_ text: String, at cell: TableEditorView.Cell) -> String? {
+        recalculateEditedTable()
+        guard let editor = tableEditor, let location = styler.editingTableLocation, let parts = tableParts(at: location),
+              let grid = TableFormulaUI.grid(of: parts.table)?.grid else { return nil }
+        let at = TableFormulas.Cell(row: cell.row + 1, column: cell.column + 1)
+        guard text.hasPrefix("=") else {
+            let formulas = ExcelFormulas.removing(from: at, to: at, in: parts.formulas, grid: grid)
+            setTableFormulas(formulas, table: editor.markdown, actionName: "Typing")
+            return nil
+        }
+        switch ExcelFormulas.entering(text, in: at, grid: grid, formulaLines: parts.formulas, variables: NoteVariables.parse(noteText: storage.string)) {
+        case .failure(let e): return ExcelFormulas.message(e)
+        case .success(let formulas):
+            setTableFormulas(formulas, table: editor.markdown, actionName: "Formula")
+            return nil
+        }
+    }
+
+    /// Fill Right or Fill Down from the focused cell, to the end of its row or column, or
+    /// across the selected cells.
+    func fillTableFormula(down: Bool) {
+        guard let editor = tableEditor else { return }
+        editor.finishDraft()
+        recalculateEditedTable()
+        guard let location = styler.editingTableLocation, let parts = tableParts(at: location),
+              let grid = TableFormulaUI.grid(of: parts.table)?.grid else { return }
+        let from: TableEditorView.Cell = editor.selection.map { s in (min(s.anchor.row, s.head.row), min(s.anchor.column, s.head.column)) } ?? editor.focus
+        let to = editor.selection.map { s in down ? max(s.anchor.row, s.head.row) : max(s.anchor.column, s.head.column) }
+        let through = to.flatMap { $0 > (down ? from.row : from.column) ? $0 + 1 : nil }
+        switch ExcelFormulas.filling(from: TableFormulas.Cell(row: from.row + 1, column: from.column + 1), down: down, through: through,
+                                     grid: grid, formulaLines: parts.formulas, variables: NoteVariables.parse(noteText: storage.string)) {
+        case .failure(let e):
+            NSSound.beep()
+            showFormulaHint(ExcelFormulas.message(e), isError: true, help: "", at: from)
+        case .success(let formulas):
+            setTableFormulas(formulas, table: editor.markdown, actionName: down ? "Fill Down" : "Fill Right")
+        }
+    }
+
+    /// Under a cell a formula is typed in: its value or what's wrong (see `TableFormulaHint`).
+    private(set) var formulaHint: TableFormulaHint?
+    private var formulaHintCell: TableEditorView.Cell?
+
+    /// The formula being typed changed: the hint follows it, and the cell's row is
+    /// measured with the formula's text so none of it is cut off.
+    private func formulaDraftChanged(_ draft: (cell: TableEditorView.Cell, text: String)?) {
+        if styler.editingTableCellText != draft?.text, let location = styler.editingTableLocation, location < storage.length {
+            styler.editingTableCellText = draft?.text
+            styler.restyleBlock(at: location, in: storage)
+            refreshTableEditor()
+        }
+        guard let draft, let location = styler.editingTableLocation, let parts = tableParts(at: location),
+              let grid = TableFormulaUI.grid(of: parts.table)?.grid else { return hideFormulaHint() }
+        let at = TableFormulas.Cell(row: draft.cell.row + 1, column: draft.cell.column + 1)
+        let stored = ExcelFormulas.formula(at: at, grid: grid, formulaLines: parts.formulas)
+        let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.hasPrefix("=") else {
+            if stored != nil { showFormulaHint("Typing a value replaces the formula", isError: false, help: "Esc puts the formula back.", at: draft.cell) }
+            else { hideFormulaHint() }
             return
         }
-        let cell = TableRender.Position(row: editor.focus.row, column: editor.focus.column)
-        let note = calculatedNote ?? TableCalculatedNote()
-        note.onEditFormula = { [weak self] in
-            guard let self, let parts = self.tableParts(at: location), let grid = TableFormulaUI.grid(of: parts.table)?.grid,
-                  let i = TableFormulas.targets(grid: grid, formulaLines: parts.formulas)[TableFormulas.Cell(row: cell.row + 1, column: cell.column + 1)]
-            else { return }
-            let text = TableFormulas.parse(formulaLines: parts.formulas)[i].text
-            self.calculatedNote?.isHidden = true   // the popover says the rest
-            if let target = TableFormulaUI.target(of: text) {
-                self.showFormulaPopover(cell: (cell.row, cell.column), target: target)
-            } else {
-                let line = TableFormulas.parse(formulaLines: parts.formulas)[i].line
-                self.endTableEditing()
-                if let t = self.styler.blockIndex(containing: location), t + 1 < self.styler.blocks.count {
-                    self.revealFormulaLine(line, formulasAt: self.styler.blocks[t + 1].range.location)
-                }
+        let help = "Click a cell to put it in the formula. Return to finish, Esc to cancel."
+        let variables = NoteVariables.parse(noteText: storage.string)
+        switch ExcelFormulas.entering(text, in: at, grid: grid, formulaLines: parts.formulas, variables: variables) {
+        case .failure(let e):
+            showFormulaHint(ExcelFormulas.message(e), isError: false, help: help, at: draft.cell)
+        case .success(let formulas):
+            let outcome = TableFormulas.evaluate(grid: grid, formulaLines: formulas, variables: variables)
+            let name = ExcelFormulas.name(at)
+            let value: String
+            var isError = false
+            if let issue = outcome.issues.first(where: { $0.cell == at }) {
+                value = ExcelFormulas.message(issue.error)
+                isError = true
+            } else if outcome.blanks.contains(at) { value = "\(name) stays blank until the cells it uses have values" }
+            else if outcome.succeeded { value = "\(name) = \(outcome.grid[at.row - 1][at.column - 1])" }
+            else { value = "\(name): another formula in this table has a problem, so its values aren't updated" }
+            var about = help
+            // Not changed yet: what the formula works out, in the table's words.
+            if text == stored, let i = TableFormulas.targets(grid: grid, formulaLines: parts.formulas)[at] {
+                about = TableFormulaUI.plainWords(TableFormulas.parse(formulaLines: parts.formulas)[i].text, grid: grid).map { "= " + $0.source } ?? ""
             }
+            showFormulaHint(value, isError: isError, help: about, at: draft.cell)
         }
-        if note.superview == nil { textView.addSubview(note) }
-        if calculatedNote == nil || calculatedFocus.map({ $0 != cell }) ?? true { note.isHidden = false }
-        calculatedFocus = cell
-        calculatedNote = note
+    }
+
+    private func showFormulaHint(_ text: String, isError: Bool, help: String, at cell: TableEditorView.Cell) {
+        let hint = formulaHint ?? TableFormulaHint()
+        hint.show(text, isError: isError, help: help)
+        if hint.superview == nil { textView.addSubview(hint) }
+        formulaHint = hint
+        formulaHintCell = cell
+        positionFormulaHint()
+    }
+
+    private func hideFormulaHint() {
+        formulaHint?.removeFromSuperview()
+        formulaHint = nil
+        formulaHintCell = nil
+    }
+
+    private func positionFormulaHint() {
+        guard let hint = formulaHint, let cell = formulaHintCell, let editor = tableEditor,
+              cell.row < editor.render.rowHeights.count, cell.column < editor.render.columnWidths.count else { return }
         let table = NSRect(origin: editor.frame.origin, size: NSSize(width: editor.render.width, height: editor.render.height))
         let box = editor.render.cellRect(row: cell.row, column: cell.column, in: table)
-        let size = note.fittingSize
+        hint.layoutSubtreeIfNeeded()
+        let size = hint.fittingSize
         let x = min(max(box.minX, table.minX), max(table.maxX - size.width, table.minX))
-        note.frame = NSRect(x: round(x), y: round(box.maxY + 4), width: size.width, height: size.height)
+        hint.frame = NSRect(x: round(x), y: round(box.maxY + 4), width: ceil(size.width), height: ceil(size.height))
     }
 
     /// Recalculate under a table whose stored results are out of date: one undo step.
@@ -790,39 +887,18 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         undo.setActionName("Edit Table")
     }
 
-    /// Formula… from the table toolbar or a cell's menu, for the focused row or column.
-    /// `cell` (the editor's numbering) instead of the focused one, for the debug harness.
-    /// `target` picks the row or column outright (a computed cell's own formula).
-    func showFormulaPopover(cell: (row: Int, column: Int)? = nil, target: TableFormulaUI.Target? = nil) {
-        // A cell just typed in counts: its results first, so the preview starts from them.
-        recalculateEditedTable()
-        guard let editor = tableEditor, let location = styler.editingTableLocation, let parts = tableParts(at: location),
-              let grid = TableFormulaUI.grid(of: parts.table)?.grid else { return }
-        let popover = NSPopover()
-        let controller = TableFormulaPopover(grid: grid, formulaLines: parts.formulas, variables: NoteVariables.parse(noteText: storage.string),
-                                             focus: ((cell ?? editor.focus).row + 1, (cell ?? editor.focus).column + 1), target: target)
-        controller.presentingPopover = popover
-        controller.onApply = { [weak self] lines in self?.setTableFormulas(lines) }
-        popover.contentViewController = controller
-        popover.behavior = .transient
-        let at = cell ?? editor.focus
-        let rect = editor.render.cellRect(row: at.row, column: at.column,
-                                          in: NSRect(x: 0, y: 0, width: editor.render.width, height: editor.render.height))
-        popover.show(relativeTo: rect, of: editor, preferredEdge: .maxY)
-        formulaPopover = popover
-    }
-    private(set) weak var formulaPopover: NSPopover?
-
-    /// New formula lines for the edited table, and its values recalculated: one undo step.
-    private func setTableFormulas(_ formulas: [String]) {
+    /// New formula lines for the edited table (and `table`, its Markdown, when given), with
+    /// its values recalculated: one undo step.
+    private func setTableFormulas(_ formulas: [String], table markdown: String? = nil, actionName: String) {
         guard let location = styler.editingTableLocation, let parts = tableParts(at: location) else { return }
         let old = ns.substring(with: parts.range)
-        let table = TableFormulaUI.recalculate(tableMarkdown: parts.table, formulaLines: formulas, noteText: storage.string)
+        let table = TableFormulaUI.recalculate(tableMarkdown: markdown ?? parts.table, formulaLines: formulas, noteText: storage.string)
         let new = Self.joined(table, formulas)
         guard old != new else { return }
         tableTypingCell = nil
+        tableFormulasPending = false
         registerTableUndo(at: parts.range.location, restoring: old)
-        textView.undoManager?.setActionName("Formula")
+        textView.undoManager?.setActionName(actionName)
         replaceWithoutUndo(parts.range, with: new)
         refreshTableEditor()
         if let i = styler.blockIndex(containing: location), i + 1 < styler.blocks.count {
@@ -874,7 +950,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         editor.update(render: render)
         editor.frame.origin = rect.origin
         positionTableToolbar()
-        updateCalculatedNote()
+        positionFormulaHint()
     }
 
     private func deleteEditedTable() {
@@ -888,16 +964,16 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func endTableEditing(caretAfter: Bool = false, caretBefore: Bool = false) {
         guard let location = styler.editingTableLocation else { return }
+        tableEditor?.finishDraft()
         recalculateEditedTable()
-        formulaPopover?.close()
         styler.editingTableLocation = nil
         styler.editingTableWidths = nil
         styler.editingTableCell = nil
+        styler.editingTableCellText = nil
         layoutManager.hiddenFloat = nil
         tableEditor?.removeFromSuperview()
         tableToolbar?.removeFromSuperview()
-        calculatedNote?.removeFromSuperview()
-        calculatedNote = nil
+        hideFormulaHint()
         tableEditor = nil
         tableToolbar = nil
         tableColumnRect = .zero
