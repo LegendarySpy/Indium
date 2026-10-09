@@ -255,7 +255,7 @@ enum ExcelFormulas {
                 }
             }
             if !changed { out.append(line); continue }
-            if !kept.isEmpty { out.append("<!-- TBLFM: " + kept.joined(separator: "::") + " -->") }
+            if !kept.isEmpty { out.append(TableFormulas.formulaLine(kept)) }
         }
         return out
     }
@@ -289,7 +289,7 @@ enum ExcelFormulas {
             if wins { return inPlace }
         }
         let rest = rewrite(lines, width: width, height: height) { p in p.area.map { contains(area, $0) } == true ? nil : [p.text] }
-        return rest + ["<!-- TBLFM: \(formula) -->"]
+        return rest + [TableFormulas.formulaLine([formula])]
     }
 
     /// The lines with no formula filling any cell from `a` to `b` any more: formulas
