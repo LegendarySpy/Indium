@@ -1039,9 +1039,15 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         return nil
     }
 
+    // Only our own area is replaced: the view's other tracking areas belong to its tooltips.
+    private var cursorArea: NSTrackingArea?
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .cursorUpdate, .activeInKeyWindow, .inVisibleRect], owner: self))
+        if let cursorArea { removeTrackingArea(cursorArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .cursorUpdate, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        cursorArea = area
     }
 
     private func updateCursor(_ event: NSEvent) {
