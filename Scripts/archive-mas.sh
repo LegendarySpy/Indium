@@ -58,6 +58,15 @@ xcodebuild -project Indium.xcodeproj -scheme IndiumMAS -configuration Release-Ap
   MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD" \
   archive
 
+# SwiftMath's resource bundles come out of the archive signed for development, and the
+# export doesn't re-sign bundles inside Resources, so App Store Connect rejects them
+# (ITMS-90284). They hold only fonts, so drop their signatures and let the app's seal cover them.
+find "$ARCHIVE/Products/Applications/Indium.app" -name "SwiftMath_SwiftMath.bundle" -prune |
+  while read -r bundle; do
+    codesign --remove-signature "$bundle"
+    rm -rf "$bundle/Contents/_CodeSignature"
+  done
+
 xcodebuild -exportArchive -archivePath "$ARCHIVE" -exportPath "$OUT/Export" \
   -exportOptionsPlist "$OUT/ExportOptions.plist" -allowProvisioningUpdates
 
