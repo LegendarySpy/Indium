@@ -1,14 +1,16 @@
 # Formulas
 
 The arithmetic behind quick answers (`1 + 2 =` → ghost `3`) and spreadsheet formulas in
-Markdown tables (Advanced Tables `TBLFM` comments). Pure Foundation, no UI. Tables are
-found with the editor's `MarkdownScanner`.
+Markdown tables. You type `=B2-B3` in a cell; the note stores an Advanced Tables `TBLFM`
+comment under the table. Pure Foundation, no UI. Tables are found with the editor's
+`MarkdownScanner`.
 
 | File | What it is |
 | --- | --- |
 | `Evaluator.swift` | Parser and evaluator: `Quantity` (value, unit, precision), `FormulaUnit`, `FormulaPrecision`, `FormulaError` |
 | `Variables.swift` | `NoteVariables`: numbers from the note's frontmatter |
 | `TableFormulas.swift` | The TBLFM engine: parse formula lines, evaluate against a grid, Markdown helpers |
+| `ExcelFormulas.swift` | Spreadsheet syntax (`=SUM(B2:B5)`) to and from TBLFM, and changing a table's formula lines cell by cell |
 | `FormulaSelfTest.swift` | DEBUG regression runners (`-IndiumEvalCases`) |
 | `../Editor/MathAnswers.swift` | Quick answers: LaTeX to plain syntax, then the evaluator |
 
@@ -44,6 +46,15 @@ TableFormulas.parse(formulaLines:) -> [ParsedFormula]                          /
 TableFormulas.formulaText(ofLine:) / isFormulaLine(_:) / cells(ofRow:)
 struct Outcome { grid; formulas; issues: [Issue]; changed: [Cell]; blanks: [Cell]; succeeded: Bool }
 struct Issue { formula: String; cell: Cell?; error: FormulaError }             // Cell: TBLFM numbering, row 1 = header
+
+// Spreadsheet syntax (same Cell numbering: B4 is row 4, column 2)
+ExcelFormulas.tblfm("=B2-B3", at: cell, fill: .cell | .row(through:) | .column(through:), variables:) -> Result<String, FormulaError>
+ExcelFormulas.formula(at: cell, grid:, formulaLines:) -> String?          // "=C2-C3": what the cell shows while edited
+ExcelFormulas.entering("=B2-B3", in: cell, grid:, formulaLines:, variables:) -> Result<[String], FormulaError>   // new formula lines
+ExcelFormulas.filling(from: cell, down:, through:, grid:, formulaLines:, variables:) -> Result<[String], FormulaError>
+ExcelFormulas.removing(from: cell, to: cell, in: formulaLines, grid:) -> [String]   // a value typed or cleared over computed cells
+ExcelFormulas.message(FormulaError) -> String                              // "#DIV/0! Division by zero"
+ExcelFormulas.name(cell) / columnName(_:)                                  // "B4", "AA"
 ```
 
 `grid` is the header row followed by the body rows, without the `---` delimiter row.
@@ -55,26 +66,60 @@ the table, with no blank line between, as Advanced Tables reads them. The block'
 `apply(tableMarkdown:…)` rewrites only rows that changed, as `| a | b |`. Reformatting the
 columns is up to the UI. Formula lines are never rewritten.
 
-## In the editor (`../Editor/TableFormulaUI.swift`)
+## In the editor (`../Editor/TableFormulaUI.swift`, `TableEditor.swift`)
 
+- **Typing a formula.** In the table editor, type `=` in a cell and a formula, then Return
+  or Tab: the cell shows the result. Clicking a computed cell shows its formula again, as
+  the formula would read in that cell (`=C2-C3` in C4 of a row formula); leaving shows
+  the value. The toolbar's **Formula** button (and Add Formula in a cell's menu) starts
+  one with `=`. While a formula is typed, nothing is written to the note: it goes in
+  with its results as one undo step, "Formula", when the cell is left. Escape (or Undo)
+  puts the cell back as it was.
+- **Naming cells.** Columns are letters, A being the first column (the label column
+  too), and rows are numbers with the header row as 1, so B4 is TBLFM's `@4$2`. While a
+  formula is typed, letters and numbers sit along the grid's top and left edges, the
+  cells the formula names are outlined, and clicking another cell right after `=`, an
+  operator, `(`, `,` or `:` puts its name in (a drag, a range like `B2:B5`; another click
+  replaces it). Anywhere else, a click on another cell finishes the formula, as in a
+  spreadsheet. The table view refuses first responder meanwhile, so the click can't
+  take the keys from the cell.
+- **The hint under the cell** shows the value as it would be ("B4 = 1.293 g") or what's
+  wrong, in a spreadsheet's words ("#DIV/0! Division by zero", "#VALUE! B3 isn't a
+  number (“two”)", "#NAME? Unknown name “mass”", "Circular reference: B5 → B5").
+  A formula that doesn't parse, or gives a problem the table didn't have before, isn't
+  put in: Return beeps, the hint turns red, and the cell stays open. The table is never
+  left half-calculated by a formula typed here.
+- **One cell, or filled.** A formula typed in a cell fills that cell only: `@4$2=(@2$2-@3$2)`.
+  Fill Formula Right and Fill Formula Down (toolbar's More menu, or a cell's menu) copy
+  the focused cell's formula to the end of its row or column, or across the selected
+  cells, as a spreadsheet copies it: references move with each cell unless fixed with `$`
+  (`$B$2`). A row fill is stored the way the old row formulas were:
+  `@4$2..@4$>=(@2-@3)`. Formulas that only filled cells the new one fills are dropped.
+- **Editing one cell of a filled formula** changes that cell only, as a spreadsheet
+  does: a formula for just that cell is added after the others, where it wins. Typing
+  the formula the cell already shows changes nothing, so existing lines keep their
+  exact text (`@I`, `@>`, relative references and all) until you change them.
+- **Values replace formulas.** A value typed, pasted or cleared over computed cells
+  takes their formula away there; a formula that filled more keeps its other cells,
+  split into smaller areas (`@4$2=(@2-@3)::@4$4..@4$>=(@2-@3)`).
 - **One block.** `MarkdownScanner` gives the TBLFM lines right under a table their own
   `.tableFormulas` block, so they sit in the table's layout group: block drag, Wrap Text and
   Delete Table move or delete them with it. The editor draws them as a dimmed caption,
-  "ƒ 2 formulas", or the first problem in red ("“Mass of water”, Copper: Can't subtract mol
-  from g"). With the caret on them they show as source. PDF export, Quick Look and floating
-  tables hide them.
+  "ƒ 2 formulas", or the first problem in red ("D3 (“Paper”, Total): #VALUE! B3 isn't a
+  number (“two”)"). With the caret on them they show as source. PDF export, Quick Look
+  and floating tables hide them.
 - **Computed cells show it.** Each cell a formula fills (`TableFormulas.targets`) gets a
   faint tint and a small ƒ on screen, amber when its formula has a problem or its value is
-  out of date. Hovering one shows the formula in the table's words ("= Mass of hydrated
-  salt − Mass of anhydrous salt"), or its raw text when it can't be put that way. Editing
-  one in the table editor shows a note that the next recalculation replaces it, with
-  Edit Formula…. Clicking the caption lists every formula in plain words, each with Edit,
-  plus Show Source. Paper, PDFs and Quick Look show none of this.
-- **Recalculation** runs in the table editor only: after a change of shape, a paste, or
-  clearing cells at once, and when you leave a cell you typed in. The results go into the
-  same undo step as the edit, so one Undo restores the inputs and the outputs. On any issue
-  nothing changes (the engine is atomic) and the caption shows why. Only real `.table`
-  blocks are touched, never fenced code. Typing in the Markdown source doesn't recalculate.
+  out of date. Hovering one shows its formula and what it means in the table's words
+  ("=B2-B3", "Mass of hydrated salt − Mass of anhydrous salt"). Clicking the caption lists
+  every formula ("B4:D4, Mass of water: =B2-B3"), each with Edit (it opens the formula's
+  first cell), plus Show Source. Paper, PDFs and Quick Look show none of this.
+- **Recalculation** runs in the table editor only: after a formula goes in, a change of
+  shape, a paste, or clearing cells at once, and when you leave a cell you typed a value
+  in. The results go into the same undo step as the edit, so one Undo restores the inputs
+  and the outputs. On any issue nothing changes (the engine is atomic) and the caption
+  shows why. Only real `.table` blocks are touched, never fenced code. Typing in the
+  Markdown source doesn't recalculate.
 - **Frontmatter variables are inputs too.** A run of edits inside the frontmatter is one
   edit session: its first edit registers a single undo step that restores the frontmatter as
   it started, and the edits after it record nothing. When the session ends (the caret leaves
@@ -86,16 +131,12 @@ columns is up to the UI. Formula lines are never rewritten.
   in the Markdown source) offers Recalculate: clicking the word recalculates that table
   as one undo step, "Recalculate Formulas". With a problem nothing changes and the caption
   shows it instead.
-- **Formula…** (table toolbar's More menu, or a cell's menu) edits the focused row's or
-  column's formula: two operands and − + × ÷ "% of", or the formula typed in upstream syntax,
-  with a live preview. Row formulas leave out a label column (`@4$2..@4$>=(@2-@3)`), column
-  formulas the header (`$4=($2-$3)`). "% of" writes `((@A/@B)*100);%.1f`: a plain number from
-  0 to 100, to one decimal. Remove takes the formula out.
 - **References follow rows and columns** inserted or deleted *through the table editor*
   (toolbar, cell menu, edge strips). The editor reports the operation and its index, and
-  absolute references (`@4`, `$2`) shift like a spreadsheet's. A formula whose destination
-  was deleted is removed. A reference to a deleted row or column becomes `#REF`, which
-  doesn't parse, so the table isn't recalculated until that formula is fixed or removed.
+  absolute references (`@4`, `$2`) shift like a spreadsheet's, so B4 becomes B5 when a row
+  goes in above it. A formula whose destination was deleted is removed. A reference to a
+  deleted row or column becomes `#REF`, which doesn't parse, so the table isn't
+  recalculated until that formula is fixed or removed in the source.
   Ranges shrink with their rows. Relative references and `<`, `>`, `I` are left alone.
   A line holding any formula the engine doesn't parse (unsupported or mistyped) is kept
   byte for byte, and its references are **not** adjusted.
@@ -103,14 +144,49 @@ columns is up to the UI. Formula lines are never rewritten.
   source, in another app, or by Advanced Tables don't move references: they keep their
   numbers.
 
+## Spreadsheet syntax (`ExcelFormulas.swift`)
+
+| Typed in a cell | Stored (TBLFM) |
+| --- | --- |
+| `=B2-B3` in B4 | `@4$2=(@2$2-@3$2)` |
+| `=B4/B2*100` | `((@4$2/@2$2)*100)`: every operation gets its own parentheses |
+| `=ROUND(B4/B2*100, 1)` | `((@4$2/@2$2)*100);%.1f` |
+| `=ROUND(B4, 1)*2` | `(round(@4$2,1)*2)` (Indium only) |
+| `=SUM(B2:B5)` | `sum(@2$2..@5$2)` |
+| `=AVERAGE(B2:D2)` | `mean(@2$2..@2$4)` |
+| `=MIN(…)` `MAX` `COUNT` | `min(…)` `max` `count` (Indium only) |
+| `=SQRT(B2)` `ABS` `LN` `LOG10` / `LOG` `SIN` `COS` `TAN` | `sqrt(@2$2)` `abs` `ln` `log` … (Indium only) |
+| `=POWER(B2, 2)`, `=B2^2` | `(@2$2^2)` (Indium only) |
+| `=PI()` | `pi` |
+| `=50%*B2` | `((50/100)*@2$2)`, shown as `=50/100*B2` |
+| `=B4/water_molar_mass` | `(@4$2/water_molar_mass)` |
+| `=B2-B3`, Fill Right from B4 | `@4$2..@4$>=(@2-@3)` |
+| `=B4/$B$2`, Fill Right from B5 | `@5$2..@5$>=(@4/@2$2)`, shown in C5 as `=C4/$B2` |
+| `=B2*C2`, Fill Down from D2 | `@2$4..@>$4=($2*$3)` |
+
+- Function names and cell names aren't case-sensitive; they're shown in capitals.
+  Precedence is the evaluator's, so `-B2^2` is −(B2²), unlike a spreadsheet's.
+- A word shaped like a cell (`x1`) is a cell unless the note defines a variable by
+  exactly that name. Write `$` (`$X$1`) to mean the cell anyway.
+- `ROUND(x, n)` at the top with a whole `n` from 0 to 15 is the `;%.nf` directive, so
+  Advanced Tables reads it. Anywhere else (nested, or a negative `n`) it's Indium's
+  `round(x, n)`, which Advanced Tables can't parse.
+- Not supported, with a message: `IF`, comparisons, text in quotes, `TRUE`/`FALSE`,
+  `LOG` with a base, and functions Indium doesn't have (`#NAME? Unknown function FOO`).
+- Shown back, a formula loses only its redundant parentheses (`((@4/@2)*100)` shows as
+  `=B4/B2*100`), and `<`, `>`, `I` and relative references show as the cells they reach
+  from that cell. Those only change in the file if you change the formula.
+- `$` shows where a reference stays put as a filled formula fills more cells.
+
 ## Expression syntax (both features)
 
 - Numbers: `2`, `2.008`, `.5`, `6.022e23`. `+ - * / ^` (also `× · ÷ −`), parentheses.
   Precedence is standard, and `^` is right-associative: `-2^2 = -4`, `2^3^2 = 512`, `2^-2 = 0.25`.
 - Postfix `%` divides by 100 (`15% * 200 = 30`). It is never a unit.
-- Functions: `sqrt sin cos tan log ln abs` (`sqrt 16` also works), and `sum mean min max count`
-  with comma arguments or ranges. Constants: `pi`, `π`, `e`. Names of functions and constants
-  aren't case-sensitive.
+- Functions: `sqrt sin cos tan log ln abs` (`sqrt 16` also works), `sum mean min max count`
+  with comma arguments or ranges, and `round(x, n)`, half away from zero, to n decimal places
+  (never more than a measured input had: `round(1.2, 3)` is 1.2). Constants: `pi`, `π`, `e`.
+  Names of functions and constants aren't case-sensitive.
 - Quick answers only: implicit multiplication (`2pi`, `2(3)`), but never next to a variable
   (`2 mass` is an error). Two numbers in a row (`1 2`) are an error.
 - Units in quick answers come after a number, either as LaTeX `\text{ g}` in math (any text)
@@ -186,13 +262,9 @@ water_molar_mass: 18.02 g/mol
 <!-- TBLFM: @5$2..@5$>=((@4/@2)*100);%.1f -->
 ```
 
-**Formulas the UI should generate** for a transposed table with a label column:
-- "This row = row A − row B": `@R$2..@R$>=(@A-@B)`
-- "This row = A / B × 100": `@R$2..@R$>=((@A/@B)*100)`
-- "This column = col A × 2": `$C=($A*2)`
-
-Don't use `@R=(…)` there. Upstream fills every column with it, including the label column,
-so the formula fails (see below).
+The table editor writes these from spreadsheet formulas (see above). A row filled from
+its first number column is `@R$2..@R$>=(…)`, never `@R=(…)`: upstream fills every column
+with that, including the label column, so the formula fails (see below).
 
 ### Supported, matching upstream
 - Wrapper: `<!-- TBLFM: … -->`, on the lines directly after the table. Several formulas on a
@@ -211,7 +283,7 @@ so the formula fails (see below).
 
 ### Extensions
 These evaluate in Indium only. Advanced Tables fails to parse the line that holds them.
-- `min`, `max`, `count`, and comma arguments (`max(@2, @3)`). `sqrt sin cos tan log ln abs`. Unary minus on any value.
+- `min`, `max`, `count`, and comma arguments (`max(@2, @3)`). `sqrt sin cos tan log ln abs`, `round(x, n)` and `^`. Unary minus on any value.
 - Note variables by name (`(@4/water_molar_mass)`). Keep formulas that use them on their own TBLFM line.
 - Units and significant figures as above. Upstream ignores units and prints full binary precision.
 
@@ -258,7 +330,7 @@ These are reported as `unsupported` or `parse`, and the line is always kept verb
 
 ```
 Indium -ApplePersistenceIgnoreState YES -IndiumSnapshot /tmp/x.png \
-  -IndiumEvalCases Tests/Formulas/quick_answers.tsv,Tests/Formulas/evaluator.tsv,Tests/Formulas/tblfm_cases.md \
+  -IndiumEvalCases Tests/Formulas/quick_answers.tsv,Tests/Formulas/evaluator.tsv,Tests/Formulas/tblfm_cases.md,Tests/Formulas/excel_cases.tsv \
   [-IndiumEvalVerbose YES]
 ```
 
@@ -267,6 +339,10 @@ Indium -ApplePersistenceIgnoreState YES -IndiumSnapshot /tmp/x.png \
 - `evaluator.tsv`: precedence, precision, units, errors and bounds. Every success must parse back.
 - `tblfm_cases.md`: whole notes in and out, including the Results table, upstream's doc
   examples, atomicity, unsupported formulas left intact, cycles, bounds, and fenced code left untouched.
+  A case's `--- edit` section types in the first table's cells first, as the table editor
+  does (`B4 =B2-B3`, `C4 5`, `fill-right B4`), and `--- show` checks the formula a cell shows.
+- `excel_cases.tsv`: spreadsheet syntax to TBLFM and back (every success must show again as
+  typed), filled formulas, refusals, and the messages the table editor shows.
 
 The runners need only Foundation. For a fast loop without the app:
 
