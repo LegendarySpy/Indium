@@ -7,6 +7,17 @@ import SwiftMath
 /// and quits. Optional: `-IndiumSize 1000x1100`, `-IndiumSelect 120`,
 /// `-IndiumScroll 400`, `-IndiumPDF /tmp/out.pdf`, `-IndiumTemp YES`.
 enum DebugSnapshot {
+    /// `-IndiumHidden YES`: every window stays invisible and out of the Dock and app switcher,
+    /// so snapshots can run while someone is using the Mac. Snapshots draw the views, not the screen.
+    static let isHidden = UserDefaults.standard.bool(forKey: "IndiumHidden")
+
+    static func hideIfRequested(_ window: NSWindow) {
+        guard isHidden else { return }
+        NSApp.setActivationPolicy(.accessory)
+        window.alphaValue = 0
+        window.ignoresMouseEvents = true
+    }
+
     static func runLayoutTests() {
         let doc = "# Title\n\nAlpha paragraph.\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\nBeta paragraph.\n\nGamma.\n"
         func model(_ text: String) -> LayoutModel {
