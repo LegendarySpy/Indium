@@ -3,7 +3,7 @@ import AppKit
 /// The editor's side of table formulas (Advanced Tables `<!-- TBLFM: … -->` lines, see
 /// Sources/Formulas/README.md): the caption under a table, recalculating after an edit,
 /// keeping references pointed at the same rows and columns when rows or columns are
-/// inserted or deleted, and the Formula… popover.
+/// inserted or deleted, and the views around a cell a formula is typed in.
 enum TableFormulaUI {
 
     // MARK: Reading a table
@@ -70,24 +70,24 @@ enum TableFormulaUI {
     /// An issue in the table's own words: the row's label and the column's header.
     static func describe(_ issue: TableFormulas.Issue, grid: [[String]]) -> String {
         if issue.formula.contains(deletedMark) {
-            return "“\(issue.formula)” refers to a deleted row or column; fix or remove it with Formula…"
+            return "#REF! “\(issue.formula)” refers to a deleted row or column; fix or remove it in Show Source"
         }
         var place = ""
         if let cell = issue.cell, cell.row - 1 < grid.count {
             let row = grid[cell.row - 1]
-            let label = hasLabelColumn(grid) && !row.isEmpty ? "“\(row[0])”" : "Row \(cell.row)"
-            let header = cell.column - 1 < grid[0].count ? grid[0][cell.column - 1] : ""
-            place = header.isEmpty ? "\(label): " : "\(label), \(header): "
+            let label = hasLabelColumn(grid) && !row.isEmpty && cell.column != 1 ? "“\(row[0])”" : ""
+            let header = cell.column - 1 < grid[0].count && cell.row != 1 ? grid[0][cell.column - 1] : ""
+            let words = [label, header].filter { !$0.isEmpty }.joined(separator: ", ")
+            place = ExcelFormulas.name(cell) + (words.isEmpty ? "" : " (\(words))") + ": "
         } else {
             place = "“\(issue.formula)”: "
         }
-        return place + issue.error.message
+        return place + ExcelFormulas.message(issue.error)
     }
 
     // MARK: Formulas in plain words
 
     /// A row by its label ("Mass of water"), or "Row 4" in a table without a label column.
-    /// The names the Formula… popover offers.
     static func rowName(_ row: Int, grid: [[String]], labelColumn: Bool) -> String {
         let label = labelColumn && row >= 1 && row <= grid.count ? (grid[row - 1].first ?? "") : ""
         return label.isEmpty ? "Row \(row)" : label
@@ -169,23 +169,6 @@ enum TableFormulaUI {
         return (target, source)
     }
 
-    /// The row or column the Formula… popover edits for this formula, when it fills one.
-    static func target(of formula: String) -> Target? {
-        guard case let .success(f) = TableFormulas.parseFormula(formula) else { return nil }
-        let candidates: [Target]
-        switch f.destination {
-        case let .row(.absolute(r)): candidates = [Target(isRow: true, index: r)]
-        case let .column(.absolute(c)): candidates = [Target(isRow: false, index: c)]
-        case let .range(a, _):
-            candidates = [a.row, a.column].enumerated().compactMap { k, i in
-                if case let .absolute(n)? = i { return Target(isRow: k == 0, index: n) } else { return nil }
-            }
-        default: candidates = []
-        }
-        // Only a target `existing` finds again, so Edit opens this very formula.
-        return candidates.first { existing($0, in: ["<!-- TBLFM: \(formula) -->"]) != nil }
-    }
-
     /// The cells the formulas fill, for the rendered table: each with its formula in
     /// plain words for the tooltip, and flagged when the formula has a problem or the
     /// stored value is out of date.
@@ -196,18 +179,18 @@ enum TableFormulaUI {
         let targets = TableFormulas.targets(grid: grid, formulaLines: lines)
         guard !targets.isEmpty else { return [:] }
         let outcome = TableFormulas.evaluate(grid: grid, formulaLines: lines, variables: NoteVariables.parse(noteText: note as String))
-        var tips: [Int: String] = [:]
-        func tip(_ i: Int) -> String {
-            if let t = tips[i] { return t }
+        let width = grid.map(\.count).max() ?? 0
+        var words: [Int: String] = [:]
+        func tip(_ i: Int, _ cell: TableFormulas.Cell) -> String {
             let text = outcome.formulas[i].text
-            let t = plainWords(text, grid: grid).map { "= " + $0.source } ?? text
-            tips[i] = t
-            return t
+            if words[i] == nil { words[i] = plainWords(text, grid: grid).map { $0.source } ?? "" }
+            let shown = (try? outcome.formulas[i].result.get()).flatMap { ExcelFormulas.excel($0, at: cell, width: width, height: grid.count) }
+            return [shown ?? text, words[i]!].filter { !$0.isEmpty }.joined(separator: "\n")
         }
         var problems: [TableFormulas.Cell: String] = [:]
         for issue in outcome.issues {
-            if let cell = issue.cell { problems[cell] = issue.error.message; continue }
-            for (cell, i) in targets where outcome.formulas[i].text == issue.formula { problems[cell] = issue.error.message }
+            if let cell = issue.cell { problems[cell] = ExcelFormulas.message(issue.error); continue }
+            for (cell, i) in targets where outcome.formulas[i].text == issue.formula { problems[cell] = ExcelFormulas.message(issue.error) }
         }
         for cell in outcome.changed where problems[cell] == nil {
             let now = outcome.grid[cell.row - 1][cell.column - 1]
@@ -216,17 +199,21 @@ enum TableFormulaUI {
         var out: [TableRender.Position: TableRender.Mark] = [:]
         for (cell, i) in targets {
             let problem = problems[cell]
-            out[TableRender.Position(row: cell.row - 1, column: cell.column - 1)] = TableRender.Mark(isError: problem != nil, tip: tip(i) + (problem.map { "\n" + $0 } ?? ""))
+            out[TableRender.Position(row: cell.row - 1, column: cell.column - 1)] = TableRender.Mark(isError: problem != nil, tip: tip(i, cell) + (problem.map { "\n" + $0 } ?? ""))
         }
         return out
     }
 
-    /// Every formula under a table in plain words, "Mass of water = Mass of hydrated salt −
-    /// Mass of anhydrous salt", with the row or column Formula… edits for it.
-    static func summaries(grid: [[String]], formulaLines: [String]) -> [(text: String, target: Target?, line: Int)] {
-        TableFormulas.parse(formulaLines: formulaLines).map { p in
-            let text = plainWords(p.text, grid: grid).map { "\($0.target) = \($0.source)" } ?? p.text
-            return (text, target(of: p.text), p.line)
+    /// Every formula under a table, as its first cell shows it, with the cells it fills and
+    /// what they are: "B4:D4, Mass of water: =B2-B3". With the first cell, to edit it there.
+    static func summaries(grid: [[String]], formulaLines: [String]) -> [(text: String, cell: TableFormulas.Cell?, line: Int)] {
+        let width = grid.map(\.count).max() ?? 0, height = grid.count
+        return TableFormulas.parse(formulaLines: formulaLines).map { p in
+            guard case let .success(f) = p.result, let (first, last) = TableFormulas.corners(of: f.destination, width: width, height: height),
+                  first.row >= 1, first.column >= 1, last.row <= height, last.column <= width,
+                  let shown = ExcelFormulas.excel(f, at: first, width: width, height: height) else { return (p.text, nil, p.line) }
+            let target = plainWords(p.text, grid: grid)?.target
+            return (ExcelFormulas.name(from: first, to: last) + (target.map { ", " + $0 } ?? "") + ": " + shown, first, p.line)
         }
     }
 
@@ -350,332 +337,6 @@ enum TableFormulaUI {
         for e in edits.reversed() { result = (result as NSString).replacingCharacters(in: e.range, with: e.text) }
         return result
     }
-
-    // MARK: Editing one row's or column's formula
-
-    /// A target for the Formula… popover, in TBLFM numbering.
-    struct Target: Equatable {
-        var isRow: Bool
-        var index: Int
-    }
-
-    /// The formula that fills `target`: its line and position on it, and its text.
-    static func existing(_ target: Target, in formulaLines: [String]) -> (line: Int, index: Int, text: String)? {
-        var found: (Int, Int, String)?
-        for (n, line) in formulaLines.enumerated() {
-            guard let body = TableFormulas.formulaText(ofLine: line) else { continue }
-            for (k, piece) in body.components(separatedBy: "::").enumerated() {
-                let text = piece.trimmingCharacters(in: .whitespaces)
-                guard case let .success(f) = TableFormulas.parseFormula(text), fills(f.destination, target) else { continue }
-                found = (n, k, text)   // the last one wins, as in evaluation
-            }
-        }
-        return found
-    }
-
-    private static func fills(_ d: TableFormulas.Destination, _ t: Target) -> Bool {
-        let i = CellReference.Index.absolute(t.index)
-        switch d {
-        case let .row(r): return t.isRow && r == i
-        case let .column(c): return !t.isRow && c == i
-        case let .range(a, b):
-            return t.isRow ? a.row == i && b.row == i : a.column == i && (b.column ?? a.column) == i && a.row != b.row
-        case .cell: return false
-        }
-    }
-
-    /// `formulaLines` with the target's formula replaced by `text`, added on a line of its
-    /// own when it had none, or removed when `text` is nil.
-    static func setting(_ text: String?, for target: Target, in formulaLines: [String]) -> [String] {
-        var lines = formulaLines
-        if let old = existing(target, in: lines) {
-            var pieces = TableFormulas.formulaText(ofLine: lines[old.line])!.components(separatedBy: "::").map { $0.trimmingCharacters(in: .whitespaces) }
-            if let text { pieces[old.index] = text } else { pieces.remove(at: old.index) }
-            if pieces.isEmpty { lines.remove(at: old.line) } else { lines[old.line] = "<!-- TBLFM: " + pieces.joined(separator: "::") + " -->" }
-        } else if let text {
-            lines.append("<!-- TBLFM: \(text) -->")
-        }
-        return lines
-    }
-}
-
-// MARK: - Popover
-
-/// "Row “Mass of water” = [Hydrated ▾] [− ▾] [Anhydrous ▾]", the formula in upstream
-/// syntax underneath (editable), and a live preview of the values it gives.
-final class TableFormulaPopover: NSViewController, NSTextFieldDelegate {
-    enum Operation: String, CaseIterable {
-        case subtract = "−", add = "+", multiply = "×", divide = "÷", percent = "% of"
-        var symbol: String { ["−": "-", "+": "+", "×": "*", "÷": "/"][rawValue] ?? "/" }
-    }
-
-    let grid: [[String]]
-    let formulaLines: [String]
-    let variables: NoteVariables
-    let labelColumn: Bool
-    private(set) var target: TableFormulaUI.Target
-    private let focus: (row: Int, column: Int)
-    /// New formula lines: with the target's formula set, or removed.
-    var onApply: (([String]) -> Void)?
-
-    let axis = NSSegmentedControl(labels: ["Row", "Column"], trackingMode: .selectOne, target: nil, action: nil)
-    let titleLabel = NSTextField(labelWithString: "")
-    let left = NSPopUpButton(), operation = NSPopUpButton(), right = NSPopUpButton()
-    let field = NSTextField(string: "")
-    let preview = NSTextField(wrappingLabelWithString: "")
-    let removeButton = NSButton(title: "Remove", target: nil, action: nil)
-    let applyButton = NSButton(title: "Apply", target: nil, action: nil)
-
-    /// `focus` is the focused cell in TBLFM numbering.
-    /// `target` picks the row or column outright (Edit in the formulas list); otherwise
-    /// it follows the focused cell.
-    init(grid: [[String]], formulaLines: [String], variables: NoteVariables, focus: (row: Int, column: Int),
-         target: TableFormulaUI.Target? = nil) {
-        self.grid = grid
-        self.formulaLines = formulaLines
-        self.variables = variables
-        self.focus = focus
-        labelColumn = TableFormulaUI.hasLabelColumn(grid)
-        let isRow = focus.row == 1 ? false : (focus.column == 1 || labelColumn)
-        self.target = target ?? .init(isRow: isRow, index: isRow ? max(focus.row, 2) : focus.column)
-        super.init(nibName: nil, bundle: nil)
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    private var height: Int { grid.count }
-    private var width: Int { grid.map(\.count).max() ?? 0 }
-
-    override func loadView() {
-        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        titleLabel.lineBreakMode = .byTruncatingTail
-        axis.target = self
-        axis.action = #selector(axisChanged)
-        axis.controlSize = .small
-        for p in [left, operation, right] {
-            p.controlSize = .small
-            p.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-            p.target = self
-            p.action = #selector(builderChanged)
-            (p.cell as? NSPopUpButtonCell)?.lineBreakMode = .byTruncatingMiddle
-        }
-        operation.addItems(withTitles: Operation.allCases.map(\.rawValue))
-        field.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        field.placeholderString = "@4$2..@4$>=(@2-@3)"
-        field.delegate = self
-        field.lineBreakMode = .byTruncatingMiddle
-        preview.font = .systemFont(ofSize: 11)
-        preview.textColor = .secondaryLabelColor
-        preview.preferredMaxLayoutWidth = 340
-        preview.maximumNumberOfLines = 4
-        removeButton.target = self
-        removeButton.action = #selector(remove)
-        removeButton.controlSize = .small
-        let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel))
-        cancel.controlSize = .small
-        cancel.keyEquivalent = "\u{1b}"
-        applyButton.target = self
-        applyButton.action = #selector(apply)
-        applyButton.controlSize = .small
-        applyButton.keyEquivalent = "\r"
-
-        let header = NSStackView(views: [titleLabel, NSView(), axis])
-        header.distribution = .fill
-        let builder = NSStackView(views: [left, operation, right])
-        builder.spacing = 6
-        builder.distribution = .fill
-        operation.widthAnchor.constraint(equalToConstant: 72).isActive = true
-        left.widthAnchor.constraint(equalTo: right.widthAnchor).isActive = true
-        for p in [left, right] { p.setContentCompressionResistancePriority(.defaultLow, for: .horizontal) }
-        let buttons = NSStackView(views: [removeButton, NSView(), cancel, applyButton])
-        let stack = NSStackView(views: [header, builder, field, preview, buttons])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 14, left: 14, bottom: 12, right: 14)
-        for v in [header, builder, field, preview, buttons] { v.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28).isActive = true }
-        stack.widthAnchor.constraint(equalToConstant: 380).isActive = true
-        view = stack
-        loadTarget()
-    }
-
-    /// The operand choices: the other body rows, or the other columns.
-    private var choices: [(title: String, index: Int)] {
-        if target.isRow {
-            return (2...max(height, 2)).filter { $0 != target.index && $0 <= height }.map { r in
-                (TableFormulaUI.rowName(r, grid: grid, labelColumn: labelColumn), r)
-            }
-        }
-        return (1...max(width, 1)).filter { $0 != target.index }.map { c in (TableFormulaUI.columnName(c, grid: grid), c) }
-    }
-
-    private var targetName: String {
-        if target.isRow {
-            let label = labelColumn && target.index <= height ? grid[target.index - 1][0] : ""
-            return label.isEmpty ? "Row \(target.index)" : "Row “\(label)”"
-        }
-        let h = target.index - 1 < grid[0].count ? grid[0][target.index - 1] : ""
-        return h.isEmpty ? "Column \(target.index)" : "Column “\(h)”"
-    }
-
-    private func loadTarget() {
-        axis.selectedSegment = target.isRow ? 0 : 1
-        titleLabel.stringValue = targetName + " ="
-        let options = choices
-        for p in [left, right] {
-            p.removeAllItems()
-            p.addItems(withTitles: options.map(\.title))
-            // Titles can repeat ("Row 3" twice can't, but two blank headers can); tags tell them apart.
-            for (i, item) in p.itemArray.enumerated() { item.tag = options[i].index }
-        }
-        let existing = TableFormulaUI.existing(target, in: formulaLines)
-        removeButton.isHidden = existing == nil
-        applyButton.title = existing == nil ? "Add" : "Apply"
-        if let existing, selectBuilder(from: existing.text) {
-            field.stringValue = existing.text
-        } else if let existing {
-            field.stringValue = existing.text
-        } else {
-            // A new formula: the two before it, the first minus the second (hydrated − anhydrous),
-            // from the ones no formula fills, so the suggestion never depends on itself.
-            let all = options.map(\.index)
-            let inputs = all.filter { TableFormulaUI.existing(.init(isRow: target.isRow, index: $0), in: formulaLines) == nil }
-            let idx = inputs.count >= 2 ? inputs : all
-            let before = idx.filter { $0 < target.index }
-            let a = before.count >= 2 ? before[before.count - 2] : idx.first, b = before.last ?? (idx.count > 1 ? idx[1] : idx.first)
-            if let a { left.selectItem(withTag: a) }
-            if let b { right.selectItem(withTag: b) }
-            operation.selectItem(at: 0)
-            field.stringValue = builtFormula()
-        }
-        updatePreview()
-    }
-
-    /// What the destination looks like for this target. Row formulas leave out the label
-    /// column; `@R=(…)` would fill it too, and fail on its text.
-    private var destination: String {
-        if target.isRow { return labelColumn ? "@\(target.index)$2..@\(target.index)$>" : "@\(target.index)" }
-        return "$\(target.index)"
-    }
-
-    private func builtFormula() -> String {
-        let p = target.isRow ? "@" : "$"
-        let a = p + "\(left.selectedTag())", b = p + "\(right.selectedTag())"
-        let op = Operation.allCases[max(operation.indexOfSelectedItem, 0)]
-        if op == .percent { return destination + "=((\(a)/\(b))*100);%.1f" }
-        return destination + "=(\(a)\(op.symbol)\(b))"
-    }
-
-    private static let simple = try! NSRegularExpression(pattern: #"^\(([@$])(\d+)([-+*/])([@$])(\d+)\)$"#)
-    private static let percent = try! NSRegularExpression(pattern: #"^\(\(([@$])(\d+)/([@$])(\d+)\)\*100\);%\.1f$"#)
-
-    /// Sets the menus from a formula they can express; false if they can't.
-    private func selectBuilder(from text: String) -> Bool {
-        guard let eq = text.firstIndex(of: "="), String(text[..<eq]) == destination else { return false }
-        let source = String(text[text.index(after: eq)...])
-        let ns = source as NSString, full = NSRange(location: 0, length: ns.length)
-        let p = target.isRow ? "@" : "$"
-        if let m = Self.percent.firstMatch(in: source, range: full), ns.substring(with: m.range(at: 1)) == p, ns.substring(with: m.range(at: 3)) == p {
-            left.selectItem(withTag: Int(ns.substring(with: m.range(at: 2))) ?? 0)
-            right.selectItem(withTag: Int(ns.substring(with: m.range(at: 4))) ?? 0)
-            operation.selectItem(withTitle: Operation.percent.rawValue)
-            return true
-        }
-        if let m = Self.simple.firstMatch(in: source, range: full), ns.substring(with: m.range(at: 1)) == p, ns.substring(with: m.range(at: 4)) == p,
-           let op = Operation.allCases.first(where: { $0 != .percent && $0.symbol == ns.substring(with: m.range(at: 3)) }) {
-            left.selectItem(withTag: Int(ns.substring(with: m.range(at: 2))) ?? 0)
-            right.selectItem(withTag: Int(ns.substring(with: m.range(at: 5))) ?? 0)
-            operation.selectItem(withTitle: op.rawValue)
-            return true
-        }
-        return false
-    }
-
-    @objc private func axisChanged() {
-        let isRow = axis.selectedSegment == 0
-        guard isRow != target.isRow else { return }
-        target = .init(isRow: isRow, index: isRow ? max(focus.row, 2) : focus.column)
-        loadTarget()
-    }
-
-    @objc private func builderChanged() {
-        field.stringValue = builtFormula()
-        updatePreview()
-    }
-
-    func controlTextDidChange(_ obj: Notification) { updatePreview() }
-
-    /// The values the formula gives this row or column, or what's wrong.
-    func updatePreview() {
-        let text = field.stringValue.trimmingCharacters(in: .whitespaces)
-        guard !text.isEmpty else {
-            preview.stringValue = "Type a formula, or pick rows above."
-            preview.textColor = .secondaryLabelColor
-            applyButton.isEnabled = false
-            return
-        }
-        let lines = TableFormulaUI.setting(text, for: target, in: formulaLines)
-        let outcome = TableFormulas.evaluate(grid: grid, formulaLines: lines, variables: variables)
-        if case let .failure(e) = TableFormulas.parseFormula(text) {
-            show(error: e.message)
-            return
-        }
-        if let issue = outcome.issues.first {
-            show(error: TableFormulaUI.describe(issue, grid: outcome.grid))
-            return
-        }
-        var values: [String] = []
-        if target.isRow {
-            for c in (labelColumn ? 2 : 1)...max(width, 1) where target.index <= outcome.grid.count && c <= outcome.grid[target.index - 1].count {
-                let v = outcome.grid[target.index - 1][c - 1]
-                values.append("\(grid[0][c - 1]): \(v.isEmpty ? "blank" : v)")
-            }
-        } else {
-            for r in 2...max(height, 2) where r <= outcome.grid.count && target.index <= outcome.grid[r - 1].count {
-                let v = outcome.grid[r - 1][target.index - 1]
-                let label = labelColumn ? grid[r - 1][0] : "Row \(r)"
-                values.append("\(label): \(v.isEmpty ? "blank" : v)")
-            }
-        }
-        var note = values.joined(separator: " · ")
-        if text.contains("*100") { note += "\nA percentage as a plain number from 0 to 100, to one decimal (64.4)." }
-        if text.contains("min(") || text.contains("max(") || text.contains("count(") || variables.values.keys.contains(where: { text.contains($0) }) {
-            note += "\nUses an Indium extension: Obsidian's Advanced Tables won't evaluate this line."
-        }
-        preview.stringValue = "→ " + note
-        preview.textColor = .secondaryLabelColor
-        applyButton.isEnabled = true
-    }
-
-    private func show(error: String) {
-        preview.stringValue = error
-        preview.textColor = Palette.error
-        applyButton.isEnabled = false
-    }
-
-    @objc func apply() {
-        let text = field.stringValue.trimmingCharacters(in: .whitespaces)
-        guard applyButton.isEnabled, !text.isEmpty else { NSSound.beep(); return }
-        presentingPopover?.close()
-        onApply?(TableFormulaUI.setting(text, for: target, in: formulaLines))
-    }
-
-    @objc func remove() {
-        presentingPopover?.close()
-        onApply?(TableFormulaUI.setting(nil, for: target, in: formulaLines))
-    }
-
-    @objc func cancel() { presentingPopover?.close() }
-
-    weak var presentingPopover: NSPopover?
-
-    // For the debug harness.
-    func debugSet(left l: Int?, operation op: String?, right r: Int?) {
-        if let l { left.selectItem(withTag: l) }
-        if let op { operation.selectItem(withTitle: op) }
-        if let r { right.selectItem(withTag: r) }
-        builderChanged()
-    }
 }
 
 // MARK: - Computed cells
@@ -690,7 +351,7 @@ final class CellTip: NSObject, NSViewToolTipOwner {
 /// The caption's popover: each formula in plain words, with Edit.
 final class TableFormulaListPopover: NSViewController {
     let rows: [(text: String, editable: Bool)]
-    /// Edit on a row (its index): Formula… for its row or column, or its source line.
+    /// Edit on a row (its index): its first cell, or its source line.
     var onEdit: ((Int) -> Void)?
     var onShowSource: (() -> Void)?
     weak var presentingPopover: NSPopover?
@@ -717,7 +378,7 @@ final class TableFormulaListPopover: NSViewController {
             edit.controlSize = .small
             edit.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
             edit.tag = i
-            edit.toolTip = row.editable ? "Edit with Formula…" : "Show this formula's source"
+            edit.toolTip = row.editable ? "Edit this formula in its first cell" : "Show this formula's source"
             edit.setContentHuggingPriority(.required, for: .horizontal)
             buttons.append(edit)
             let line = NSStackView(views: [label, NSView(), edit])
@@ -756,47 +417,51 @@ final class TableFormulaListPopover: NSViewController {
     func debugEdit(_ n: Int) { if n < buttons.count { edit(buttons[n]) } }
 }
 
-/// Under a computed cell being edited: what happens to typing there, and a way to the
-/// formula. Typing isn't blocked.
-final class TableCalculatedNote: NSView {
-    var onEditFormula: (() -> Void)?
-    private let label = NSTextField(wrappingLabelWithString:
-        "This cell is calculated. Your change will be replaced the next time the table recalculates. Edit the formula instead.")
-    private let button = NSButton(title: "Edit Formula…", target: nil, action: nil)
+/// Under a cell a formula is typed in: its value as it stands, or what's wrong, and how
+/// to go on. Clicks pass through to the page.
+final class TableFormulaHint: NSView {
+    private let value = NSTextField(wrappingLabelWithString: "")
+    private let help = NSTextField(wrappingLabelWithString: "")
 
     init() {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 7
         layer?.borderWidth = 0.5
-        label.font = .systemFont(ofSize: 11)
-        label.textColor = Palette.secondaryText
-        label.preferredMaxLayoutWidth = 260
-        button.isBordered = false
-        button.controlSize = .small
-        button.font = .systemFont(ofSize: 11, weight: .medium)
-        button.contentTintColor = Palette.link
-        button.refusesFirstResponder = true
-        button.target = self
-        button.action = #selector(editFormula)
-        let stack = NSStackView(views: [label, button])
+        value.font = .systemFont(ofSize: 11.5, weight: .medium)
+        value.preferredMaxLayoutWidth = 300
+        help.font = .systemFont(ofSize: 10.5)
+        help.textColor = Palette.secondaryText
+        help.preferredMaxLayoutWidth = 300
+        let stack = NSStackView(views: [value, help])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 4
-        stack.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 7, right: 10)
+        stack.spacing = 3
+        stack.edgeInsets = NSEdgeInsets(top: 6, left: 9, bottom: 6, right: 9)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            label.widthAnchor.constraint(equalToConstant: 260),
+            stack.widthAnchor.constraint(lessThanOrEqualToConstant: 318),
         ])
         setAccessibilityElement(true)
-        setAccessibilityRole(.group)
-        setAccessibilityLabel(label.stringValue)
+        setAccessibilityRole(.staticText)
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    /// `isError` in red; `help` hidden when empty.
+    func show(_ text: String, isError: Bool, help helpText: String) {
+        value.stringValue = text
+        value.textColor = isError ? Palette.error : Palette.text
+        help.stringValue = helpText
+        help.isHidden = helpText.isEmpty
+        setAccessibilityLabel([text, helpText].filter { !$0.isEmpty }.joined(separator: ". "))
+        needsLayout = true
+    }
+
+    var text: String { [value.stringValue, help.isHidden ? "" : help.stringValue].filter { !$0.isEmpty }.joined(separator: " | ") }
 
     override var isFlipped: Bool { true }
     override var wantsUpdateLayer: Bool { true }
@@ -806,12 +471,58 @@ final class TableCalculatedNote: NSView {
         layer?.borderColor = Palette.quoteBar.cgColor
     }
 
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .arrow) }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
 
-    @objc private func editFormula() { onEditFormula?() }
+/// Column letters along the top of a table and row numbers down its left side, while a
+/// formula is typed, so cells can be named the way the formula names them. Each sits on
+/// the grid's edge, half outside it; the edited cell's column and row are lit.
+final class TableReferenceRuler: NSView {
+    static let left: CGFloat = 12
+    static let top: CGFloat = 8
+    private var columns: [(x: CGFloat, width: CGFloat)] = []
+    private var rows: [(y: CGFloat, height: CGFloat)] = []
+    private var focus: (row: Int, column: Int) = (0, 0)
 
-    var text: String { label.stringValue }
+    /// `origin`: the grid's top-left corner in the superview.
+    func update(render: TableRender, origin: NSPoint, focus: (row: Int, column: Int)) {
+        var x: CGFloat = 0, y: CGFloat = 0
+        columns = render.columnWidths.map { w in defer { x += w }; return (x, w) }
+        rows = render.rowHeights.map { h in defer { y += h }; return (y, h) }
+        self.focus = focus
+        frame = NSRect(x: origin.x - Self.left, y: origin.y - Self.top, width: render.width + Self.left, height: render.height + Self.top)
+        needsDisplay = true
+    }
 
-    // For the debug harness.
-    func debugEditFormula() { editFormula() }
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    var labels: (columns: [String], rows: [String]) {
+        (columns.indices.map { ExcelFormulas.columnName($0 + 1) }, rows.indices.map { "\($0 + 1)" })
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .semibold)
+        func pill(_ text: String, center: NSPoint, lit: Bool) {
+            let size = (text as NSString).size(withAttributes: [.font: font])
+            let box = NSRect(x: round(center.x - max(size.width + 8, 15) / 2), y: round(center.y - 7), width: max(size.width + 8, 15), height: 14)
+            let path = NSBezierPath(roundedRect: box, xRadius: 7, yRadius: 7)
+            (lit ? NSColor.controlAccentColor : Palette.surface).setFill()
+            path.fill()
+            if !lit {
+                Palette.quoteBar.setStroke()
+                path.lineWidth = 0.5
+                path.stroke()
+            }
+            (text as NSString).draw(at: NSPoint(x: box.midX - size.width / 2, y: box.midY - size.height / 2), withAttributes: [
+                .font: font, .foregroundColor: lit ? NSColor.white : Palette.secondaryText,
+            ])
+        }
+        for (i, c) in columns.enumerated() {
+            pill(ExcelFormulas.columnName(i + 1), center: NSPoint(x: Self.left + c.x + c.width / 2, y: Self.top), lit: i == focus.column)
+        }
+        for (i, r) in rows.enumerated() {
+            pill("\(i + 1)", center: NSPoint(x: Self.left, y: Self.top + r.y + r.height / 2), lit: i == focus.row)
+        }
+    }
 }

@@ -42,9 +42,10 @@ final class TableRender {
     let naturalCap: CGFloat
 
     /// `fixedWidths` holds the columns still while a table is edited, so typing only
-    /// grows rows; `revealing` is the cell being edited, measured with its markers shown.
+    /// grows rows; `revealing` is the cell being edited, measured with its markers shown,
+    /// or as `revealingText` when it shows something else (a formula being typed).
     init(spec: TableSpec, typography: Typography, maxWidth: CGFloat, fractionBase: CGFloat? = nil, naturalCap: CGFloat? = nil,
-         fixedWidths: [CGFloat]? = nil, revealing: (row: Int, column: Int)? = nil) {
+         fixedWidths: [CGFloat]? = nil, revealing: (row: Int, column: Int)? = nil, revealingText: String? = nil) {
         self.maxWidth = maxWidth
         self.fractionBase = fractionBase ?? maxWidth
         self.naturalCap = min(naturalCap ?? maxWidth, maxWidth)
@@ -55,10 +56,11 @@ final class TableRender {
         cells = spec.rows.enumerated().map { r, row in
             (0..<columns).map { c in
                 // As seen: `\|` a pipe (also inside math, as GFM has it), `<br>` a line break.
-                let text = c < row.count ? TableSpec.unescapeCell(row[c].text) : ""
+                let revealed = revealing.map { $0.row == r && $0.column == c } ?? false
+                let text = revealed ? revealingText ?? TableSpec.unescapeCell(c < row.count ? row[c].text : "")
+                                    : c < row.count ? TableSpec.unescapeCell(row[c].text) : ""
                 return TableRender.render(text, header: r == 0, alignment: c < spec.alignments.count ? spec.alignments[c] : 0,
-                                          typography: typography, size: size,
-                                          revealMarkers: revealing.map { $0.row == r && $0.column == c } ?? false)
+                                          typography: typography, size: size, revealMarkers: revealed)
             }
         }
         if let fixed = fixedWidths, fixed.count == columns, fixed.reduce(0, +) <= maxWidth + 1 {

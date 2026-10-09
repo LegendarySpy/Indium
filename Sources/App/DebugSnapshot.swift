@@ -885,7 +885,7 @@ enum DebugSnapshot {
                 for step in steps {
                     // Steps that only look (and Tab, as a real key) open no explicit undo group: an empty
                     // explicit group stays on the stack, where a real key event's empty group is dropped.
-                    let isUndo = ["undo", "redo", "noteundo", "tab", "text", "caption", "fprint", "shot", "focus", "done", "notesel", "selectAll", "select", "pb", "pbhtml", "pbtsv", "copy", "copyTable", "keyev", "cmdev", "switchto", "idle", "cat", "tips", "calcnote", "list"].contains(step.split(separator: ":").first.map(String.init) ?? "")
+                    let isUndo = ["undo", "redo", "noteundo", "tab", "text", "caption", "shot", "focus", "done", "notesel", "selectAll", "select", "pb", "pbhtml", "pbtsv", "copy", "copyTable", "keyev", "cmdev", "switchto", "idle", "cat", "tips", "list", "hint", "draft"].contains(step.split(separator: ":").first.map(String.init) ?? "")
                     if !isUndo { undo?.beginUndoGrouping() }
                     defer { if !isUndo { undo?.endUndoGrouping() } }
                     let e = target.editor.tableEditor
@@ -989,35 +989,26 @@ enum DebugSnapshot {
                         // take the first click as activation only.
                         let hit = window.contentView?.superview?.hitTest(window.contentView!.superview!.convert(from, from: nil))
                         print("  hit:", hit.map { String(describing: type(of: $0)) } ?? "nil")
+                        // As the window does with a real click: the view takes the keys first if it accepts them.
+                        if let hit, hit.acceptsFirstResponder, window.firstResponder !== hit { window.makeFirstResponder(hit) }
                         hit?.mouseDown(with: mouse(.leftMouseDown, from, clicks: clicks))
                     case "copyTable": e?.copyTable()
                     case "done":
                         target.editor.endTableEditing(caretAfter: true)
-                    // Table formulas: `formula` opens Formula… for the focused cell; `fpick:2,−,3`
-                    // sets its menus (rows/columns in TBLFM numbering, an operation's title);
-                    // `ftext:…` types the formula; `fok`, `fremove`, `fcancel`; `fprint` shows it;
-                    // `text` prints the note; `caption` the captions drawn; `shot:path` a screenshot.
-                    case "formula":
-                        let n = arg.split(separator: ",").compactMap { Int($0) }
-                        target.editor.showFormulaPopover(cell: n.count == 2 ? (n[0], n[1]) : nil)
-                        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
-                    case "fpick", "ftext", "fok", "fremove", "fcancel", "fprint":
-                        guard let pop = target.editor.formulaPopover?.contentViewController as? TableFormulaPopover else { print("  no formula popover"); break }
-                        switch step.split(separator: ":").first.map(String.init) ?? "" {
-                        case "fpick":
-                            let n = arg.split(separator: ",").map(String.init)
-                            pop.debugSet(left: Int(n[0]), operation: n.count > 1 ? n[1] : nil, right: n.count > 2 ? Int(n[2]) : nil)
-                        case "ftext":
-                            pop.field.stringValue = arg
-                            pop.updatePreview()
-                        case "fok": pop.apply()
-                        case "fremove": pop.remove()
-                        case "fcancel": pop.cancel()
-                        default: break
-                        }
-                        print("  FORMULA [\(pop.titleLabel.stringValue)] [\(pop.left.titleOfSelectedItem ?? "-")] [\(pop.operation.titleOfSelectedItem ?? "-")] [\(pop.right.titleOfSelectedItem ?? "-")]",
-                              "field:", pop.field.stringValue, "preview:", pop.preview.stringValue.debugDescription,
-                              "apply:", pop.applyButton.isEnabled, "remove shown:", !pop.removeButton.isHidden)
+                    // Table formulas: `formula` is the toolbar's Formula (starts `=` in the focused cell),
+                    // `fill:right` / `fill:down` its Fill Formula Right / Down, `hint` prints the hint under
+                    // the cell, `draft` what the cell holds back and the cells it names; `text` prints the
+                    // note, `caption` the captions drawn, `shot:path` a screenshot.
+                    case "formula": e?.startFormula()
+                    case "fill": target.editor.fillTableFormula(down: arg == "down")
+                    case "hint":
+                        print("  HINT:", target.editor.formulaHint.map { "\($0.text.debugDescription) frame \($0.frame)" } ?? "none")
+                    case "draft":
+                        let ruler = target.editor.textView.subviews.compactMap { $0 as? TableReferenceRuler }.first
+                        print("  DRAFT:", e?.draft.map { "\($0.cell) original \($0.original.debugDescription)" } ?? "none",
+                              "names:", e?.referencedAreas.map { "\($0.0)-\($0.1)" } ?? [],
+                              "ruler:", ruler.map { "\($0.labels.columns.joined()) \($0.labels.rows.joined(separator: ",")) frame \($0.frame)" } ?? "none",
+                              "table takes keys:", e?.acceptsFirstResponder ?? false)
                     // Structure, as the toolbar and cell menu do it: `focus:r,c`, `addrow` (below),
                     // `addrowabove`, `delrow`, `addcol` (right), `addcolleft`, `delcol`.
                     case "focus":
@@ -1049,8 +1040,7 @@ enum DebugSnapshot {
                     case "shot":
                         debugShot(window: window, path: arg)
                     // Computed cells: `tips` prints each one's tooltip (the open table's fields, or the
-                    // rendered page's), `calcnote` the note under a computed cell being edited,
-                    // `calcedit` its Edit Formula…, `list` the caption popover's rows, `listedit:n` its Edit.
+                    // rendered page's), `list` the caption popover's rows, `listedit:n` its Edit.
                     case "tips":
                         let ed = target.editor
                         if let open = e {
@@ -1069,11 +1059,6 @@ enum DebugSnapshot {
                             }
                             print("  TIP rects on the page:", ed.cellTipCount)
                         }
-                    case "calcnote":
-                        let n = target.editor.calculatedNote
-                        print("  CALCNOTE:", n.map { "\($0.text.debugDescription) frame \($0.frame)" } ?? "none")
-                    case "calcedit":
-                        target.editor.calculatedNote?.debugEditFormula()
                     case "list", "listedit":
                         let list = NSApp.windows.compactMap { $0.contentViewController as? TableFormulaListPopover }.first
                             ?? target.editor.formulaListPopover?.contentViewController as? TableFormulaListPopover

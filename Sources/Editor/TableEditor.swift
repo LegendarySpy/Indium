@@ -24,8 +24,21 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     /// The cell whose text is being edited (nil while cells are selected as a block).
     var onFocusChange: ((Cell?) -> Void)?
     var onDeleteTable: (() -> Void)?
-    /// Formula… in a cell's menu.
-    var onFormula: (() -> Void)?
+    /// Fill Right (false) or Fill Down (true) in a cell's menu.
+    var onFill: ((Bool) -> Void)?
+    /// The formula a computed cell shows while it's edited, `=B2-B3` (the editor's numbering).
+    var formulaOf: ((Cell) -> String?)?
+    /// Text typed in a cell that isn't written to the note as it's typed: a formula, or
+    /// anything typed over a computed cell. It goes in when the cell is left, with the
+    /// table's results, as one step; the answer is what's wrong when it can't, and then
+    /// the cell stays open. A value is already in `markdown` by then.
+    var onEnter: ((Cell, String) -> String?)?
+    /// The text being held back as it changes, for its preview; nil once it's gone in or
+    /// was put back.
+    var onDraft: (((cell: Cell, text: String)?) -> Void)?
+    /// Called before `onChange` when values were typed, pasted or cleared over a block of
+    /// cells: any formula there gives way to them.
+    var onValuesReplaced: ((Cell, Cell) -> Void)?
     /// Called instead of `onChange` when rows or columns were inserted or deleted, with
     /// what was done, so formulas can keep pointing at the same rows and columns.
     var onStructureChange: ((String, TableFormulaUI.ShapeChange) -> Void)?
@@ -62,6 +75,8 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     static let margin: CGFloat = TableEdgeStrip.outset
     private let addColumnStrip = TableEdgeStrip(adds: .column)
     private let addRowStrip = TableEdgeStrip(adds: .row)
+    /// Column letters and row numbers around the grid while a formula is typed.
+    private let ruler = TableReferenceRuler()
     private var tableRect: NSRect { NSRect(x: 0, y: 0, width: render.width, height: render.height) }
 
     init(render: TableRender) {
@@ -81,7 +96,9 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     required init?(coder: NSCoder) { fatalError() }
 
     override var isFlipped: Bool { true }
-    override var acceptsFirstResponder: Bool { true }
+    /// Not while a formula is typed: a click on another cell then names it in the
+    /// formula, and the window mustn't take the keys from the cell first.
+    override var acceptsFirstResponder: Bool { !(pointing && cellEditor != nil) }
 
     var columns: Int { max(header.count, alignments.count, body.map(\.count).max() ?? 0, 1) }
     var rowCount: Int { body.count + 1 }
@@ -120,6 +137,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         layoutFields()
         needsDisplay = true
         window?.invalidateCursorRects(for: self)
+        syncFocusedFormula()
     }
 
     /// Takes on the note's version of the table when it changed underneath (undo, redo,
@@ -153,6 +171,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
                 setText(theirs, row: r, column: c)
                 let field = fields[r][c]
                 field.source = theirs
+                if draft.map({ $0.cell == (r, c) }) ?? false { continue }
                 if let editor = field.currentEditor() as? NSTextView {
                     editor.string = theirs
                     editor.setSelectedRange(NSRange(location: (theirs as NSString).length, length: 0))
@@ -211,13 +230,18 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
                 if field.toolTip != tip { field.toolTip = tip }
             }
         }
+        layoutRuler()
     }
 
     /// Cell text styled like the rendered table, equations fitted to the column the
-    /// same way; `reveal` keeps the Markdown markers.
+    /// same way; `reveal` keeps the Markdown markers. A formula being typed is plain text.
     private func styled(_ text: String, row: Int, column: Int, reveal: Bool) -> NSAttributedString {
-        let styled = TableRender.render(text, header: row == 0, alignment: column < alignments.count ? alignments[column] : 0,
-                                        typography: render.typography, size: round(render.typography.size * 0.9), revealMarkers: reveal)
+        let draw = { (t: String) in
+            TableRender.render(t, header: row == 0, alignment: column < self.alignments.count ? self.alignments[column] : 0,
+                               typography: self.render.typography, size: round(self.render.typography.size * 0.9), revealMarkers: reveal)
+        }
+        if reveal, text.hasPrefix("=") { return NSAttributedString(string: text, attributes: draw("x").attributes(at: 0, effectiveRange: nil)) }
+        let styled = draw(text)
         guard column < render.columnWidths.count else { return styled }
         return TableRender.fit(styled, width: render.columnWidths[column] - TableRender.padX * 2)
     }
@@ -254,6 +278,18 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
             NSColor.controlAccentColor.withAlphaComponent(0.08).setFill()
             NSBezierPath(roundedRect: r, xRadius: 5, yRadius: 5).fill()
         }
+        // The cells a formula being typed names, outlined as a spreadsheet does.
+        for (a, b) in referencedAreas where b.row < render.rowHeights.count && b.column < render.columnWidths.count {
+            let box = render.cellRect(row: a.row, column: a.column, in: tableRect).union(render.cellRect(row: b.row, column: b.column, in: tableRect))
+                .insetBy(dx: 2, dy: 2)
+            NSColor.controlAccentColor.withAlphaComponent(0.06).setFill()
+            let path = NSBezierPath(roundedRect: box, xRadius: 4, yRadius: 4)
+            path.fill()
+            NSColor.controlAccentColor.withAlphaComponent(0.7).setStroke()
+            path.lineWidth = 1.25
+            path.setLineDash([3, 2], count: 2, phase: 0)
+            path.stroke()
+        }
     }
 
     // MARK: Focus
@@ -261,6 +297,8 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     /// Edits a cell's text, with the caret at its end (or everything selected).
     func focusCell(row: Int, column: Int, selectAll: Bool = false, caretAtStart: Bool = false) {
         let r = min(max(row, 0), rowCount - 1), c = min(max(column, 0), columns - 1)
+        // Leaving a cell with a formula typed in it puts the formula in, or stays when it can't.
+        if let d = draft, d.cell != (r, c) { guard commitDraft() else { return } }
         focus = (r, c)
         if selection != nil { selection = nil }
         needsDisplay = true
@@ -286,6 +324,13 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     }
 
     private func cellChanged(_ field: CellField) {
+        pointRange = nil
+        if draft.map({ $0.cell == (field.row, field.column) }) ?? false || field.stringValue.hasPrefix("=") {
+            if draft == nil { draft = ((field.row, field.column), field.source) }
+            field.restyleEditor()
+            draftChanged()
+            return
+        }
         field.source = field.stringValue
         setText(field.source, row: field.row, column: field.column)
         field.restyleEditor()
@@ -300,12 +345,217 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     func separateNextChange() { separatesNextChange = true }
 
     func controlTextDidEndEditing(_ obj: Notification) {
-        (obj.object as? CellField)?.showRendered()
+        guard let field = obj.object as? CellField else { return }
+        // A cell left some other way than through the table (the window closing) drops what it held.
+        if let d = draft, d.cell == (field.row, field.column) { endDraft() }
+        field.showRendered()
+    }
+
+    // MARK: Formulas
+
+    /// The cell whose typing is held back from the note (see `onEnter`), and what it
+    /// showed when editing began: its formula, or its value when a formula was started.
+    private(set) var draft: (cell: Cell, original: String)?
+    /// The reference the last click on another cell put in the formula; another click
+    /// replaces it, as in a spreadsheet.
+    private var pointRange: NSRange?
+
+    /// A formula is being typed: clicks on other cells name them.
+    private var pointing: Bool { draft != nil && (cellEditor?.string.hasPrefix("=") ?? false) }
+
+    private var draftField: CellField? {
+        guard let d = draft, d.cell.row < fields.count, d.cell.column < fields[d.cell.row].count else { return nil }
+        return fields[d.cell.row][d.cell.column]
+    }
+
+    private var draftText: String? {
+        (draftField?.currentEditor() as? NSTextView)?.string
+    }
+
+    private func draftChanged() {
+        needsDisplay = true
+        layoutRuler()
+        onDraft?(draft.flatMap { d in draftText.map { (d.cell, $0) } })
+    }
+
+    /// Puts the held text in (see `onEnter`). False, with the cell still open, when it can't go in.
+    @discardableResult
+    func commitDraft() -> Bool {
+        guard let d = draft else { return true }
+        guard let field = draftField, let text = draftText else { endDraft(); return true }
+        let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if typed == d.original { endDraft(); return true }
+        endDraft()
+        if !typed.hasPrefix("=") {
+            field.source = text
+            setText(text, row: d.cell.row, column: d.cell.column)
+        }
+        if let problem = onEnter?(d.cell, typed) {
+            draft = d
+            if let editor = field.currentEditor() as? NSTextView, editor.string != text { editor.string = text }
+            draftChanged()
+            onProblem?(d.cell, problem)
+            NSSound.beep()
+            return false
+        }
+        return true
+    }
+
+    /// Undo while a formula is being typed puts the cell back first, as Escape does.
+    func undoDraft() -> Bool {
+        guard let d = draft, let text = draftText, text != d.original else { return false }
+        discardDraft()
+        return true
+    }
+
+    /// The cell's text as it was before the held typing.
+    func discardDraft() {
+        guard let d = draft else { return }
+        let field = draftField
+        endDraft()
+        if let field, let editor = field.currentEditor() as? NSTextView {
+            let original = formulaOf?(d.cell) ?? field.source
+            editor.string = original
+            editor.setSelectedRange(NSRange(location: (original as NSString).length, length: 0))
+            field.restyleEditor()
+            if formulaOf?(d.cell) != nil { draft = (d.cell, original) }
+        }
+        draftChanged()
+    }
+
+    /// Commits the held text, or, when it can't go in, puts the cell back as it was:
+    /// before the table changes shape or loses the keys.
+    func finishDraft() {
+        if !commitDraft() { discardDraft() }
+    }
+
+    private func endDraft() {
+        draft = nil
+        pointRange = nil
+        draftChanged()
+    }
+
+    /// A problem with the held text, for the hint under the cell.
+    var onProblem: ((Cell, String) -> Void)?
+
+    /// The focused cell starts a formula: `=` replaces its text (its formula shows if it has one).
+    func startFormula() {
+        let cell = selection?.anchor ?? focus
+        if cellEditor == nil || draft.map({ $0.cell != cell }) ?? true { focusCell(row: cell.row, column: cell.column) }
+        guard formulaOf?(cell) == nil, let editor = cellEditor as? CellTextView else { return }
+        editor.selectAll(nil)
+        editor.insertTypedText("=")
+    }
+
+    /// The focused cell, being edited, shows its formula when it has one: after the
+    /// note changed underneath (undo, a fill), unless it's being typed in.
+    private func syncFocusedFormula() {
+        guard focus.row < fields.count, focus.column < fields[focus.row].count else { return }
+        let field = fields[focus.row][focus.column]
+        guard let editor = field.currentEditor() as? NSTextView else { return }
+        let shown = formulaOf?(focus)
+        if let d = draft, d.cell == focus {
+            guard editor.string == d.original, shown != d.original else { return }
+        } else if shown == nil || draft != nil {
+            return
+        }
+        let text = shown ?? field.source
+        editor.string = text
+        editor.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+        field.restyleEditor()
+        draft = shown.map { (focus, $0) }
+        draftChanged()
+    }
+
+    /// Called by the cell as it starts being edited: a computed cell shows its formula.
+    fileprivate func editingText(for field: CellField) -> String {
+        formulaOf?((field.row, field.column)) ?? field.source
+    }
+
+    fileprivate func beganEditing(_ field: CellField) {
+        if let formula = formulaOf?((field.row, field.column)) {
+            draft = ((field.row, field.column), formula)
+            draftChanged()
+        }
+    }
+
+    /// True when a click on another cell should name it at the caret: right after `=`,
+    /// an operator, `(`, `,` or `:`, or over the reference the last click put in.
+    private func expectsReference(_ editor: NSTextView) -> Bool {
+        let sel = editor.selectedRange()
+        if let p = pointRange, p == sel || NSMaxRange(p) == sel.location { return true }
+        let before = (editor.string as NSString).substring(to: sel.location).trimmingCharacters(in: .whitespaces)
+        guard let last = before.last else { return false }
+        return "=+-*/^(,:;×÷−·".contains(last)
+    }
+
+    /// Names cells `a` to `b` in the formula at the caret, over the last clicked one.
+    private func insertReference(from a: Cell, to b: Cell, in editor: CellTextView) {
+        let name = ExcelFormulas.name(from: TableFormulas.Cell(row: min(a.row, b.row) + 1, column: min(a.column, b.column) + 1),
+                                      to: TableFormulas.Cell(row: max(a.row, b.row) + 1, column: max(a.column, b.column) + 1))
+        let range = pointRange ?? editor.selectedRange()
+        editor.setSelectedRange(range)
+        editor.insertTypedText(name)
+        pointRange = NSRange(location: range.location, length: (name as NSString).length)
+    }
+
+    /// The cells the formula being typed names, in the editor's numbering.
+    var referencedAreas: [(Cell, Cell)] {
+        guard pointing, let text = draftText else { return [] }
+        let ns = text as NSString
+        return Self.referencePattern.matches(in: text, range: NSRange(location: 0, length: ns.length)).compactMap { m in
+            func cell(_ i: Int) -> Cell? {
+                guard m.range(at: i).location != NSNotFound else { return nil }
+                let t = ns.substring(with: m.range(at: i)).replacingOccurrences(of: "$", with: "").uppercased()
+                let letters = t.prefix { $0.isLetter }
+                guard let row = Int(t.dropFirst(letters.count)), row >= 1 else { return nil }
+                let column = letters.unicodeScalars.reduce(0) { $0 * 26 + Int($1.value) - 64 }
+                return (row - 1, column - 1)
+            }
+            guard let a = cell(1) else { return nil }
+            let b = cell(2) ?? a
+            return ((min(a.row, b.row), min(a.column, b.column)), (max(a.row, b.row), max(a.column, b.column)))
+        }
+    }
+    private static let referencePattern = try! NSRegularExpression(pattern: #"(?<![A-Za-z0-9_$])(\$?[A-Za-z]{1,3}\$?\d+)(?::(\$?[A-Za-z]{1,3}\$?\d+))?(?![A-Za-z0-9_(])"#)
+
+    private func layoutRuler() {
+        guard pointing, let parent = superview else {
+            if ruler.superview != nil { ruler.removeFromSuperview() }
+            return
+        }
+        if ruler.superview !== parent { parent.addSubview(ruler, positioned: .above, relativeTo: self) }
+        ruler.update(render: render, origin: frame.origin, focus: draft?.cell ?? focus)
+    }
+
+    override func setFrameOrigin(_ newOrigin: NSPoint) {
+        super.setFrameOrigin(newOrigin)
+        layoutRuler()
+    }
+
+    override func viewWillMove(toSuperview newSuperview: NSView?) {
+        super.viewWillMove(toSuperview: newSuperview)
+        if newSuperview == nil { ruler.removeFromSuperview() }
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         guard let field = control as? CellField else { return false }
         let (r, c) = (field.row, field.column)
+        // A formula being typed: Return and Tab put it in before moving (or stay, saying
+        // what's wrong), Escape puts the cell back, and the arrows move the caret only.
+        if let d = draft, d.cell == (r, c), textView.string != d.original {
+            switch selector {
+            case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertTab(_:)), #selector(NSResponder.insertBacktab(_:)):
+                guard commitDraft() else { return true }
+            case #selector(NSResponder.cancelOperation(_:)):
+                discardDraft()
+                return true
+            case #selector(NSResponder.moveUp(_:)), #selector(NSResponder.moveDown(_:)), #selector(NSResponder.moveLeft(_:)), #selector(NSResponder.moveRight(_:)):
+                pointRange = nil
+                return false
+            default: break
+            }
+        }
         let range = textView.selectedRange()
         let length = (textView.string as NSString).length
         // Math comes first: a shortcut's blanks, then out of the equation; only then the
@@ -405,6 +655,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     /// Selects a block of cells. The table itself takes the keys, so arrows, Delete,
     /// and copy and paste act on the whole block.
     func select(from anchor: Cell, to head: Cell) {
+        finishDraft()
         let anchor = clamp(anchor), head = clamp(head)
         let wasSelecting = selection != nil
         selection = (anchor, head)
@@ -451,8 +702,17 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         let typed = (insertString as? NSAttributedString)?.string ?? (insertString as? String) ?? ""
         guard !typed.isEmpty else { return }
         let cell = selection?.anchor ?? focus
+        // `=` starts a formula in the cell, held back like any formula being typed.
+        if typed.hasPrefix("=") {
+            focusCell(row: cell.row, column: cell.column)
+            guard let editor = cellEditor as? CellTextView else { return }
+            editor.selectAll(nil)
+            editor.insertTypedText(typed)
+            return
+        }
         setText(typed, row: cell.row, column: cell.column)
         fields[cell.row][cell.column].source = typed
+        onValuesReplaced?(cell, cell)
         onChange?(markdown, nil)
         focusCell(row: cell.row, column: cell.column)
     }
@@ -462,12 +722,14 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     }
 
     func clearCells() {
+        finishDraft()
         let b = targetBounds
         for r in b.rows { for c in b.columns where !text(row: r, column: c).isEmpty {
             setText("", row: r, column: c)
             fields[r][c].source = ""
             fields[r][c].showRendered()
         } }
+        onValuesReplaced?((b.rows.lowerBound, b.columns.lowerBound), (b.rows.upperBound - 1, b.columns.upperBound - 1))
         onChange?(markdown, nil)
     }
 
@@ -509,6 +771,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         let width = grid.map(\.count).max() ?? 0
         guard width > 0 else { return false }
         if intoText, grid.count == 1, width == 1 { return false }
+        finishDraft()
         let b = targetBounds
         let origin: Cell = (b.rows.lowerBound, b.columns.lowerBound)
         if grid.count == 1, width == 1 {
@@ -521,9 +784,10 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
                 for (j, value) in row.enumerated() { setText(value, row: origin.row + i, column: origin.column + j) }
             }
         }
-        commitStructure()
         let reach: Cell = grid.count == 1 && width == 1 ? (b.rows.upperBound - 1, b.columns.upperBound - 1)
                                                         : (origin.row + grid.count - 1, origin.column + width - 1)
+        onValuesReplaced?(origin, reach)
+        commitStructure()
         if reach == origin { focusCell(row: origin.row, column: origin.column) } else { select(from: origin, to: reach) }
         return true
     }
@@ -539,11 +803,13 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     // MARK: Structure
 
     func addColumnAtEnd() {
+        finishDraft()
         addColumn(right: columns - 1)
         focusCell(row: 0, column: columns - 1)
     }
 
     func addRowAtEnd() {
+        finishDraft()
         body.append(Array(repeating: "", count: columns))
         commitStructure(.insertRows(at: rowCount, count: 1))
         focusCell(row: rowCount - 1, column: 0)
@@ -551,6 +817,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
 
     /// Adds a row under `row` (the focused row by default) and keeps the cursor where it was.
     func addRow(below row: Int? = nil) {
+        finishDraft()
         let index = min(row ?? targetBounds.rows.upperBound - 1, rowCount - 1)
         body.insert(Array(repeating: "", count: columns), at: index)
         commitStructure(.insertRows(at: index + 2, count: 1))
@@ -558,6 +825,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
 
     /// A row above the header would take its place; it goes under it instead.
     func addRow(above row: Int? = nil) {
+        finishDraft()
         let index = max((row ?? targetBounds.rows.lowerBound) - 1, 0)
         body.insert(Array(repeating: "", count: columns), at: index)
         commitStructure(.insertRows(at: index + 2, count: 1))
@@ -565,6 +833,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     }
 
     func addColumn(right column: Int? = nil) {
+        finishDraft()
         let index = min((column ?? targetBounds.columns.upperBound - 1) + 1, columns)
         insertColumn(at: index)
         commitStructure(.insertColumns(at: index + 1, count: 1))
@@ -572,6 +841,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     }
 
     func addColumn(left column: Int? = nil) {
+        finishDraft()
         let index = column ?? targetBounds.columns.lowerBound
         insertColumn(at: index)
         commitStructure(.insertColumns(at: index + 1, count: 1))
@@ -597,6 +867,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
 
     /// Deletes the selected rows (or the focused one). The header row stays.
     func deleteRow() {
+        finishDraft()
         let rows = targetBounds.rows.filter { $0 > 0 }
         guard !rows.isEmpty else { NSSound.beep(); return }
         for r in rows.reversed() { body.remove(at: r - 1) }
@@ -605,6 +876,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     }
 
     func deleteColumn() {
+        finishDraft()
         let cols = targetBounds.columns
         guard cols.count < columns else { NSSound.beep(); return }
         for c in cols.reversed() {
@@ -618,6 +890,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     }
 
     func align(_ alignment: Int) {
+        finishDraft()
         while alignments.count < columns { alignments.append(0) }
         for c in targetBounds.columns { alignments[c] = alignment }
         let kept = selection
@@ -651,12 +924,23 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
             return
         }
         guard let start = render.cell(at: p) else { return }
+        // Typing a formula, a click on another cell names it (a drag, a range of cells).
+        if let d = draft, start != d.cell, let editor = cellEditor as? CellTextView, pointing, expectsReference(editor) {
+            insertReference(from: start, to: start, in: editor)
+            while let next = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]), next.type == .leftMouseDragged {
+                autoscroll(with: next)
+                let q = convert(next.locationInWindow, from: nil)
+                let inside = NSPoint(x: min(max(q.x, 0), max(render.width - 1, 0)), y: min(max(q.y, 0), max(render.height - 1, 0)))
+                insertReference(from: start, to: render.cell(at: inside) ?? start, in: editor)
+            }
+            return
+        }
         if event.modifierFlags.contains(.shift) {
             select(from: selection?.anchor ?? focus, to: start)
             return
         }
         focusCell(row: start.row, column: start.column)
-        guard let editor = cellEditor else { return }
+        guard focus == start, let editor = cellEditor else { return }
         let index = characterIndex(in: editor, at: event.locationInWindow)
         switch event.clickCount {
         case 1: editor.setSelectedRange(NSRange(location: index, length: 0))
@@ -719,7 +1003,15 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         menu.addItem(deleteColumns)
         menu.addItem(ClosureMenuItem(rows * cols > 1 ? "Clear Cells" : "Clear Cell") { [weak self] in self?.clearCells() })
         menu.addItem(.separator())
-        menu.addItem(ClosureMenuItem("Formula…") { [weak self] in self?.onFormula?() })
+        let computed = formulaOf?(selection?.anchor ?? focus) != nil
+        menu.addItem(ClosureMenuItem(computed ? "Edit Formula" : "Add Formula") { [weak self] in self?.startFormula() })
+        let right = ClosureMenuItem("Fill Formula Right") { [weak self] in self?.onFill?(false) }
+        right.isEnabled = computed
+        menu.addItem(right)
+        let down = ClosureMenuItem("Fill Formula Down") { [weak self] in self?.onFill?(true) }
+        down.isEnabled = computed
+        menu.addItem(down)
+        menu.addItem(.separator())
         menu.addItem(ClosureMenuItem("Copy Table") { [weak self] in self?.copyTable() })
         menu.addItem(ClosureMenuItem("Delete Table") { [weak self] in self?.onDeleteTable?() })
         return menu
@@ -918,7 +1210,10 @@ final class CellTextView: NSTextView, MathEditingHost {
     override var undoManager: UndoManager? { nil }
     private var noteUndo: UndoManager? { table?.superview?.undoManager }
 
-    @objc func undo(_ sender: Any?) { noteUndo?.undo() }
+    @objc func undo(_ sender: Any?) {
+        if table?.undoDraft() == true { return }
+        noteUndo?.undo()
+    }
     @objc func redo(_ sender: Any?) { noteUndo?.redo() }
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
@@ -996,9 +1291,10 @@ final class CellField: NSTextField {
     }
 
     override func becomeFirstResponder() -> Bool {
-        stringValue = source
+        stringValue = table?.editingText(for: self) ?? source
         guard super.becomeFirstResponder() else { return false }
         restyleEditor()
+        table?.beganEditing(self)
         return true
     }
 
@@ -1139,8 +1435,12 @@ final class TableToolbarView: NSView {
     var onDeleteColumn: (() -> Void)?
     var onDeleteTable: (() -> Void)?
     var onCopyTable: (() -> Void)?
-    /// Formula… for the focused row or column.
+    /// Starts a formula in the focused cell.
     var onFormula: (() -> Void)?
+    /// Fill Right (false) or Fill Down (true) from the focused cell.
+    var onFill: ((Bool) -> Void)?
+    /// Whether the focused cell has a formula to fill.
+    var canFill: (() -> Bool)?
     var onDone: (() -> Void)?
     /// nil: full width; true/false: text wraps beside it on the right/left.
     var onPlace: ((Bool?) -> Void)?
@@ -1198,6 +1498,7 @@ final class TableToolbarView: NSView {
             button.action = { [weak button] in
                 guard let button else { return }
                 let menu = NSMenu()
+                menu.autoenablesItems = false
                 fill(menu)
                 menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
             }
@@ -1218,7 +1519,12 @@ final class TableToolbarView: NSView {
             }
         }
         let addMore = { [weak self] (menu: NSMenu) in
-            menu.addItem(ClosureMenuItem("Formula…") { self?.onFormula?() })
+            let fills = self?.canFill?() ?? false
+            for (title, down) in [("Fill Formula Right", false), ("Fill Formula Down", true)] {
+                let item = ClosureMenuItem(title) { self?.onFill?(down) }
+                item.isEnabled = fills
+                menu.addItem(item)
+            }
             menu.addItem(.separator())
             menu.addItem(ClosureMenuItem("Delete Row") { self?.onDeleteRow?() })
             menu.addItem(ClosureMenuItem("Delete Column") { self?.onDeleteColumn?() })
@@ -1230,6 +1536,7 @@ final class TableToolbarView: NSView {
             stack.addArrangedSubview(menuButton("ellipsis", "Table") { [weak self] menu in
                 menu.addItem(ClosureMenuItem("Add Row") { self?.onAddRow?() })
                 menu.addItem(ClosureMenuItem("Add Column") { self?.onAddColumn?() })
+                menu.addItem(ClosureMenuItem("Formula") { self?.onFormula?() })
                 menu.addItem(.separator())
                 addAlign(menu)
                 menu.addItem(.separator())
@@ -1240,6 +1547,9 @@ final class TableToolbarView: NSView {
         } else {
             stack.addArrangedSubview(PillButton(symbol: "plus", title: "Row") { [weak self] in self?.onAddRow?() })
             stack.addArrangedSubview(PillButton(symbol: "plus", title: "Column") { [weak self] in self?.onAddColumn?() })
+            let formula = PillButton(symbol: "function", title: size == .full ? "Formula" : "") { [weak self] in self?.onFormula?() }
+            labelIcon(formula, "Formula: type = and a formula in a cell, like =B2-B3")
+            stack.addArrangedSubview(formula)
             stack.addArrangedSubview(divider())
             if size == .compact {
                 stack.addArrangedSubview(menuButton("text.alignleft", "Alignment", addAlign))
