@@ -20,12 +20,8 @@ import Foundation
 /// - If a name appears twice, the last one wins.
 struct NoteVariables: Equatable {
     var values: [String: Quantity] = [:]
-    /// Each variable's value as written, for display ("hydrated = 2.008 g").
-    var sources: [String: String] = [:]
 
     static let empty = NoteVariables()
-
-    var isEmpty: Bool { values.isEmpty }
 
     private static let line = try! NSRegularExpression(pattern: #"^([A-Za-z_][A-Za-z0-9_]*)[ \t]*:[ \t]*(.*?)[ \t]*$"#)
 
@@ -64,11 +60,9 @@ struct NoteVariables: Equatable {
             }
             if let quantity = Quantity.parse(value), !value.hasPrefix("*"), !value.hasPrefix("_") {
                 vars.values[name] = quantity
-                vars.sources[name] = value
             } else {
                 // A later non-numeric value replaces an earlier number, as YAML would.
                 vars.values[name] = nil
-                vars.sources[name] = nil
             }
         }
         return vars

@@ -28,9 +28,6 @@ enum TableFormulas {
     struct Formula {
         /// The formula exactly as written (never rewritten).
         let text: String
-        /// Which TBLFM line (0-based) it came from, and its position on that line.
-        let line: Int
-        let index: Int
         let destination: Destination
         let source: FormulaNode
         /// Decimal places from a `;%.Nf` directive.
@@ -89,9 +86,9 @@ enum TableFormulas {
         var out: [ParsedFormula] = []
         for (n, line) in formulaLines.enumerated() {
             guard let body = formulaText(ofLine: line) else { continue }
-            for (k, piece) in body.components(separatedBy: "::").enumerated() {
+            for piece in body.components(separatedBy: "::") {
                 let text = piece.trimmingCharacters(in: .whitespaces)
-                out.append(ParsedFormula(text: text, line: n, result: parseFormula(text, line: n, index: k)))
+                out.append(ParsedFormula(text: text, line: n, result: parseFormula(text)))
             }
         }
         return out
@@ -99,7 +96,7 @@ enum TableFormulas {
 
     private static let decimalsDirective = try! NSRegularExpression(pattern: #"^%\.(\d+)f$"#)
 
-    static func parseFormula(_ text: String, line: Int = 0, index: Int = 0) -> Result<Formula, FormulaError> {
+    static func parseFormula(_ text: String) -> Result<Formula, FormulaError> {
         var body = text
         var decimals: Int?
         // A trailing display directive: ;%.2f (supported), ;dt and ;hm (not).
@@ -141,7 +138,7 @@ enum TableFormulas {
             return .failure(e)
         }
         if let e = checkParentheses(source, isTop: true) { return .failure(e) }
-        return .success(Formula(text: text, line: line, index: index, destination: destination, source: source, decimals: decimals))
+        return .success(Formula(text: text, destination: destination, source: source, decimals: decimals))
     }
 
     private static func parseDestination(_ text: String) -> Result<Destination, FormulaError> {
@@ -233,7 +230,7 @@ enum TableFormulas {
             return nil
         }
 
-        // 1. Which formula fills which cell. A later formula takes over a cell from an earlier one.
+        // Which formula fills which cell. A later formula takes over a cell from an earlier one.
         var assigned: [Cell: Int] = [:]
         var order: [Cell] = []
         for (fi, f) in formulas.enumerated() {
@@ -254,8 +251,8 @@ enum TableFormulas {
         }
         guard issues.isEmpty else { return fail() }
 
-        // 2. Compute each assigned cell, following references through other formulas
-        //    (in dependency order, like a spreadsheet), and catching cycles.
+        // Compute each assigned cell, following references through other formulas
+        // (in dependency order, like a spreadsheet), and catching cycles.
         enum Computed { case text(String), blank, failed(FormulaError) }
         var computed: [Cell: Computed] = [:]
         var visiting: [Cell] = []
