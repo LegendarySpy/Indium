@@ -276,6 +276,11 @@ final class EditorTextView: NSTextView {
         super.moveDown(sender)
     }
 
+    override func moveRight(_ sender: Any?) {
+        if editor?.acceptSuggestionWithRightArrow() == true { return }
+        super.moveRight(sender)
+    }
+
     override func insertText(_ string: Any, replacementRange: NSRange) {
         // A key typed at the caret (not text put in by a command or an input method).
         if let s = string as? String, !hasMarkedText(),
