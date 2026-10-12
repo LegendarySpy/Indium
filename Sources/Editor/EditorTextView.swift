@@ -279,8 +279,16 @@ final class EditorTextView: NSTextView {
     override func insertText(_ string: Any, replacementRange: NSRange) {
         // A key typed at the caret (not text put in by a command or an input method).
         if let s = string as? String, !hasMarkedText(),
-           replacementRange.location == NSNotFound || replacementRange == selectedRange(),
-           editor?.math.handleInput(s) == true { return }
+           replacementRange.location == NSNotFound || replacementRange == selectedRange() {
+            if editor?.math.handleInput(s) == true { return }
+            let caret = selectedRange()
+            if let editor, caret.length == 0,
+               let (text, range) = MarkdownScanner.movingSpaceOutOfEmphasis(in: editor.ns, line: editor.lineRange(at: caret.location).content,
+                                                                            caret: caret.location, typing: s) {
+                super.insertText(text, replacementRange: range)
+                return
+            }
+        }
         super.insertText(string, replacementRange: replacementRange)
     }
 

@@ -502,7 +502,9 @@ enum MarkdownScanner {
         var content: NSRange
     }
 
-    static func inlineSpans(in text: NSString, range: NSRange) -> [Span] {
+    /// `caret` is where someone is typing, if they are: a span they're typing in (`**word |**`)
+    /// still counts with a space before its closer, so it doesn't flicker plain at each space.
+    static func inlineSpans(in text: NSString, range: NSRange, caret: Int? = nil) -> [Span] {
         guard range.length > 0 else { return [] }
         let line = text.substring(with: range) as NSString
         let base = range.location
@@ -658,18 +660,51 @@ enum MarkdownScanner {
             (Regex.strike, .strike, 2),
             (Regex.highlight, .highlight, 2),
         ]
-        for (regex, kind, width) in emphasis {
-            for m in regex.matches(in: line as String, range: full) {
-                let open = NSRange(location: m.range.location, length: width)
-                let close = NSRange(location: NSMaxRange(m.range) - width, length: width)
-                guard free(open), free(close) else { continue }
-                consume(open)
-                consume(close)
-                spans.append(Span(kind: kind, range: abs(m.range), markers: [abs(open), abs(close)],
-                                  content: abs(NSRange(location: open.location + width, length: m.range.length - 2 * width))))
+        let typing: [(NSRegularExpression, Span.Kind, Int)] = caret == nil ? [] : [
+            (Regex.strongEmphasisTyping, .strongEmphasis, 3),
+            (Regex.strongTyping, .strong, 2),
+            (Regex.strongUnderscoreTyping, .strong, 2),
+            (Regex.emphasisTyping, .emphasis, 1),
+            (Regex.emphasisUnderscoreTyping, .emphasis, 1),
+            (Regex.strikeTyping, .strike, 2),
+            (Regex.highlightTyping, .highlight, 2),
+        ]
+        for (lenient, list) in [(false, emphasis), (true, typing)] {
+            for (regex, kind, width) in list {
+                for m in regex.matches(in: line as String, range: full) {
+                    let open = NSRange(location: m.range.location, length: width)
+                    let close = NSRange(location: NSMaxRange(m.range) - width, length: width)
+                    // Only the span being typed in: the caret is after its space, or among or past its closing markers.
+                    if lenient, let caret, !(close.location...NSMaxRange(m.range)).contains(caret - base) { continue }
+                    guard free(open), free(close) else { continue }
+                    consume(open)
+                    consume(close)
+                    spans.append(Span(kind: kind, range: abs(m.range), markers: [abs(open), abs(close)],
+                                      content: abs(NSRange(location: open.location + width, length: m.range.length - 2 * width))))
+                }
             }
         }
         return spans
+    }
+
+    /// Text typed right after `**word **` (a space, then an arrow out of the span) moves the
+    /// space out past the markers first: Markdown doesn't count `**word **` as bold, and the
+    /// note should read `**word** 1`. Returns what to insert instead, and the range it replaces.
+    static func movingSpaceOutOfEmphasis(in text: NSString, line: NSRange, caret: Int, typing typed: String) -> (String, NSRange)? {
+        guard !typed.isEmpty, !typed.contains(where: \.isNewline) else { return nil }
+        for span in inlineSpans(in: text, range: line, caret: caret) where NSMaxRange(span.range) == caret {
+            switch span.kind {
+            case .strong, .emphasis, .strongEmphasis, .strike, .highlight: break
+            default: continue
+            }
+            guard let close = span.markers.last else { continue }
+            var start = close.location
+            while start > span.content.location, [0x20, 0x09].contains(text.character(at: start - 1)) { start -= 1 }
+            guard start < close.location else { continue }
+            let space = text.substring(with: NSRange(location: start, length: close.location - start))
+            return (text.substring(with: close) + space + typed, NSRange(location: start, length: caret - start))
+        }
+        return nil
     }
 
     // MARK: Patterns
@@ -708,5 +743,14 @@ enum MarkdownScanner {
         static let emphasisUnderscore = make(#"(?<![\w\\_])_(?=[^\s_])(.+?)(?<=[^\s_\\])_(?![\w_])"#)
         static let strike = make(#"(?<!~)~~(?=\S)(.+?)(?<=\S)~~(?!~)"#)
         static let highlight = make(#"(?<!=)==(?=\S)(.+?)(?<=\S)==(?!=)"#)
+        // The same with spaces before the closer, for the span being typed in. Their text
+        // can't hold the marker character, so one can't reach back over an earlier span.
+        static let strongEmphasisTyping = make(#"(?<![*\\])\*\*\*(?=[^\s*])([^*]+?)[ \t]+\*\*\*(?!\*)"#)
+        static let strongTyping = make(#"(?<![*\\])\*\*(?=[^\s*])([^*]+?)[ \t]+\*\*(?!\*)"#)
+        static let strongUnderscoreTyping = make(#"(?<![\w\\_])__(?=[^\s_])([^_]+?)[ \t]+__(?![\w_])"#)
+        static let emphasisTyping = make(#"(?<![*\\])\*(?=[^\s*])([^*]+?)[ \t]+\*(?!\*)"#)
+        static let emphasisUnderscoreTyping = make(#"(?<![\w\\_])_(?=[^\s_])([^_]+?)[ \t]+_(?![\w_])"#)
+        static let strikeTyping = make(#"(?<!~)~~(?=[^\s~])([^~]+?)[ \t]+~~(?!~)"#)
+        static let highlightTyping = make(#"(?<!=)==(?=[^\s=])([^=]+?)[ \t]+==(?!=)"#)
     }
 }
