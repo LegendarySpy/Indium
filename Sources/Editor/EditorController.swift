@@ -134,9 +134,10 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         tv.isAutomaticLinkDetectionEnabled = false
         tv.isAutomaticDataDetectionEnabled = false
         tv.isAutomaticTextReplacementEnabled = true
-        // The system's grey predictions would sit on the quick answers' and slash commands'
-        // own, and Space takes them: `3π =` then Space wrote π's digits.
+        // The system's grey predictions and Math Results would sit on the quick answers' and
+        // slash commands' own: after `3*\pi=` macOS offered π alone, and Space took it.
         tv.inlinePredictionType = .no
+        tv.mathExpressionCompletionType = .no
         tv.smartInsertDeleteEnabled = false
         tv.isGrammarCheckingEnabled = false
         tv.usesInspectorBar = false
