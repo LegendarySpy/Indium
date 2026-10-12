@@ -39,6 +39,8 @@ if [[ -n "$IDENTITY" ]]; then
 fi
 
 rm -rf Releases && mkdir Releases
+# Sparkle shows these notes in the update window when they sit next to the zip.
+[[ -f "ReleaseNotes/$VERSION.md" ]] && cp "ReleaseNotes/$VERSION.md" "Releases/Indium-$VERSION.md"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 
 NOTARY=()
@@ -58,7 +60,7 @@ fi
 
 SIGN=(--account indium)
 [[ -n "${SPARKLE_KEY_FILE:-}" ]] && SIGN=(--ed-key-file "$SPARKLE_KEY_FILE")
-build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast "${SIGN[@]}" \
+build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast "${SIGN[@]}" --embed-release-notes \
   --download-url-prefix "https://github.com/$REPO/releases/download/v$VERSION/" Releases
 
 echo "Built $ZIP and Releases/appcast.xml"
