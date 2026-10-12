@@ -660,7 +660,12 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
             render.draw(baselineAt: NSPoint(x: content.minX, y: content.minY + render.ascent * scale),
                         color: Palette.text, scale: scale)
         case let .table(table):
+            // Squeezed past its padding, a cell's text could still poke out sideways;
+            // never past the column the table sits in.
+            NSGraphicsContext.saveGraphicsState()
+            NSRect(x: area.minX - 1, y: content.minY - 1, width: area.width + 2, height: content.height + 2).clip()
             table.draw(in: content)
+            NSGraphicsContext.restoreGraphicsState()
         case let .image(image, _, caption, name):
             if let image, !(image is UnreadableImage) {
                 NSGraphicsContext.saveGraphicsState()
