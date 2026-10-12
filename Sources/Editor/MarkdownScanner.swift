@@ -707,6 +707,22 @@ enum MarkdownScanner {
         return nil
     }
 
+    /// Where one arrow press from `caret` lands when a bold, italic, struck, highlight or code
+    /// delimiter is right beside it: past the whole `**`, not between its two characters.
+    static func skippingDelimiter(in text: NSString, line: NSRange, caret: Int, forward: Bool) -> Int? {
+        for span in inlineSpans(in: text, range: line, caret: caret) {
+            switch span.kind {
+            case .strong, .emphasis, .strongEmphasis, .strike, .highlight, .code: break
+            default: continue
+            }
+            for m in span.markers where m.length > 0 {
+                if forward, m.location == caret { return NSMaxRange(m) }
+                if !forward, NSMaxRange(m) == caret { return m.location }
+            }
+        }
+        return nil
+    }
+
     // MARK: Patterns
 
     enum Regex {
