@@ -22,6 +22,10 @@
 6.022e23 * 2	1.204e+24
 1e20 + 1	1e+20
 1.0 + 2.25	3.3
+# Sums are done in decimal: binary 2.000 − 1.995 is 0.004999999999999893, which rounded 0.25 down
+1.995 - 2	-0.005
+(2.000 - 1.995) / 2 * 100	0.3
+sum(0.1, 0.2, -0.3)	0.0
 1.005 * 1.000	1.005
 0.000012 * 0.5	6e-06
 # Units: + and - need the same unit (a plain number adopts it)
