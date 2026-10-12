@@ -48,5 +48,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          NOTES=(--generate-notes)
+          [[ -f "ReleaseNotes/$VERSION.md" ]] && NOTES=(--notes-file "ReleaseNotes/$VERSION.md")
           gh release create "$GITHUB_REF_NAME" "Releases/Indium-$VERSION.zip" Releases/appcast.xml \
-            --title "Indium $VERSION" --generate-notes
+            --title "Indium $VERSION" "${NOTES[@]}"
