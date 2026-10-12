@@ -70,7 +70,7 @@ extension EditorController {
         guard textView.isEditable, sel.length == 0, !textView.hasMarkedText(), sel.location > 0 else { return nil }
         if let i = styler.blockIndex(containing: sel.location) {
             switch styler.blocks[i].kind {
-            case .code, .math, .frontmatter: return nil
+            case .code, .math, .frontmatter, .table: return nil
             default: break
             }
         }
@@ -121,7 +121,7 @@ extension EditorController {
         var inMath = false
         if let i = styler.blockIndex(containing: sel.location) {
             switch styler.blocks[i].kind {
-            case .code, .frontmatter: clearAnswer(); return
+            case .code, .frontmatter, .table: clearAnswer(); return
             case .math: inMath = true
             default: break
             }
@@ -131,8 +131,9 @@ extension EditorController {
         text.getLineStart(&s, end: &e, contentsEnd: &ce, for: NSRange(location: sel.location, length: 0))
         let before = text.substring(with: NSRange(location: s, length: sel.location - s))
         let after = text.substring(with: NSRange(location: sel.location, length: ce - sel.location))
-        // Only at the end of what's being written (a closing $ may follow).
-        guard after.trimmingCharacters(in: .whitespaces).isEmpty || after.hasPrefix("$") else { clearAnswer(); return }
+        // Only at the end of what's being written (a closing $ may follow): the answer is
+        // drawn after it, and would cover anything more.
+        guard ["", "$", "$$"].contains(after.trimmingCharacters(in: .whitespaces)) else { clearAnswer(); return }
         if !inMath { inMath = before.filter { $0 == "$" }.count % 2 == 1 }
         guard let result = MathAnswer.suggest(lineBeforeCaret: before, inMath: inMath, variables: NoteVariables.parse(noteText: storage.string)) else {
             answerDismissedAt = nil
@@ -152,6 +153,8 @@ extension EditorController {
 
     /// Key handling while a suggestion is showing. Returns true if the key was used.
     func handleSlashKey(_ selector: Selector) -> Bool {
+        // A suggestion with no room to show isn't offered.
+        guard textView.showsGhost else { return false }
         if let answer {
             switch selector {
             case #selector(NSResponder.insertTab(_:)):
@@ -193,7 +196,7 @@ extension EditorController {
     /// → accepts a suggestion as Tab does, with the caret where its ghost text starts.
     func acceptSuggestionWithRightArrow() -> Bool {
         let sel = textView.selectedRange()
-        guard textView.ghost != nil, sel.length == 0, !textView.hasMarkedText() else { return false }
+        guard textView.showsGhost, sel.length == 0, !textView.hasMarkedText() else { return false }
         let atGhost = answer?.location == sel.location || slash.map { NSMaxRange($0.range) == sel.location } == true
         return atGhost && handleSlashKey(#selector(NSResponder.insertTab(_:)))
     }

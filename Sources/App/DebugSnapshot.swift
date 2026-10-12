@@ -463,10 +463,12 @@ enum DebugSnapshot {
     }
 
     /// `-IndiumTypingCases /path`: inline formatting typed as key events, one case per line,
-    /// `before<TAB>keys<TAB>expected<TAB>look`, marks as for `-IndiumMathCases`. After every key
+    /// `before<TAB>keys<TAB>expected<TAB>look`, marks as for `-IndiumMathCases` (⇥ a tab in `expected`). After every key
     /// the first letter of the note gets a look: B bold, I italic, S struck, H highlighted,
     /// C code, · plain. `look` is the last one; a look lost and then found again (bold, plain,
-    /// bold) is a flicker and fails the case. Quits when done. Keys: Ⓑ Ⓘ Ⓢ Ⓗ Ⓒ the Format commands, → ←
+    /// bold) is a flicker and fails the case. An optional fifth column is the suggestion shown
+    /// after the caret (∅ none); one drawn over text or a float fails any case.
+    /// `-IndiumTypingShots dir` saves the window after each case as `dir/<n>.png`. Quits when done. Keys: Ⓑ Ⓘ Ⓢ Ⓗ Ⓒ the Format commands, → ←
     /// arrows, ⇨ Shift-→, ⌥ Option-→, ⇥ Tab, ⤓ a click at the end of the note, ✎ ✔ an input method's か marked and committed, ⏎ Return, ⌫ Backspace, ↶ Undo, ↷ Redo.
     static func runTypingCases(_ cases: String, editor: EditorController, window: NSWindow) {
         let tv = editor.textView
@@ -516,7 +518,7 @@ enum DebugSnapshot {
             }
         }
         let rows = cases.components(separatedBy: "\n").filter { !$0.isEmpty && !$0.hasPrefix("#") }
-            .map { $0.components(separatedBy: "\t") }.filter { $0.count == 4 }
+            .map { $0.components(separatedBy: "\t") }.filter { $0.count == 4 || $0.count == 5 }
         var failed = 0
         func run(_ row: Int, _ key: Int, _ trace: [String]) {
             guard row < rows.count else {
@@ -546,16 +548,33 @@ enum DebugSnapshot {
             }
             let r = tv.selectedRange()
             let result = (editor.text as NSString).replacingCharacters(in: r, with: r.length == 0 ? "‸" : "«" + (editor.text as NSString).substring(with: r) + "»")
-                .replacingOccurrences(of: "\n", with: "↵")
+                .replacingOccurrences(of: "\n", with: "↵").replacingOccurrences(of: "\t", with: "⇥")
             // A look that comes back after something else showed in between.
             var flicker = false
             for (i, a) in trace.enumerated() where a != "·" {
                 if let j = trace[(i + 1)...].firstIndex(where: { $0 != a }), trace[(j + 1)...].contains(a) { flicker = true }
             }
-            let ok = result == parts[2] && trace.last == parts[3] && !flicker
+            // The suggestion shown, and anything it's drawn over: text, or a floating block.
+            let ghost = tv.showsGhost ? tv.ghost ?? "∅" : "∅"
+            var covers: [String] = []
+            if let rect = tv.ghostLayout()?.rect, tv.showsGhost {
+                let ns = editor.storage.string as NSString
+                let origin = tv.textContainerOrigin
+                for i in 0..<ns.length {
+                    guard let u = UnicodeScalar(ns.character(at: i)), !CharacterSet.whitespacesAndNewlines.contains(u),
+                          editor.storage.attribute(.mdHidden, at: i, effectiveRange: nil) == nil else { continue }
+                    let glyphs = editor.layoutManager.glyphRange(forCharacterRange: NSRange(location: i, length: 1), actualCharacterRange: nil)
+                    let box = editor.layoutManager.boundingRect(forGlyphRange: glyphs, in: tv.textContainer!).offsetBy(dx: origin.x, dy: origin.y)
+                    if box.width > 0, box.intersects(rect.insetBy(dx: 1, dy: 2)) { covers.append(ns.substring(with: NSRange(location: i, length: 1))) }
+                }
+                for frame in editor.layoutManager.floatFrames.values where frame.offsetBy(dx: origin.x, dy: origin.y).intersects(rect) { covers.append("a float") }
+            }
+            let ok = result == parts[2] && trace.last == parts[3] && !flicker && covers.isEmpty && (parts.count < 5 || ghost == parts[4])
             if !ok { failed += 1 }
-            print(ok ? "PASS" : "FAIL", parts[0], "·", parts[1], "→", result, "look:", trace.joined(separator: " "),
-                  ok ? "" : "(expected \(parts[2]) \(parts[3])\(flicker ? ", flickered" : ""))")
+            if let dir = UserDefaults.standard.string(forKey: "IndiumTypingShots") { debugShot(window: window, path: "\(dir)/\(row + 1).png") }
+            print(ok ? "PASS" : "FAIL", parts[0], "·", parts[1], "→", result, "look:", trace.joined(separator: " "), "ghost:", ghost,
+                  ok ? "" : "(expected \(parts[2]) \(parts[3])\(parts.count > 4 ? " " + parts[4] : "")\(flicker ? ", flickered" : "")"
+                    + "\(covers.isEmpty ? "" : ", ghost covers " + covers.joined()))")
             run(row + 1, 0, [])
         }
         run(0, 0, [])
