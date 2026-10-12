@@ -4,6 +4,9 @@ import AppKit
 /// tabular figures so numbers line up. Drawn identically on screen and in PDFs.
 final class TableRender {
     static let padX: CGFloat = 12
+    /// Side padding inside cells: `padX`, less when columns are squeezed narrower than
+    /// it allows, so their text still shows.
+    private(set) var cellPadX: CGFloat = padX
     static let padY: CGFloat = 7
 
     let spec: TableSpec
@@ -78,7 +81,11 @@ final class TableRender {
             let minimum = noWrapMinimums()
             var widths = zip(fractions, minimum).map { max(floor($0 * fractionBase), $1) }
             let total = widths.reduce(0, +)
-            if total > maxWidth {
+            if minimum.reduce(0, +) >= maxWidth {
+                // Many columns in a narrow spot (a column cell, a float): their minimums
+                // alone overrun it, so squeeze them as an unsized table would be.
+                widths = squeezed(minimum, least: 48, into: maxWidth)
+            } else if total > maxWidth {
                 let slack = zip(widths, minimum).map { max($0 - $1, 0) }
                 let totalSlack = max(slack.reduce(0, +), 1)
                 let excess = total - maxWidth
@@ -106,18 +113,7 @@ final class TableRender {
             let minimum = noWrapMinimums(least: 56)
             let floor = minimum.reduce(0, +)
             if floor >= maxWidth {
-                // Too narrow for everything whole: equations shrink before words break
-                // (`fit` scales them to the width they get), and only then does every
-                // column squeeze.
-                let words = noWrapMinimums(least: 56, mathScale: 0)
-                let wordsFloor = words.reduce(0, +)
-                if wordsFloor < maxWidth {
-                    let give = zip(minimum, words).map { $0 - $1 }
-                    let totalGive = max(give.reduce(0, +), 1)
-                    columnWidths = zip(minimum, give).map { $0 - $1 / totalGive * (floor - maxWidth) }
-                } else {
-                    columnWidths = words.map { $0 * maxWidth / wordsFloor }
-                }
+                columnWidths = squeezed(minimum, least: 56, into: maxWidth)
             } else {
                 let slack = zip(natural, minimum).map { max($0 - $1, 0) }
                 let totalSlack = max(slack.reduce(0, +), 1)
@@ -126,6 +122,25 @@ final class TableRender {
         }
         width = floor(columnWidths.reduce(0, +))
         measureRows()
+    }
+
+    /// Column widths summing to `maxWidth` when even `minimum` won't fit: equations
+    /// shrink before words break (`fit` scales them to the width they get), then
+    /// short and empty columns give up their spare room, and only then does every
+    /// column squeeze.
+    private func squeezed(_ minimum: [CGFloat], least: CGFloat, into maxWidth: CGFloat) -> [CGFloat] {
+        var wider = minimum
+        for narrower in [noWrapMinimums(least: least, mathScale: 0), noWrapMinimums(least: Self.padX * 2, mathScale: 0)] {
+            let floor = wider.reduce(0, +), narrowFloor = narrower.reduce(0, +)
+            if narrowFloor < maxWidth {
+                let give = zip(wider, narrower).map { $0 - $1 }
+                let totalGive = max(give.reduce(0, +), 1)
+                return zip(wider, give).map { $0 - $1 / totalGive * (floor - maxWidth) }
+            }
+            wider = narrower
+        }
+        let floor = wider.reduce(0, +)
+        return wider.map { $0 * maxWidth / floor }
     }
 
     /// Per column: the width that keeps short cells on one line (long ones may wrap
@@ -160,7 +175,8 @@ final class TableRender {
 
     /// Rows sized to their tallest cell at the current column widths.
     private func measureRows() {
-        let pad = Self.padX * 2
+        cellPadX = min(Self.padX, max(4, floor(((columnWidths.min() ?? 0) - 12) / 2)))
+        let pad = cellPadX * 2
         width = floor(columnWidths.reduce(0, +))
         for (r, row) in cells.enumerated() {
             for (c, cell) in row.enumerated() { cells[r][c] = Self.fit(cell, width: columnWidths[c] - pad) }
@@ -202,7 +218,7 @@ final class TableRender {
         for (r, row) in cells.enumerated() {
             for (c, cell) in row.enumerated() {
                 let box = cellRect(row: r, column: c, in: NSRect(x: rect.minX, y: rect.minY, width: width, height: height))
-                    .insetBy(dx: Self.padX, dy: Self.padY)
+                    .insetBy(dx: cellPadX, dy: Self.padY)
                 cell.draw(with: box, options: [.usesLineFragmentOrigin, .usesFontLeading])
             }
         }

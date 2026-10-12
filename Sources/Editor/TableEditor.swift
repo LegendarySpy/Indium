@@ -218,7 +218,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
                 field.alignment = (attrs[.paragraphStyle] as? NSParagraphStyle)?.alignment ?? .natural
                 if field.currentEditor() == nil { field.showRendered() } else { field.restyleEditor() }
                 let box = render.cellRect(row: r, column: c, in: rect)
-                    .insetBy(dx: TableRender.padX - 2, dy: TableRender.padY - 2)
+                    .insetBy(dx: render.cellPadX - 2, dy: TableRender.padY - 2)
                 field.frame = box
                 // A computed cell says what it's calculated from, as in the rendered table.
                 let tip = render.mark(row: r, column: c)?.tip
@@ -238,7 +238,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
         if reveal, text.hasPrefix("=") { return NSAttributedString(string: text, attributes: draw("x").attributes(at: 0, effectiveRange: nil)) }
         let styled = draw(text)
         guard column < render.columnWidths.count else { return styled }
-        return TableRender.fit(styled, width: render.columnWidths[column] - TableRender.padX * 2)
+        return TableRender.fit(styled, width: render.columnWidths[column] - render.cellPadX * 2)
     }
 
     /// The text view editing the focused cell, if any. Formatting commands act on it
