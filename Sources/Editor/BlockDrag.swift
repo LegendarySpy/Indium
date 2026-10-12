@@ -248,8 +248,9 @@ extension EditorController {
 // MARK: - Moving a table by its grip
 
 /// Hovering a table shows a grip beside its header; dragging it lifts the table (with
-/// its formula lines and any float marker: its whole block) and a line or a half-width
-/// area shows where it will land. Dropping is one undoable edit; Escape cancels.
+/// its formula lines and any float marker: its whole block), every spot it can land is
+/// outlined, and a line or an area shows the one it will. Dropping is one undoable edit;
+/// Escape cancels.
 extension EditorController {
     struct GroupFrame {
         let group: LayoutGroup
@@ -376,7 +377,13 @@ extension EditorController {
         veil.layer?.backgroundColor = Palette.background.withAlphaComponent(0.65).cgColor
         let indicator = DropIndicatorView()
         indicator.isHidden = true
+        // Every spot it can go stays outlined for the whole drag, blank space included.
+        let zonesView = DropZonesView(frame: textView.bounds)
+        var zones = dropZones(dragging: source)
+        var zonesSeen = textView.visibleRect
+        zonesView.zones = zones
         textView.addSubview(veil)
+        textView.addSubview(zonesView)
         textView.addSubview(indicator)
         textView.addSubview(ghost)
 
@@ -402,10 +409,25 @@ extension EditorController {
                 continue
             }
             textView.autoscroll(with: next)
+            if textView.visibleRect != zonesSeen {
+                zonesSeen = textView.visibleRect
+                zones = dropZones(dragging: source)
+                zonesView.zones = zones
+            }
             let p = textView.convert(next.locationInWindow, from: nil)
             place(at: p)
-            target = dropTarget(at: p, dragging: source)
-            showIndicator(indicator, for: target)
+            if let zone = zones.first(where: { $0.hit.contains(p) }) {
+                target = zone.target
+                zonesView.active = zone.shape
+                indicator.style = zone.style
+                indicator.frame = zone.active
+                indicator.isHidden = false
+                indicator.needsDisplay = true
+            } else {
+                target = dropTarget(at: p, dragging: source)
+                zonesView.active = nil
+                showIndicator(indicator, for: target)
+            }
             #if DEBUG
             Self.onDragStep?()
             #endif
@@ -413,6 +435,7 @@ extension EditorController {
         NSCursor.pop()
         ghost.removeFromSuperview()
         veil.removeFromSuperview()
+        zonesView.removeFromSuperview()
         indicator.removeFromSuperview()
         if let target { moveBlock(source, to: target) }
     }
@@ -434,7 +457,12 @@ extension EditorController {
     }
 
     private func showIndicator(_ indicator: DropIndicatorView, for target: DropTarget?) {
-        guard let target, let frame = visibleGroupFrames().first(where: { $0.group.range == target.group.range }) else {
+        let anchor: LayoutGroup?
+        switch target {
+        case let .before(g), let .after(g), let .beside(g, _): anchor = g
+        default: anchor = nil
+        }
+        guard let target, let anchor, let frame = visibleGroupFrames().first(where: { $0.group.range == anchor.range }) else {
             indicator.isHidden = true
             return
         }
@@ -443,16 +471,135 @@ extension EditorController {
         case .before:
             indicator.style = .line
             indicator.frame = NSRect(x: r.minX - 8, y: r.minY - 12, width: r.width + 16, height: 10)
-        case .after:
-            indicator.style = .line
-            indicator.frame = NSRect(x: r.minX - 8, y: r.maxY + 2, width: r.width + 16, height: 10)
         case let .beside(_, leading):
             indicator.style = .area
-            let w = r.width * 0.48
-            indicator.frame = NSRect(x: leading ? r.minX - 6 : r.maxX - w + 6, y: r.minY - 6, width: w, height: max(r.height + 12, 44))
+            indicator.frame = Self.besideArea(r, leading: leading)
+        default:
+            indicator.style = .line
+            indicator.frame = NSRect(x: r.minX - 8, y: r.maxY + 2, width: r.width + 16, height: 10)
         }
         indicator.isHidden = false
         indicator.needsDisplay = true
+    }
+
+    /// The half of a block's row a block dropped beside it will take.
+    private static func besideArea(_ r: NSRect, leading: Bool) -> NSRect {
+        let w = r.width * 0.48
+        return NSRect(x: leading ? r.minX - 6 : r.maxX - w + 6, y: r.minY - 6, width: w, height: max(r.height + 12, 44))
+    }
+
+    /// A spot a dragged block can go: `hit` is where the pointer picks it, `shape` its
+    /// outline for the whole drag, `active` what shows once it's picked.
+    struct DropZone {
+        let target: DropTarget
+        let hit: NSRect
+        let shape: NSRect
+        let active: NSRect
+        let style: DropIndicatorView.Style
+    }
+
+    /// The spots on screen where dropping `dragging` would change the note, most
+    /// specific first: blank parts of columns, the space below the last block, the
+    /// gaps between blocks, and the sides of full-width blocks.
+    func dropZones(dragging: LayoutGroup) -> [DropZone] {
+        guard let container = textView.textContainer else { return [] }
+        let model = layoutModel
+        let text = storage.string as NSString
+        let gutter = layoutManager.gutter
+        let page = NSRect(x: textView.textContainerOrigin.x + gutter, y: 0, width: container.size.width - gutter * 2, height: 0)
+        let frames = visibleGroupFrames()
+        func frame(_ g: LayoutGroup) -> NSRect? { frames.first { $0.group === g }?.rect }
+
+        var columnZones: [DropZone] = [], endZones: [DropZone] = [], gapZones: [DropZone] = [], sideZones: [DropZone] = []
+        func add(_ target: DropTarget, to list: inout [DropZone], hit: NSRect, shape: NSRect, active: NSRect? = nil, style: DropIndicatorView.Style) {
+            guard let edit = model.move(dragging, to: target), edit.text != text.substring(with: edit.range) else { return }
+            list.append(DropZone(target: target, hit: hit, shape: shape, active: active ?? shape, style: style))
+        }
+        func line(at y: CGFloat) -> NSRect { NSRect(x: page.minX - 8, y: round(y) - 5, width: page.width + 16, height: 10) }
+
+        // Top-level items on screen, at the page's full width.
+        var shown: [(index: Int, rect: NSRect)] = []
+        for (i, item) in model.items.enumerated() {
+            let rects: [NSRect]
+            switch item {
+            case let .group(g): rects = frame(g).map { [$0] } ?? []
+            case let .region(r): rects = columnFrames(of: r)
+            }
+            guard let first = rects.first else { continue }
+            let union = rects.dropFirst().reduce(first) { $0.union($1) }
+            shown.append((i, NSRect(x: page.minX, y: union.minY, width: page.width, height: union.height)))
+        }
+
+        for (k, entry) in shown.enumerated() {
+            let rect = entry.rect
+            switch model.items[entry.index] {
+            case let .group(g):
+                if entry.index == 0 {
+                    add(.before(g), to: &gapZones, hit: NSRect(x: page.minX - gutter, y: rect.minY - 28, width: page.width + gutter * 2, height: 34),
+                        shape: line(at: rect.minY - 10), style: .line)
+                }
+                // Beside it: a slim outline in the margin, growing to the half it would take.
+                let edge = min(rect.width * 0.22, 130)
+                let tall = max(rect.height + 12, 44)
+                for leading in [true, false] {
+                    let hit = leading ? NSRect(x: rect.minX - gutter, y: rect.minY, width: gutter + edge, height: rect.height)
+                                      : NSRect(x: rect.maxX - edge, y: rect.minY, width: edge + gutter, height: rect.height)
+                    let tab = NSRect(x: leading ? rect.minX - 30 : rect.maxX + 10, y: rect.minY - 6, width: 20, height: tall)
+                    add(.beside(g, leading: leading), to: &sideZones, hit: hit, shape: tab, active: Self.besideArea(rect, leading: leading), style: .area)
+                }
+            case let .region(r):
+                // The blank foot of each column, or a whole empty column.
+                let cols = columnFrames(of: r)
+                for (c, col) in cols.enumerated() where c < r.columns.count {
+                    let bottom = r.columns[c].groups.compactMap(frame).map(\.maxY).max().map { $0 + 10 } ?? col.minY
+                    let blank = NSRect(x: col.minX - 6, y: bottom, width: col.width + 12, height: max(rect.maxY - bottom, r.columns[c].groups.isEmpty ? 44 : 0))
+                    guard blank.height >= 28 else { continue }
+                    add(.column(r, c), to: &columnZones, hit: blank, shape: blank, style: .area)
+                }
+            }
+            if k + 1 < shown.count, shown[k + 1].index == entry.index + 1 {
+                let next = shown[k + 1].rect
+                let target: DropTarget
+                switch (model.items[entry.index], model.items[entry.index + 1]) {
+                case let (_, .group(g)): target = .before(g)
+                case let (.group(g), _): target = .after(g)
+                case let (.region(r), _): target = .below(r)
+                }
+                add(target, to: &gapZones, hit: NSRect(x: page.minX - gutter, y: rect.maxY - 6, width: page.width + gutter * 2, height: next.minY - rect.maxY + 12),
+                    shape: line(at: (rect.maxY + next.minY) / 2), style: .line)
+            }
+        }
+
+        // The blank page below the last block: full width in the middle, or a column on
+        // either side with the other left empty.
+        if let last = shown.last, last.index == model.items.count - 1 {
+            let top = last.rect.maxY + 16
+            let height = min(max(textView.visibleRect.maxY - 16 - top, 72), 180)
+            let w = floor((page.width + 12 - 16) / 3)
+            for (n, leading) in [Bool?.some(true), nil, .some(false)].enumerated() {
+                let r = NSRect(x: page.minX - 6 + CGFloat(n) * (w + 8), y: top, width: w, height: height)
+                let hit = NSRect(x: n == 0 ? r.minX - gutter : r.minX - 4, y: top - 6, width: r.width + (n == 1 ? 8 : gutter + 4), height: height + 400)
+                add(.end(leading: leading), to: &endZones, hit: hit, shape: r, style: .area)
+            }
+        }
+        return columnZones + endZones + gapZones + sideZones
+    }
+
+    /// Each column of a side-by-side region as laid out (text view coordinates), from
+    /// its lines: an empty column has a blank one to write in.
+    func columnFrames(of region: LayoutRegion) -> [NSRect] {
+        guard region.range.location != NSNotFound, NSMaxRange(region.range) <= storage.length else { return [] }
+        let origin = textView.textContainerOrigin
+        var frames: [Int: NSRect] = [:]
+        let glyphs = layoutManager.glyphRange(forCharacterRange: region.range, actualCharacterRange: nil)
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphs) { frag, used, _, lineGlyphs, _ in
+            let char = self.layoutManager.characterIndexForGlyph(at: lineGlyphs.location)
+            guard let style = self.storage.attribute(.paragraphStyle, at: char, effectiveRange: nil) as? NSParagraphStyle,
+                  let cell = style.textBlocks.first as? NSTextTableBlock else { return }
+            let r = NSRect(x: frag.minX + origin.x, y: frag.minY + origin.y, width: frag.width, height: max(used.maxY - frag.minY, 1))
+            frames[cell.startingColumn] = frames[cell.startingColumn].map { $0.union(r) } ?? r
+        }
+        return frames.keys.sorted().compactMap { frames[$0] }
     }
 
     /// Moves a block, as one undo step. Dropping it where it already is changes nothing.

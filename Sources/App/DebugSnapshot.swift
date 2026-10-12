@@ -705,7 +705,9 @@ enum DebugSnapshot {
     /// their grip with real mouse events. `hover:n` shows table n's grip; `drag:n,prefix,where[,shot]`
     /// drags it to the block starting with `prefix` (`before`, `after`, `left`, `right` = beside it),
     /// screenshotting the drop indicator mid-drag; `escape:n,prefix,where` drags and presses Escape;
-    /// `text`, `undo`, `redo`, `shot:path`. Each mutating step is its own undo group.
+    /// `text`, `undo`, `redo`, `shot:path`. `zone:n,kind[,shot]` drags table n to the middle of the
+    /// first drop zone of a kind: `end`, `endleft`, `endright`, `column`, `below`, `gap`, `side`.
+    /// Each mutating step is its own undo group.
     static func runDragSteps(_ steps: [String], editor: EditorController, window: NSWindow) {
         let tv = editor.textView
         let undo = tv.undoManager
@@ -727,17 +729,34 @@ enum DebugSnapshot {
             let args = parts.count > 1 ? parts[1].split(separator: ",").map(String.init) : []
             switch parts[0] {
             case "hover": _ = hover(Int(args.first ?? "0") ?? 0)
-            case "drag", "escape":
-                guard args.count >= 3, let grip = hover(Int(args[0]) ?? 0),
-                      let target = editor.visibleGroupFrames().first(where: { $0.group.text.hasPrefix(args[1]) }) else { print("  DRAG: nothing to drag or no target \(args)"); break }
-                let r = target.rect
-                let p: NSPoint = switch args[2] {
-                case "before": NSPoint(x: r.midX, y: r.minY + min(6, r.height / 4))
-                case "left": NSPoint(x: r.minX + 8, y: r.midY)
-                case "right": NSPoint(x: r.maxX - 8, y: r.midY)
-                default: NSPoint(x: r.midX, y: r.maxY - min(6, r.height / 4))
+            case "drag", "escape", "zone":
+                guard args.count >= (parts[0] == "zone" ? 2 : 3), let grip = hover(Int(args[0]) ?? 0) else { print("  DRAG: nothing to drag \(args)"); break }
+                let p: NSPoint
+                if parts[0] == "zone" {
+                    let tables = editor.visibleTables().sorted { $0.location < $1.location }
+                    guard let source = editor.layoutModel.group(containing: tables[Int(args[0]) ?? 0].location) else { break }
+                    let zones = editor.dropZones(dragging: source)
+                    print("  ZONES:", zones.map { "\($0.target) \($0.shape)" })
+                    guard let zone = zones.first(where: { zone in
+                        switch (zone.target, args[1]) {
+                        case (.end(nil), "end"), (.end(true), "endleft"), (.end(false), "endright"), (.column, "column"), (.below, "below"),
+                             (.before, "gap"), (.after, "gap"), (.beside, "side"): return true
+                        default: return false
+                        }
+                    }) else { print("  DRAG: no \(args[1]) zone"); break }
+                    p = NSPoint(x: zone.shape.midX, y: zone.shape.midY)
+                    if args.count > 2 { EditorController.onDragStep = { debugShot(window: window, path: args[2]) } }
+                } else {
+                    guard let target = editor.visibleGroupFrames().first(where: { $0.group.text.hasPrefix(args[1]) }) else { print("  DRAG: no target \(args)"); break }
+                    let r = target.rect
+                    p = switch args[2] {
+                    case "before": NSPoint(x: r.midX, y: r.minY + min(6, r.height / 4))
+                    case "left": NSPoint(x: r.minX + 8, y: r.midY)
+                    case "right": NSPoint(x: r.maxX - 8, y: r.midY)
+                    default: NSPoint(x: r.midX, y: r.maxY - min(6, r.height / 4))
+                    }
+                    if args.count > 3 { EditorController.onDragStep = { debugShot(window: window, path: args[3]) } }
                 }
-                if args.count > 3 { EditorController.onDragStep = { debugShot(window: window, path: args[3]) } }
                 let start = NSPoint(x: grip.frame.midX, y: grip.frame.midY)
                 NSApp.postEvent(mouse(.leftMouseDragged, NSPoint(x: (start.x + p.x) / 2, y: (start.y + p.y) / 2)), atStart: false)
                 NSApp.postEvent(mouse(.leftMouseDragged, p), atStart: false)
@@ -746,7 +765,7 @@ enum DebugSnapshot {
                     NSApp.postEvent(esc, atStart: false)
                 }
                 NSApp.postEvent(mouse(.leftMouseUp, p), atStart: false)
-                print("  DRAG table \(args[0]) to \(args[2]) \(args[1].debugDescription) at \(p), hit:", window.contentView?.superview?.hitTest(window.contentView!.superview!.convert(tv.convert(start, to: nil), from: nil)).map { "\(type(of: $0))" } ?? "nil")
+                print("  DRAG table \(args[0]) to \(args.dropFirst().joined(separator: " ")) at \(p), hit:", window.contentView?.superview?.hitTest(window.contentView!.superview!.convert(tv.convert(start, to: nil), from: nil)).map { "\(type(of: $0))" } ?? "nil")
                 undo?.beginUndoGrouping()
                 grip.mouseDown(with: mouse(.leftMouseDown, start))
                 undo?.endUndoGrouping()
