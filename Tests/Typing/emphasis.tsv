@@ -48,3 +48,34 @@
 	Ⓑhi ✎✔	**hi か‸**	B
 	Ⓑhi ✎✔↶	**‸**	·
 	Ⓑhi →→✎✔	**hi **か‸	·
+#
+# One → or ← steps over a whole delimiter beside the caret, so leaving bold takes one press. Shift-→ still
+# selects one character, Option-→ a word; an escaped * and math are left alone.
+	Ⓑhi→x	**hi**x‸	B
+	Ⓑhello →1.1	**hello** 1.1‸	B
+	Ⓘhi →x	*hi* x‸	I
+**hi‸**	→	**hi**‸	B
+**hi**‸	←	**hi‸**	B
+‸**hi**	→	**‸hi**	B
+**‸hi**	←	‸**hi**	B
+__hi‸__	→	__hi__‸	B
+__hi__‸	←	__hi‸__	B
+~~hi‸~~	→	~~hi~~‸	S
+==hi‸==	→	==hi==‸	H
+*hi‸*	→	*hi*‸	I
+_hi‸_	→	_hi_‸	I
+`hi‸`	→	`hi`‸	C
+`hi`‸	←	`hi‸`	C
+``hi‸``	→	``hi``‸	C
+***hi‸***	→	***hi***‸	BI
+**_hi‸_**	→	**_hi_‸**	BI
+**_hi‸_**	→→	**_hi_**‸	BI
+**hi ‸**	→	**hi **‸	B
+**hi ‸**	→x	**hi** x‸	B
+**hi **‸	←	**hi ‸**	B
+**hi‸** there	→→	**hi** ‸there	B
+**hi‸**	⇨	**hi«*»*	B
+**hi‸** there	⌥	**hi** there‸	B
+a‸\*b*	→	a\‸*b*	·
+$a_‸b$	→	$a_b‸$	·
+ab‸cd	←	a‸bcd	·

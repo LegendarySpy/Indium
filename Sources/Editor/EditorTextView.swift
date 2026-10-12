@@ -299,7 +299,25 @@ final class EditorTextView: NSTextView {
 
     override func moveRight(_ sender: Any?) {
         if editor?.acceptSuggestionWithRightArrow() == true { return }
+        if skipDelimiter(forward: true) { return }
         super.moveRight(sender)
+    }
+
+    override func moveLeft(_ sender: Any?) {
+        if skipDelimiter(forward: false) { return }
+        super.moveLeft(sender)
+    }
+
+    /// One arrow press steps over a whole `**`, `~~` or backtick run, shown or hidden, so
+    /// leaving bold takes one press.
+    private func skipDelimiter(forward: Bool) -> Bool {
+        let caret = selectedRange()
+        guard let editor, caret.length == 0, !hasMarkedText(),
+              let to = MarkdownScanner.skippingDelimiter(in: editor.ns, line: editor.lineRange(at: caret.location).content,
+                                                         caret: caret.location, forward: forward) else { return false }
+        setSelectedRange(NSRange(location: to, length: 0))
+        scrollRangeToVisible(selectedRange())
+        return true
     }
 
     override func insertText(_ string: Any, replacementRange: NSRange) {
