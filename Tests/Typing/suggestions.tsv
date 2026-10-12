@@ -1,0 +1,31 @@
+# → accepts a suggestion as Tab does, only with the caret where its ghost text starts.
+# Run: Indium -IndiumTemp YES -IndiumTypingCases Tests/Typing/suggestions.tsv -IndiumSnapshot /tmp/x.png
+# Format and keys as Tests/Typing/emphasis.tsv.
+#
+# Quick answers. Undo takes back the answer with the line typed before it, as after Tab.
+	12 * 3 =→	12 * 3 = 36‸	·
+	12 * 3 =⇥	12 * 3 = 36‸	·
+	12 * 3 =→↶	‸	·
+	12 * 3 =⇥↶	‸	·
+	12 * 3 =→→	12 * 3 = 36‸	·
+Sum: 2 + 2 =‸ more	→	Sum: 2 + 2 = ‸more	·
+2 + 2 =‸	⇨	2 + 2 =‸	·
+2 + 2 =‸	⌥	2 + 2 =‸	·
+‸2 + 2 =	→	2‸ + 2 =	·
+Sum ‸2 + 2 =	⌥	Sum 2‸ + 2 =	·
+#
+# Slash commands.
+	/todo→	- [ ] ‸	·
+	/todo→↶	«/todo»	·
+	/todo⇥↶	«/todo»	·
+#
+# No suggestion: → moves the caret.
+ab‸cd	→	abc‸d	·
+ab‸cd	⇨	ab«c»d	·
+ab‸cd	⌥	abcd‸	·
+#
+# Math shortcuts: → moves through the equation and Tab still jumps to the next blank.
+$x‸$	/y→	$\frac{x}{y}‸$	·
+$x‸$	/y⇥	$\frac{x}{y}‸$	·
+$‸$	//a⇥b→	$\frac{a}{b}‸$	·
+$‸$	12 * 3 =→	$12 * 3 = 36‸$	·

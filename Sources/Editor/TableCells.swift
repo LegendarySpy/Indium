@@ -33,8 +33,15 @@ final class CellTextView: NSTextView, MathEditingHost {
     override func insertText(_ string: Any, replacementRange: NSRange) {
         // A key typed at the caret (not text put in by a command or an input method).
         if let s = string as? String, !hasMarkedText(),
-           replacementRange.location == NSNotFound || replacementRange == selectedRange(),
-           math.handleInput(s) { return }
+           replacementRange.location == NSNotFound || replacementRange == selectedRange() {
+            if math.handleInput(s) { return }
+            let caret = selectedRange()
+            if caret.length == 0, let (text, range) = MarkdownScanner.movingSpaceOutOfEmphasis(
+                in: self.string as NSString, line: NSRange(location: 0, length: (self.string as NSString).length), caret: caret.location, typing: s) {
+                super.insertText(text, replacementRange: range)
+                return
+            }
+        }
         super.insertText(string, replacementRange: replacementRange)
     }
 
@@ -173,10 +180,11 @@ final class CellField: NSTextField {
     var column = 0
     /// The cell's Markdown. Shown rendered, with its markers only while being edited.
     var source = ""
-    var style: ((String, Bool) -> NSAttributedString)?
+    /// Styles cell text: rendered, or, given the caret, as it's being edited.
+    var style: ((String, _ caret: Int?) -> NSAttributedString)?
 
     func showRendered() {
-        attributedStringValue = style?(source, false) ?? NSAttributedString(string: source)
+        attributedStringValue = style?(source, nil) ?? NSAttributedString(string: source)
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -190,7 +198,7 @@ final class CellField: NSTextField {
     /// Restyles the text being edited in place, so bold looks bold as it's typed.
     func restyleEditor() {
         guard let editor = currentEditor() as? NSTextView, let storage = editor.textStorage,
-              let styled = style?(editor.string, true), styled.length == storage.length else { return }
+              let styled = style?(editor.string, NSMaxRange(editor.selectedRange())), styled.length == storage.length else { return }
         storage.beginEditing()
         styled.enumerateAttributes(in: NSRange(location: 0, length: styled.length)) { attrs, range, _ in
             storage.setAttributes(attrs, range: range)

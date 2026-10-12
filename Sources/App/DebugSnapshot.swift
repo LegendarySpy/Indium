@@ -462,6 +462,105 @@ enum DebugSnapshot {
         print("MATH CASES: \(total - failed)/\(total) passed")
     }
 
+    /// `-IndiumTypingCases /path`: inline formatting typed as key events, one case per line,
+    /// `before<TAB>keys<TAB>expected<TAB>look`, marks as for `-IndiumMathCases`. After every key
+    /// the first letter of the note gets a look: B bold, I italic, S struck, H highlighted,
+    /// C code, · plain. `look` is the last one; a look lost and then found again (bold, plain,
+    /// bold) is a flicker and fails the case. Quits when done. Keys: Ⓑ Ⓘ Ⓢ Ⓗ Ⓒ the Format commands, → ←
+    /// arrows, ⇨ Shift-→, ⌥ Option-→, ⇥ Tab, ⤓ a click at the end of the note, ✎ ✔ an input method's か marked and committed, ⏎ Return, ⌫ Backspace, ↶ Undo, ↷ Redo.
+    static func runTypingCases(_ cases: String, editor: EditorController, window: NSWindow) {
+        let tv = editor.textView
+        window.makeFirstResponder(tv)
+        let undo = tv.undoManager
+        typealias W = DocumentWindowController
+        let commands: [Character: Selector] = ["Ⓑ": #selector(W.toggleBold(_:)), "Ⓘ": #selector(W.toggleItalic(_:)),
+            "Ⓢ": #selector(W.toggleStrikethrough(_:)), "Ⓗ": #selector(W.toggleHighlight(_:)), "Ⓒ": #selector(W.toggleInlineCode(_:))]
+        let arrows: [Character: (UInt16, Int, NSEvent.ModifierFlags)] = ["→": (124, NSRightArrowFunctionKey, []), "←": (123, NSLeftArrowFunctionKey, []),
+            "⇨": (124, NSRightArrowFunctionKey, .shift), "⌥": (124, NSRightArrowFunctionKey, .option)]
+        func look() -> String {
+            let ns = editor.storage.string as NSString
+            let letter = ns.rangeOfCharacter(from: .letters)
+            guard letter.location != NSNotFound else { return "·" }
+            let attrs = editor.storage.attributes(at: letter.location, effectiveRange: nil)
+            let traits = (attrs[.font] as? NSFont)?.fontDescriptor.symbolicTraits ?? []
+            var s = ""
+            if traits.contains(.bold) { s += "B" }
+            if traits.contains(.italic) { s += "I" }
+            if (attrs[.strikethroughStyle] as? Int ?? 0) != 0 { s += "S" }
+            switch (attrs[.mdInlineBox] as? InlineBox)?.kind {
+            case .highlight: s += "H"
+            case .code: s += "C"
+            default: break
+            }
+            return s.isEmpty ? "·" : s
+        }
+        func press(_ key: Character) {
+            if let action = commands[key] {
+                var responder = window.firstResponder
+                while let r = responder, !r.responds(to: action) { responder = r.nextResponder }
+                _ = (responder ?? window.delegate as? NSResponder)?.perform(action, with: nil)
+            } else if let (code, scalar, flags) = arrows[key] {
+                sendKey(String(Character(UnicodeScalar(scalar)!)), flags: flags.union([.numericPad, .function]), code: code, to: window)
+            } else {
+                switch key {
+                case "⤓": tv.setSelectedRange(NSRange(location: editor.storage.length, length: 0))
+                case "✎": tv.setMarkedText("か", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+                case "✔": tv.insertText("か", replacementRange: NSRange(location: NSNotFound, length: 0))
+                case "⇥": sendKey("\t", code: 48, to: window)
+                case "⏎": sendKey("\r", code: 36, to: window)
+                case "⌫": sendKey("\u{7f}", code: 51, to: window)
+                case "↶": undo?.undo()
+                case "↷": undo?.redo()
+                default: sendKey(String(key), to: window)
+                }
+            }
+        }
+        let rows = cases.components(separatedBy: "\n").filter { !$0.isEmpty && !$0.hasPrefix("#") }
+            .map { $0.components(separatedBy: "\t") }.filter { $0.count == 4 }
+        var failed = 0
+        func run(_ row: Int, _ key: Int, _ trace: [String]) {
+            guard row < rows.count else {
+                print("TYPING CASES: \(rows.count - failed)/\(rows.count) passed")
+                exit(failed == 0 ? 0 : 1)
+            }
+            let parts = rows[row], keys = Array(parts[1])
+            func next(_ trace: [String]) { DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { run(row, key + 1, trace) } }
+            if key == 0 {
+                let (start, sel) = unmark(parts[0].replacingOccurrences(of: "↵", with: "\n"))
+                editor.replace(NSRange(location: 0, length: editor.storage.length), with: start)
+                tv.setSelectedRange(sel)
+                DispatchQueue.main.async {
+                    undo?.removeAllActions()
+                    next([])
+                }
+                return
+            }
+            if key <= keys.count {
+                press(keys[key - 1])
+                // The app's event loop closes the undo group a key opened once it's handled, which
+                // keys sent from here never get back to; without it every key lands in one group.
+                let endGroups = NSSelectorFromString("_endTopLevelGroupings")
+                if (UndoManager.self as AnyObject).responds(to: endGroups) { _ = (UndoManager.self as AnyObject).perform(endGroups) }
+                next(trace + [look()])
+                return
+            }
+            let r = tv.selectedRange()
+            let result = (editor.text as NSString).replacingCharacters(in: r, with: r.length == 0 ? "‸" : "«" + (editor.text as NSString).substring(with: r) + "»")
+                .replacingOccurrences(of: "\n", with: "↵")
+            // A look that comes back after something else showed in between.
+            var flicker = false
+            for (i, a) in trace.enumerated() where a != "·" {
+                if let j = trace[(i + 1)...].firstIndex(where: { $0 != a }), trace[(j + 1)...].contains(a) { flicker = true }
+            }
+            let ok = result == parts[2] && trace.last == parts[3] && !flicker
+            if !ok { failed += 1 }
+            print(ok ? "PASS" : "FAIL", parts[0], "·", parts[1], "→", result, "look:", trace.joined(separator: " "),
+                  ok ? "" : "(expected \(parts[2]) \(parts[3])\(flicker ? ", flickered" : ""))")
+            run(row + 1, 0, [])
+        }
+        run(0, 0, [])
+    }
+
     /// A case's starting text with its caret (`‸`) or selection (`«…»`) marks taken out;
     /// no mark puts the caret at the end.
     static func unmark(_ s: String) -> (String, NSRange) {
@@ -494,7 +593,7 @@ enum DebugSnapshot {
     ///
     /// An optional fourth column is the row as stored in the note, spaces squeezed. Every
     /// case also checks the table still has two columns in every row (a bare `|` splits one).
-    /// Keys as for `-IndiumMathCases`, plus ⇤ Shift-Tab and ⎋ Escape.
+    /// Keys as for `-IndiumMathCases`, plus ⇤ Shift-Tab, ⎋ Escape and → Right Arrow.
     static func runMathCellCases(_ cases: String, editor: EditorController, window: NSWindow, realKeys: Bool) {
         let undo = editor.textView.undoManager
         func spin() { RunLoop.current.run(until: Date().addingTimeInterval(0.03)) }
@@ -542,6 +641,7 @@ enum DebugSnapshot {
                     case "⏎": send("\r", code: 36)
                     case "⌫": send("\u{7f}", code: 51)
                     case "⎋": send("\u{1b}", code: 53)
+                    case "→": send(String(Character(UnicodeScalar(NSRightArrowFunctionKey)!)), [.numericPad, .function], code: 124)
                     case "↶": undo?.undo(); spin()
                     case "↷": undo?.redo(); spin()
                     default: send(String(key))
@@ -557,6 +657,7 @@ enum DebugSnapshot {
                 case "⏎": tv.doCommand(by: #selector(NSResponder.insertNewline(_:)))
                 case "⌫": tv.doCommand(by: #selector(NSResponder.deleteBackward(_:)))
                 case "⎋": tv.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+                case "→": tv.doCommand(by: #selector(NSResponder.moveRight(_:)))
                 case "↶": undo?.undo()
                 case "↷": undo?.redo()
                 default: tv.insertText(String(key), replacementRange: NSRange(location: NSNotFound, length: 0))
@@ -1404,6 +1505,10 @@ enum DebugSnapshot {
                     target.editor.saveNow()
                     print("NOTE:\n" + target.editor.text)
                 }
+            }
+            if let path = d.string(forKey: "IndiumTypingCases"), let cases = try? String(contentsOfFile: path, encoding: .utf8) {
+                runTypingCases(cases, editor: target.editor, window: window)
+                return
             }
             if let path = d.string(forKey: "IndiumMathCases"), let cases = try? String(contentsOfFile: path, encoding: .utf8) {
                 runMathCases(cases, editor: target.editor, window: window, realKeys: d.bool(forKey: "IndiumMathRealKeys"))

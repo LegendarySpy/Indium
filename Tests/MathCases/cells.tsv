@@ -58,3 +58,8 @@ $‸$	brkx⇥y⇥	$\langle x \mid y \rangle‸$	| $\langle x \mid y \rangle$ | c
 $‸$	|x|	$|x|‸$	| $\|x\|$ | c2 |
 # One line only: display-math shortcuts that need lines of their own stay as typed.
 ‸	dm	dm‸
+#
+# → in a cell moves the caret, and at the end of the cell goes to the next one.
+c‸1	→	c1‸
+c1‸	→	@1,1:‸c2
+‸	3 * 4 =→	@1,1:‸c2

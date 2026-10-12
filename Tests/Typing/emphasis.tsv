@@ -1,0 +1,50 @@
+# Inline formatting typed as key events, checking after every key that the text never flickers between styled and plain.
+# Run: Indium -IndiumTemp YES -IndiumTypingCases Tests/Typing/emphasis.tsv -IndiumSnapshot /tmp/x.png
+# before<TAB>keys<TAB>expected<TAB>look. ‸ caret, «» selection, ↵ newline. Keys: Ⓑ Ⓘ Ⓢ Ⓗ Ⓒ Format ▸ Bold, Italic,
+# Strikethrough, Highlight, Inline Code; → ← arrows; ⤓ a click at the end of the note; ✎ ✔ an input method's か marked
+# and committed; ⏎ Return; ⌫ Backspace; ↶ Undo; ↷ Redo.
+# look: the note's first letter after the last key, B bold, I italic, S struck, H highlighted, C code, · plain.
+#
+# A space typed inside a span keeps it styled while the caret is there.
+	Ⓑhello world	**hello world‸**	B
+	Ⓑhello 	**hello ‸**	B
+‸↵Next line	Ⓑhello 	**hello ‸**↵Next line	B
+	Ⓘhello world	*hello world‸*	I
+	Ⓢhello world	~~hello world‸~~	S
+	Ⓗhello world	==hello world‸==	H
+	Ⓒhello world	`hello world‸`	C
+#
+# The same typed by hand.
+	**hello world**	**hello world**‸	B
+	*hello world*	*hello world*‸	I
+	__hello world__	__hello world__‸	B
+	_hello world_	_hello world_‸	I
+	~~hello world~~	~~hello world~~‸	S
+	==hello world==	==hello world==‸	H
+	`hello world`	`hello world`‸	C
+	**hello** 	**hello** ‸	B
+‸↵Next line	**hello** 	**hello** ‸↵Next line	B
+#
+# Typing on past the markers moves the space out of them, so the note keeps valid Markdown.
+	ⒷEede →→1.1	**Eede** 1.1‸	B
+	Ⓘhi →x	*hi* x‸	I
+	Ⓢgo →→x	~~go~~ x‸	S
+	Ⓗgo →→x	==go== x‸	H
+	**hi **x	**hi** x‸	B
+	Ⓑhi→→x	**hi**x‸	B
+#
+# One Undo takes back what was typed past the markers, and puts the space back where it was typed.
+	ⒷEede →→1.1↶	**Eede« **»	B
+	ⒷEede →→1.1↶↶	**‸**	·
+	ⒷEede →→1.1↶↶↶	‸	·
+	ⒷEede →→1.1↶↷	**Eede** 1.1‸	B
+	Ⓑhi→→x↶	**hi**‸	B
+#
+# Leaving the span another way shows the Markdown as it is.
+‸↵Next line	Ⓑhello ⤓	**hello **↵Next line‸	·
+**hello ** and‸	 x	**hello ** and x‸	·
+#
+# Input methods: text being composed is left alone and committed as it was typed, even past the markers.
+	Ⓑhi ✎✔	**hi か‸**	B
+	Ⓑhi ✎✔↶	**‸**	·
+	Ⓑhi →→✎✔	**hi **か‸	·

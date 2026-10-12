@@ -31,7 +31,7 @@ So Indium shows one note at a time. There are no tabs or split views, just the n
 - **Real math.** `$inline$` and `$$display$$` equations like Obsidian, typeset natively in the editor and in PDFs.
 - **Math shortcuts.** Type `mk` for an equation, `x/` for a fraction, `sr` to square, `@a` for α. Tab moves to the next blank, like Obsidian's LaTeX Suite.
 - **Your own shortcuts.** Put a `.indium/snippets.json` in your notes folder, written the way LaTeX Suite writes snippets. You can paste them straight from Obsidian.
-- **Quick answers.** End a line with `=` and the answer shows up. Tab keeps it.
+- **Quick answers.** End a line with `=` and the answer shows up. Tab or → keeps it.
 - **Tables you can click.** Edit cells directly, add rows and columns, drag to resize.
 - **Math in tables.** Write `$…$` in a cell with the same shortcuts as everywhere else.
 - **Table formulas.** Type `=B2-B3` or `=SUM(B2:B5)` in a cell, as in a spreadsheet, and fill it across a row or down a column. They're saved as Advanced Tables formulas so Obsidian can read them, and they can use units, significant figures, and numbers from the note's frontmatter.

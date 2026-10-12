@@ -1,7 +1,7 @@
 import AppKit
 
 /// `/` commands: type a slash and the best match appears as soft ghost text after the
-/// caret. Tab or Return inserts it, ↑/↓ cycles, Esc dismisses.
+/// caret. Tab, → or Return inserts it, ↑/↓ cycles, Esc dismisses.
 struct SlashCommand {
     enum Insertion {
         /// Text replacing the typed command; `select` is relative to the inserted text.
@@ -188,6 +188,14 @@ extension EditorController {
         default:
             return false
         }
+    }
+
+    /// → accepts a suggestion as Tab does, with the caret where its ghost text starts.
+    func acceptSuggestionWithRightArrow() -> Bool {
+        let sel = textView.selectedRange()
+        guard textView.ghost != nil, sel.length == 0, !textView.hasMarkedText() else { return false }
+        let atGhost = answer?.location == sel.location || slash.map { NSMaxRange($0.range) == sel.location } == true
+        return atGhost && handleSlashKey(#selector(NSResponder.insertTab(_:)))
     }
 
     private func acceptSlash(_ state: SlashState) {

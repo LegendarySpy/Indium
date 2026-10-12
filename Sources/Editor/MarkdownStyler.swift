@@ -955,7 +955,9 @@ final class MarkdownStyler {
     private func inline(_ range: NSRange, in s: NSTextStorage, font: @escaping (Bool, Bool) -> NSFont, color: NSColor) {
         guard range.length > 0 else { return }
         s.addAttribute(.foregroundColor, value: color, range: range)
-        let spans = MarkdownScanner.inlineSpans(in: text, range: range)
+        // Undo selects what it put back, so a selection's end counts as where the typing is.
+        let caret = config.printing ? nil : selection.first.map(NSMaxRange)
+        let spans = MarkdownScanner.inlineSpans(in: text, range: range, caret: caret)
         if spans.isEmpty {
             s.addAttribute(.font, value: font(false, false), range: range)
             return

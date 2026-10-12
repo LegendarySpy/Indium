@@ -305,9 +305,10 @@ final class TableRender {
         return out ?? text
     }
 
-    /// `revealMarkers` keeps the Markdown syntax, dimmed, for the cell being edited.
+    /// `revealMarkers` keeps the Markdown syntax, dimmed, for the cell being edited, and
+    /// `caret` is where it's being typed in.
     static func render(_ text: String, header: Bool, alignment: Int, typography: Typography, size: CGFloat,
-                       revealMarkers: Bool = false) -> NSAttributedString {
+                       revealMarkers: Bool = false, caret: Int? = nil) -> NSAttributedString {
         let style = NSMutableParagraphStyle()
         style.alignment = [.natural, .left, .center, .right][min(alignment, 3)]
         style.lineBreakMode = .byWordWrapping
@@ -320,7 +321,7 @@ final class TableRender {
         }
 
         let ns = text as NSString
-        let spans = MarkdownScanner.inlineSpans(in: ns, range: NSRange(location: 0, length: ns.length))
+        let spans = MarkdownScanner.inlineSpans(in: ns, range: NSRange(location: 0, length: ns.length), caret: caret)
         var hidden = IndexSet()
         var traits = [UInt8](repeating: 0, count: ns.length)
         var maths: [(NSRange, String)] = []
