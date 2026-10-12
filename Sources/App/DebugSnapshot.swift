@@ -467,7 +467,7 @@ enum DebugSnapshot {
     /// the first letter of the note gets a look: B bold, I italic, S struck, H highlighted,
     /// C code, · plain. `look` is the last one; a look lost and then found again (bold, plain,
     /// bold) is a flicker and fails the case. Quits when done. Keys: Ⓑ Ⓘ Ⓢ Ⓗ Ⓒ the Format commands, → ←
-    /// arrows, ⤓ a click at the end of the note, ✎ ✔ an input method's か marked and committed, ⏎ Return, ⌫ Backspace, ↶ Undo, ↷ Redo.
+    /// arrows, ⇨ Shift-→, ⌥ Option-→, ⇥ Tab, ⤓ a click at the end of the note, ✎ ✔ an input method's か marked and committed, ⏎ Return, ⌫ Backspace, ↶ Undo, ↷ Redo.
     static func runTypingCases(_ cases: String, editor: EditorController, window: NSWindow) {
         let tv = editor.textView
         window.makeFirstResponder(tv)
@@ -475,7 +475,8 @@ enum DebugSnapshot {
         typealias W = DocumentWindowController
         let commands: [Character: Selector] = ["Ⓑ": #selector(W.toggleBold(_:)), "Ⓘ": #selector(W.toggleItalic(_:)),
             "Ⓢ": #selector(W.toggleStrikethrough(_:)), "Ⓗ": #selector(W.toggleHighlight(_:)), "Ⓒ": #selector(W.toggleInlineCode(_:))]
-        let arrows: [Character: (UInt16, Int)] = ["→": (124, NSRightArrowFunctionKey), "←": (123, NSLeftArrowFunctionKey)]
+        let arrows: [Character: (UInt16, Int, NSEvent.ModifierFlags)] = ["→": (124, NSRightArrowFunctionKey, []), "←": (123, NSLeftArrowFunctionKey, []),
+            "⇨": (124, NSRightArrowFunctionKey, .shift), "⌥": (124, NSRightArrowFunctionKey, .option)]
         func look() -> String {
             let ns = editor.storage.string as NSString
             let letter = ns.rangeOfCharacter(from: .letters)
@@ -498,13 +499,14 @@ enum DebugSnapshot {
                 var responder = window.firstResponder
                 while let r = responder, !r.responds(to: action) { responder = r.nextResponder }
                 _ = (responder ?? window.delegate as? NSResponder)?.perform(action, with: nil)
-            } else if let (code, scalar) = arrows[key] {
-                sendKey(String(Character(UnicodeScalar(scalar)!)), flags: [.numericPad, .function], code: code, to: window)
+            } else if let (code, scalar, flags) = arrows[key] {
+                sendKey(String(Character(UnicodeScalar(scalar)!)), flags: flags.union([.numericPad, .function]), code: code, to: window)
             } else {
                 switch key {
                 case "⤓": tv.setSelectedRange(NSRange(location: editor.storage.length, length: 0))
                 case "✎": tv.setMarkedText("か", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
                 case "✔": tv.insertText("か", replacementRange: NSRange(location: NSNotFound, length: 0))
+                case "⇥": sendKey("\t", code: 48, to: window)
                 case "⏎": sendKey("\r", code: 36, to: window)
                 case "⌫": sendKey("\u{7f}", code: 51, to: window)
                 case "↶": undo?.undo()
@@ -591,7 +593,7 @@ enum DebugSnapshot {
     ///
     /// An optional fourth column is the row as stored in the note, spaces squeezed. Every
     /// case also checks the table still has two columns in every row (a bare `|` splits one).
-    /// Keys as for `-IndiumMathCases`, plus ⇤ Shift-Tab and ⎋ Escape.
+    /// Keys as for `-IndiumMathCases`, plus ⇤ Shift-Tab, ⎋ Escape and → Right Arrow.
     static func runMathCellCases(_ cases: String, editor: EditorController, window: NSWindow, realKeys: Bool) {
         let undo = editor.textView.undoManager
         func spin() { RunLoop.current.run(until: Date().addingTimeInterval(0.03)) }
@@ -639,6 +641,7 @@ enum DebugSnapshot {
                     case "⏎": send("\r", code: 36)
                     case "⌫": send("\u{7f}", code: 51)
                     case "⎋": send("\u{1b}", code: 53)
+                    case "→": send(String(Character(UnicodeScalar(NSRightArrowFunctionKey)!)), [.numericPad, .function], code: 124)
                     case "↶": undo?.undo(); spin()
                     case "↷": undo?.redo(); spin()
                     default: send(String(key))
@@ -654,6 +657,7 @@ enum DebugSnapshot {
                 case "⏎": tv.doCommand(by: #selector(NSResponder.insertNewline(_:)))
                 case "⌫": tv.doCommand(by: #selector(NSResponder.deleteBackward(_:)))
                 case "⎋": tv.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+                case "→": tv.doCommand(by: #selector(NSResponder.moveRight(_:)))
                 case "↶": undo?.undo()
                 case "↷": undo?.redo()
                 default: tv.insertText(String(key), replacementRange: NSRange(location: NSNotFound, length: 0))
