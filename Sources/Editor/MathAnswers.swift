@@ -25,6 +25,10 @@ enum MathAnswer {
         if !inMath, let marker = head.range(of: #"^\s*(?:[-+*]|\d+[.)](?=\s+[^-+−*×/÷^\s]))\s+(?:\[[ xX]\]\s+)?"#, options: .regularExpression) {
             head.removeSubrange(marker)
         }
+        // Inside an equation, only the equation counts: `$1.5$ and $\pi =` isn't 1.5π.
+        if head.filter({ $0 == "$" }).count % 2 == 1, let open = head.lastIndex(of: "$") {
+            head = String(head[head.index(after: open)...])
+        }
         // A second "=" earlier ("a = b + c =") limits the expression to the last part.
         let segment = head.split(separator: "=", omittingEmptySubsequences: false).last.map(String.init) ?? head
         // The longest tail that reads as arithmetic: prose before it ("Mass is 2 + 3") is skipped.

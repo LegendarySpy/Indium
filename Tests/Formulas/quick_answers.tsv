@@ -198,3 +198,14 @@ prose	3. π =	∅	∅
 prose	1. 2 + 3 =	5	␠5
 prose	- [ ] 2 * 3π =	18.849556	␠18.849556
 prose	-2 + 3 =	1	␠1
+# As typed in a note: $3*\pi= with no spaces is 3π
+prose	$3*\pi=	9.424778	␠9.424778
+prose	$3*\pi =	9.424778	␠9.424778
+prose	$3\pi=	9.424778	␠9.424778
+prose	$2*\pi=	6.283185	␠6.283185
+prose	$3*pi=	9.424778	␠9.424778
+math	3*\pi=	9.424778	␠9.424778
+# An equation earlier on the line isn't part of the one being written
+prose	$1.5$ and $\pi*2=	6.283185	␠6.283185
+prose	$3*\pi=3.142$ $\pi=	∅	∅
+prose	$3*\pi$ =	9.424778	␠9.424778
