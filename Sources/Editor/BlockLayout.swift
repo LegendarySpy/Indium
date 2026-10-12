@@ -44,12 +44,13 @@ enum DropTarget {
     case before(LayoutGroup)
     case after(LayoutGroup)
     case beside(LayoutGroup, leading: Bool)
-
-    var group: LayoutGroup {
-        switch self {
-        case let .before(g), let .after(g), let .beside(g, _): g
-        }
-    }
+    /// At the foot of a column of a side-by-side region, an empty one included.
+    case column(LayoutRegion, Int)
+    /// Just after a side-by-side region, at full width.
+    case below(LayoutRegion)
+    /// At the end of the note: full width, or in a column on one side with the other
+    /// left empty to write in.
+    case end(leading: Bool?)
 }
 
 /// The document's top-level arrangement, rebuilt from the scanned blocks.
@@ -143,24 +144,51 @@ struct LayoutModel {
     /// Computes the text edit for moving `dragged` to `target`.
     /// Returns the range to replace, the replacement, and where the moved block lands in it.
     func move(_ dragged: LayoutGroup, to target: DropTarget) -> (range: NSRange, text: String, movedOffset: Int)? {
-        let anchor = target.group
-        guard anchor !== dragged, let src = itemIndex(of: dragged), let dst = itemIndex(of: anchor) else { return nil }
+        guard let src = itemIndex(of: dragged) else { return nil }
+        func regionIndex(_ r: LayoutRegion) -> Int? {
+            items.firstIndex { if case let .region(x) = $0 { return x === r }; return false }
+        }
+        let dst: Int
+        switch target {
+        case let .before(g), let .after(g), let .beside(g, _):
+            guard g !== dragged, let i = itemIndex(of: g) else { return nil }
+            dst = i
+        case let .column(r, _), let .below(r):
+            guard let i = regionIndex(r) else { return nil }
+            dst = i
+        case .end:
+            dst = items.count - 1
+        }
         let lo = min(src, dst), hi = max(src, dst)
-        var slice = Array(items[lo...hi])
+        // Regions are copied, so working out a drop (to show only the spots that change
+        // something) leaves the model as it was.
+        var slice: [LayoutItem] = items[lo...hi].map { item in
+            guard case let .region(r) = item else { return item }
+            return .region(LayoutRegion(ratios: r.ratios, columns: r.columns.map { LayoutColumn($0.groups) }, range: r.range))
+        }
+        var targetColumn: LayoutColumn?
+        if case let .column(r, c) = target {
+            for case let .region(x) in slice where x.range == r.range && c < x.columns.count { targetColumn = x.columns[c] }
+        }
 
         // Take the dragged block out of wherever it lives.
         slice.removeAll { if case let .group(g) = $0 { return g === dragged }; return false }
+        var emptied: [LayoutColumn] = []
         for case let .region(r) in slice {
-            for column in r.columns { column.groups.removeAll { $0 === dragged } }
+            for column in r.columns where column.groups.contains(where: { $0 === dragged }) {
+                column.groups.removeAll { $0 === dragged }
+                if column.groups.isEmpty { emptied.append(column) }
+            }
         }
 
-        // Empty columns go; a single remaining column becomes full width.
+        // Columns it leaves empty go (one left empty to write in stays); a single
+        // remaining column becomes full width.
         func normalize() {
             var out: [LayoutItem] = []
             for item in slice {
                 guard case let .region(r) = item else { out.append(item); continue }
                 let before = r.columns.count
-                r.columns.removeAll { $0.groups.isEmpty }
+                r.columns.removeAll { c in emptied.contains { $0 === c } }
                 if r.columns.count != before { r.ratios = [] }
                 switch r.columns.count {
                 case 0: break
@@ -174,36 +202,58 @@ struct LayoutModel {
 
         // Put it back next to, or beside, the anchor.
         var placed = false
-        for (k, item) in slice.enumerated() where !placed {
-            switch item {
-            case let .group(g) where g === anchor:
-                switch target {
-                case .before: slice.insert(.group(dragged), at: k)
-                case .after: slice.insert(.group(dragged), at: k + 1)
-                case let .beside(_, leading):
-                    let columns = leading ? [LayoutColumn([dragged]), LayoutColumn([anchor])] : [LayoutColumn([anchor]), LayoutColumn([dragged])]
-                    slice[k] = .region(LayoutRegion(ratios: [], columns: columns))
-                }
+        switch target {
+        case let .end(leading):
+            if let leading {
+                let columns = leading ? [LayoutColumn([dragged]), LayoutColumn()] : [LayoutColumn(), LayoutColumn([dragged])]
+                slice.append(.region(LayoutRegion(ratios: [], columns: columns)))
+            } else {
+                slice.append(.group(dragged))
+            }
+            placed = true
+        case let .below(region):
+            if let k = slice.firstIndex(where: { if case let .region(x) = $0 { return x.range == region.range }; return false }) {
+                slice.insert(.group(dragged), at: k + 1)
                 placed = true
-            case let .region(r):
-                for (c, column) in r.columns.enumerated() {
-                    guard let j = column.groups.firstIndex(where: { $0 === anchor }) else { continue }
+            }
+        case .column:
+            for case let .region(r) in slice {
+                guard let column = targetColumn, r.columns.contains(where: { $0 === column }) else { continue }
+                column.groups.append(dragged)
+                placed = true
+            }
+        case let .before(anchor), let .after(anchor), let .beside(anchor, _):
+            for (k, item) in slice.enumerated() where !placed {
+                switch item {
+                case let .group(g) where g === anchor:
                     switch target {
-                    case .before: column.groups.insert(dragged, at: j)
-                    case .after: column.groups.insert(dragged, at: j + 1)
+                    case .before: slice.insert(.group(dragged), at: k)
                     case let .beside(_, leading):
-                        if r.columns.count < 3 {
-                            r.columns.insert(LayoutColumn([dragged]), at: leading ? c : c + 1)
-                            r.ratios = []
-                        } else {
-                            column.groups.insert(dragged, at: leading ? j : j + 1)
-                        }
+                        let columns = leading ? [LayoutColumn([dragged]), LayoutColumn([anchor])] : [LayoutColumn([anchor]), LayoutColumn([dragged])]
+                        slice[k] = .region(LayoutRegion(ratios: [], columns: columns))
+                    default: slice.insert(.group(dragged), at: k + 1)
                     }
                     placed = true
+                case let .region(r):
+                    for (c, column) in r.columns.enumerated() {
+                        guard let j = column.groups.firstIndex(where: { $0 === anchor }) else { continue }
+                        switch target {
+                        case .before: column.groups.insert(dragged, at: j)
+                        case let .beside(_, leading):
+                            if r.columns.count < 3 {
+                                r.columns.insert(LayoutColumn([dragged]), at: leading ? c : c + 1)
+                                r.ratios = []
+                            } else {
+                                column.groups.insert(dragged, at: leading ? j : j + 1)
+                            }
+                        default: column.groups.insert(dragged, at: j + 1)
+                        }
+                        placed = true
+                        break
+                    }
+                default:
                     break
                 }
-            default:
-                break
             }
         }
         guard placed else { return nil }
@@ -355,6 +405,41 @@ final class DropIndicatorView: NSView {
             path.lineWidth = 2
             path.setLineDash([6, 4], count: 2, phase: 0)
             path.stroke()
+        }
+    }
+}
+
+/// Outlines every spot a dragged block can go, faintly, so blank space reads as a
+/// place to drop too. The one under the pointer is left to `DropIndicatorView`.
+final class DropZonesView: NSView {
+    var zones: [EditorController.DropZone] = [] { didSet { needsDisplay = true } }
+    var active: NSRect? { didSet { if active != oldValue { needsDisplay = true } } }
+
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let accent = NSColor.controlAccentColor
+        for zone in zones where zone.shape.intersects(dirtyRect) && zone.shape != active {
+            switch zone.style {
+            case .line:
+                let line = NSBezierPath()
+                line.move(to: NSPoint(x: zone.shape.minX + 4, y: zone.shape.midY))
+                line.line(to: NSPoint(x: zone.shape.maxX - 4, y: zone.shape.midY))
+                line.lineWidth = 1.5
+                line.lineCapStyle = .round
+                line.setLineDash([6, 4], count: 2, phase: 0)
+                accent.withAlphaComponent(0.4).setStroke()
+                line.stroke()
+            case .area:
+                let path = NSBezierPath(roundedRect: zone.shape.insetBy(dx: 1, dy: 1), xRadius: min(10, zone.shape.width / 2), yRadius: min(10, zone.shape.width / 2))
+                accent.withAlphaComponent(0.04).setFill()
+                path.fill()
+                accent.withAlphaComponent(0.4).setStroke()
+                path.lineWidth = 1.5
+                path.setLineDash([6, 4], count: 2, phase: 0)
+                path.stroke()
+            }
         }
     }
 }
