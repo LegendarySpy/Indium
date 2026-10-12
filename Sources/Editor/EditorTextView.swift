@@ -251,17 +251,38 @@ final class EditorTextView: NSTextView {
     }
 
     private func drawGhost() {
-        guard let ghost, let layoutManager, let container = textContainer, let storage = textStorage else { return }
+        guard let ghost, let layout = ghostLayout(), layout.fits else { return }
+        (ghost as NSString).draw(at: layout.rect.origin, withAttributes: [.font: layout.font, .foregroundColor: Palette.tertiaryText])
+    }
+
+    /// The ghost is drawn and Tab or → take it only when it fits beside the text on its line.
+    var showsGhost: Bool { ghostLayout()?.fits == true }
+
+    /// Where the ghost goes: after the caret, or after the closing `$` when that's all that
+    /// follows it. It fits when it ends on its line: short of the page's edge, a float beside
+    /// the text, or the next column.
+    func ghostLayout() -> (rect: NSRect, font: NSFont, fits: Bool)? {
+        guard let ghost, let layoutManager, let container = textContainer,
+              let storage = textStorage else { return nil }
         let caret = selectedRange().location
-        guard caret > 0, caret <= storage.length else { return }
-        let glyph = layoutManager.glyphIndexForCharacter(at: caret - 1)
+        guard caret > 0, caret <= storage.length else { return nil }
+        let text = storage.string as NSString
+        var s = 0, e = 0, ce = 0
+        text.getLineStart(&s, end: &e, contentsEnd: &ce, for: NSRange(location: caret, length: 0))
+        var anchor = caret - 1
+        for i in stride(from: ce - 1, through: caret, by: -1) where !(text.character(at: i) == 0x20 || text.character(at: i) == 0x09) {
+            anchor = i
+            break
+        }
+        let glyph = layoutManager.glyphIndexForCharacter(at: anchor)
         let frag = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
         let box = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container)
         let baseline = layoutManager.location(forGlyphAt: glyph).y
-        let font = (storage.attribute(.font, at: caret - 1, effectiveRange: nil) as? NSFont) ?? NSFont.systemFont(ofSize: 15)
+        let font = (storage.attribute(.font, at: anchor, effectiveRange: nil) as? NSFont) ?? NSFont.systemFont(ofSize: 15)
         let origin = textContainerOrigin
-        let point = NSPoint(x: origin.x + box.maxX + 1, y: origin.y + frag.minY + baseline - font.ascender)
-        (ghost as NSString).draw(at: point, withAttributes: [.font: font, .foregroundColor: Palette.tertiaryText])
+        let size = (ghost as NSString).size(withAttributes: [.font: font])
+        let rect = NSRect(x: origin.x + box.maxX + 1, y: origin.y + frag.minY + baseline - font.ascender, width: size.width, height: size.height)
+        return (rect, font, rect.maxX <= origin.x + frag.maxX)
     }
 
     // MARK: Keys

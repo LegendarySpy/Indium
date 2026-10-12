@@ -1,0 +1,35 @@
+# Suggestions are never drawn over other text: a quick answer or slash command shows only where it fits
+# beside the caret on its line, and one with no room isn't offered (Tab and → do what they usually do).
+# Widths matter here, so the window has a set size:
+# Run: Indium -IndiumTemp YES -IndiumSize 760x560 -IndiumTypingCases Tests/Typing/ghost.tsv -IndiumSnapshot /tmp/x.png
+# Format and keys as Tests/Typing/emphasis.tsv; the fifth column is the suggestion shown (∅ none). A suggestion
+# drawn over text or a floating block fails any case.
+#
+# Text after the caret: an answer shows only when nothing but the closing $ follows, and goes after it.
+Sum: $2 + 2 ‸$ and the rest of this sentence keeps going	=	Sum: $2 + 2 =‸$ and the rest of this sentence keeps going	·	∅
+Mass $35.134\text{ g} - 34.794\text{ g} ‸$ was lost.	=	Mass $35.134\text{ g} - 34.794\text{ g} =‸$ was lost.	·	∅
+Sum: $2 + 2 ‸$	=	Sum: $2 + 2 =‸$	·	 4
+Sum: $2 + 2 ‸$	=⇥	Sum: $2 + 2 = 4‸$	·	∅
+Sum: $$2 + 2 ‸$$	=	Sum: $$2 + 2 =‸$$	·	 4
+Type /he‸ here	a	Type /hea‸ here	·	∅
+#
+# At the right edge of the page: shown while it fits beside the line, never past it.
+Some words to fill the line up Some words to fill the line up Some words 2 * 21 ‸	=	Some words to fill the line up Some words to fill the line up Some words 2 * 21 =‸	·	 42
+Some words to fill the line up Some words to fill the line u 12345 * 1000000 ‸	=	Some words to fill the line up Some words to fill the line u 12345 * 1000000 =‸	·	∅
+Some words to fill the line up Some words to fill the line u 12345 * 1000000 ‸	=⇥	Some words to fill the line up Some words to fill the line u 12345 * 1000000 =⇥‸	·	∅
+Some words to fill the line up Some words to fill the line u 12345 * 1000000 ‸	=→	Some words to fill the line up Some words to fill the line u 12345 * 1000000 =‸	·	∅
+#
+# In a column, beside the next one.
+<!-- columns -->↵↵ 12345 * 1000000 ‸↵↵<!-- column -->↵↵Right column words sit right here beside it↵↵<!-- /columns -->	=	<!-- columns -->↵↵ 12345 * 1000000 =‸↵↵<!-- column -->↵↵Right column words sit right here beside it↵↵<!-- /columns -->	·	 12345000000
+<!-- columns -->↵↵Some 12345 * 1000000 ‸↵↵<!-- column -->↵↵Right column words sit right here beside it↵↵<!-- /columns -->	=	<!-- columns -->↵↵Some 12345 * 1000000 =‸↵↵<!-- column -->↵↵Right column words sit right here beside it↵↵<!-- /columns -->	·	∅
+<!-- columns -->↵↵Some /numbered ‸↵↵<!-- column -->↵↵Right column words sit right here beside it↵↵<!-- /columns -->	l	<!-- columns -->↵↵Some /numbered l‸↵↵<!-- column -->↵↵Right column words sit right here beside it↵↵<!-- /columns -->	·	ist  ⇥
+#
+# Beside a floating table.
+<!-- float right -->↵| Planet | Mass | Moons |↵| --- | --- | --- |↵| Earth | 5.97 | 1 |↵| Mars | 0.642 | 2 |↵↵12345 * 1000000 ‸↵↵More text below.	=	<!-- float right -->↵| Planet | Mass | Moons |↵| --- | --- | --- |↵| Earth | 5.97 | 1 |↵| Mars | 0.642 | 2 |↵↵12345 * 1000000 =‸↵↵More text below.	·	 12345000000
+<!-- float right -->↵| Planet | Mass | Moons |↵| --- | --- | --- |↵| Earth | 5.97 | 1 |↵| Mars | 0.642 | 2 |↵↵Some 12345 * 1000000 ‸↵↵More text below.	=	<!-- float right -->↵| Planet | Mass | Moons |↵| --- | --- | --- |↵| Earth | 5.97 | 1 |↵| Mars | 0.642 | 2 |↵↵Some 12345 * 1000000 =‸↵↵More text below.	·	∅
+#
+# In a table's row, where the cells are drawn over the Markdown.
+| A | B |↵| --- | --- |↵| 1 | 2 + 2 ‸	=	| A | B |↵| --- | --- |↵| 1 | 2 + 2 =‸	·	∅
+#
+# On the last line of a wrapped paragraph, with another paragraph below.
+A long paragraph that wraps onto a second visual line so the answer sits on its last line, with plenty of words here 3π ‸↵Next paragraph text right below.	=	A long paragraph that wraps onto a second visual line so the answer sits on its last line, with plenty of words here 3π =‸↵Next paragraph text right below.	·	 9.424778
