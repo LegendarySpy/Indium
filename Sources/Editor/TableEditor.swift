@@ -182,7 +182,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
                 let field = CellField()
                 field.table = self
                 field.source = text(row: r, column: c)
-                field.style = { [weak self] text, reveal in self?.styled(text, row: r, column: c, reveal: reveal) ?? NSAttributedString(string: text) }
+                field.style = { [weak self] text, caret in self?.styled(text, row: r, column: c, caret: caret) ?? NSAttributedString(string: text) }
                 field.delegate = self
                 field.row = r
                 field.column = c
@@ -212,7 +212,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
                     continue
                 }
                 field.isHidden = false
-                let attrs = styled("x", row: r, column: c, reveal: false).attributes(at: 0, effectiveRange: nil)
+                let attrs = styled("x", row: r, column: c, caret: nil).attributes(at: 0, effectiveRange: nil)
                 field.font = attrs[.font] as? NSFont
                 field.textColor = Palette.text
                 field.alignment = (attrs[.paragraphStyle] as? NSParagraphStyle)?.alignment ?? .natural
@@ -229,11 +229,14 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     }
 
     /// Cell text styled like the rendered table, equations fitted to the column the
-    /// same way; `reveal` keeps the Markdown markers. A formula being typed is plain text.
-    private func styled(_ text: String, row: Int, column: Int, reveal: Bool) -> NSAttributedString {
+    /// same way; with a `caret` it's being edited and keeps the Markdown markers. A
+    /// formula being typed is plain text.
+    private func styled(_ text: String, row: Int, column: Int, caret: Int?) -> NSAttributedString {
+        let reveal = caret != nil
         let draw = { (t: String) in
             TableRender.render(t, header: row == 0, alignment: column < self.alignments.count ? self.alignments[column] : 0,
-                               typography: self.render.typography, size: round(self.render.typography.size * 0.9), revealMarkers: reveal)
+                               typography: self.render.typography, size: round(self.render.typography.size * 0.9),
+                               revealMarkers: reveal, caret: caret)
         }
         if reveal, text.hasPrefix("=") { return NSAttributedString(string: text, attributes: draw("x").attributes(at: 0, effectiveRange: nil)) }
         let styled = draw(text)
