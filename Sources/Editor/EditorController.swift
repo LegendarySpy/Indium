@@ -134,6 +134,9 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         tv.isAutomaticLinkDetectionEnabled = false
         tv.isAutomaticDataDetectionEnabled = false
         tv.isAutomaticTextReplacementEnabled = true
+        // The system's grey predictions would sit on the quick answers' and slash commands'
+        // own, and Space takes them: `3π =` then Space wrote π's digits.
+        tv.inlinePredictionType = .no
         tv.smartInsertDeleteEnabled = false
         tv.isGrammarCheckingEnabled = false
         tv.usesInspectorBar = false

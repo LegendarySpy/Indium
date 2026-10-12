@@ -21,6 +21,10 @@ enum MathAnswer {
         var head = line
         guard head.hasSuffix("="), !head.hasSuffix("==") else { return nil }
         head.removeLast()
+        // A list item's marker isn't a minus sign or a factor: `- 2 + 3`, `3. π`.
+        if !inMath, let marker = head.range(of: #"^\s*(?:[-+*]|\d+[.)](?=\s+[^-+−*×/÷^\s]))\s+(?:\[[ xX]\]\s+)?"#, options: .regularExpression) {
+            head.removeSubrange(marker)
+        }
         // A second "=" earlier ("a = b + c =") limits the expression to the last part.
         let segment = head.split(separator: "=", omittingEmptySubsequences: false).last.map(String.init) ?? head
         // The longest tail that reads as arithmetic: prose before it ("Mass is 2 + 3") is skipped.
@@ -29,6 +33,10 @@ enum MathAnswer {
         let variables = variables()
         for start in chars.indices where start == 0 || " ($:".contains(chars[start - 1]) {
             let candidate = String(chars[start...]).trimmingCharacters(in: .whitespaces)
+            // Never just the end of a sum or product whose start didn't read as arithmetic
+            // (`x + 3π`): its value would pass for the whole line's.
+            if let first = candidate.first, "+-−".contains(first), candidate.dropFirst().first?.isWhitespace == true { continue }
+            if let before = chars[..<start].last(where: { !$0.isWhitespace }), "+-−*×·⋅/÷^".contains(before) { continue }
             guard !candidate.isEmpty, let r = evaluate(candidate, inMath: inMath, variables: variables) else { continue }
             let spacer = line.hasSuffix(" ") ? "" : " "
             return Result(insertion: spacer + r.text, display: r.shown)

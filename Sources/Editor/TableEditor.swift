@@ -54,6 +54,7 @@ final class TableEditorView: NSView, NSTextFieldDelegate, NSUserInterfaceValidat
     let fieldEditor: CellTextView = {
         let editor = CellTextView(frame: .zero)
         editor.isFieldEditor = true
+        editor.inlinePredictionType = .no
         return editor
     }()
     private var dragColumn: Int?
