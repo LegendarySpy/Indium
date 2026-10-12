@@ -494,8 +494,21 @@ enum Evaluator {
         // A plain number takes the other side's unit: 35.134 g − 34.794 = 0.340 g.
         default: unit = a.unit ?? b.unit
         }
-        let v = try checked(subtract ? a.value - b.value : a.value + b.value, "The result")
+        let v = try checked(decimalSum([a.value, subtract ? -b.value : b.value]), "The result")
         return Quantity(v, unit: unit, precision: .sum([a.precision, b.precision], value: v))
+    }
+
+    /// Adds in decimal, on each number's shortest form, the way it's done by hand:
+    /// 1.995 − 2 is −0.005, where binary gives −0.004999999999999893, which then
+    /// rounds the wrong way (|1.995 − 2| / 2 × 100 = 0.25 → 0.2 instead of 0.3).
+    static func decimalSum(_ values: [Double]) -> Double {
+        let binary = values.reduce(0, +)
+        var total = Decimal()
+        for v in values {
+            guard v.isFinite, let d = Decimal(string: "\(v)") else { return binary }
+            total += d
+        }
+        return Double("\(total)").flatMap { $0.isFinite ? $0 : nil } ?? binary
     }
 
     static func multiply(_ a: Quantity, _ b: Quantity, divide: Bool) throws -> Quantity {
@@ -662,7 +675,7 @@ enum Evaluator {
         case "min": return items.min { $0.value < $1.value }!
         case "max": return items.max { $0.value < $1.value }!
         default:
-            let total = items.dropFirst().reduce(first.value) { $0 + $1.value }
+            let total = decimalSum(items.map(\.value))
             var q = Quantity(try checked(total, "The sum"), unit: first.unit, precision: .sum(items.map(\.precision), value: total))
             if name == "mean" {
                 q.value = total / Double(items.count)
