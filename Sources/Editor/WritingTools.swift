@@ -14,6 +14,7 @@ extension EditorController {
     func textView(_ textView: NSTextView, writingToolsIgnoredRangesInEnclosingRange enclosing: NSRange) -> [NSValue] {
         let selection = textView.selectedRange()
         if writingToolsSpan == nil, selection.length > 0 { writingToolsSpan = selection }
+        SiriLog.write("ignoredRanges enclosing=\(enclosing) selection=\(selection) span=\(String(describing: writingToolsSpan)) length=\(storage.length)")
         var ignored = writingToolsProtectedRanges(in: enclosing)
         if let span = writingToolsSpan {
             if span.location > enclosing.location {
@@ -26,7 +27,12 @@ extension EditorController {
         return ignored.map { NSValue(range: $0) }
     }
 
+    func textViewWritingToolsWillBegin(_ textView: NSTextView) {
+        SiriLog.write("willBegin selection=\(textView.selectedRange()) length=\(storage.length)")
+    }
+
     func textViewWritingToolsDidEnd(_ textView: NSTextView) {
+        SiriLog.write("didEnd")
         writingToolsSpan = nil
     }
 
@@ -117,15 +123,19 @@ extension EditorTextView {
                                  completion: @escaping (NSAttributedString?) -> Void) {
         let selector = #selector(writingToolsCoordinator(_:replaceRange:in:proposedText:reason:animationParameters:completion:))
         // Should a later AppKit stop implementing it, refuse the change rather than crash.
+        SiriLog.write("replace range=\(range) context=\(context.range) contextLength=\(context.attributedString.length) reason=\(reason.rawValue) proposed=\(proposedText.string.prefix(200).debugDescription) span=\(String(describing: editor?.writingToolsSpan))")
         guard NSTextView.instancesRespond(to: selector),
               let editor, let edit = editor.writingToolsEdit(range: range, context: context, proposed: proposedText),
               let imp = class_getMethodImplementation(NSTextView.self, selector) else {
+            SiriLog.write("  refused")
             NSSound.beep()
             completion(nil)
             return
         }
         let replace = unsafeBitCast(imp, to: WritingToolsReplace.self)
+        SiriLog.write("  applying range=\(edit.range) text=\(edit.text.string.prefix(200).debugDescription)")
         replace(self, selector, coordinator, edit.range, context, edit.text, reason.rawValue, animationParameters) { [weak editor] result in
+            SiriLog.write("  applied result=\(result.map { "\($0.length) chars" } ?? "nil")")
             if let result { editor?.writingToolsReplaced(contextRange: edit.range, context: context, with: result.length) }
             completion(result)
         }
@@ -209,5 +219,21 @@ enum WritingToolsMarkdown {
     private static func strippingMarker(_ line: String) -> String {
         guard let range = line.range(of: #"^\t*([•◦▪‣⁃\-*]|\d+[.)])\t"#, options: .regularExpression) else { return line }
         return String(line[range.upperBound...])
+    }
+}
+
+/// DEBUG only: what Siri and Writing Tools ask of the editor, appended to
+/// /tmp/indium-siri.log, to see which way they reach the text and where it fails.
+enum SiriLog {
+    static func write(_ line: String) {
+        #if DEBUG
+        let url = URL(fileURLWithPath: "/tmp/indium-siri.log")
+        let entry = Data("\(Date().formatted(date: .omitted, time: .standard)) \(line)\n".utf8)
+        if let h = try? FileHandle(forWritingTo: url) {
+            h.seekToEndOfFile(); h.write(entry); try? h.close()
+        } else {
+            try? entry.write(to: url)
+        }
+        #endif
     }
 }

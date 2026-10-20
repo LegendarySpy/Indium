@@ -320,6 +320,31 @@ final class EditorTextView: NSTextView {
         return true
     }
 
+    #if DEBUG
+    // What Siri and other assistive apps do through accessibility (see SiriLog).
+    override func setAccessibilitySelectedText(_ text: String?) {
+        SiriLog.write("ax setSelectedText selection=\(selectedRange()) text=\((text ?? "").prefix(200).debugDescription)")
+        super.setAccessibilitySelectedText(text)
+    }
+    override func setAccessibilityValue(_ value: Any?) {
+        SiriLog.write("ax setValue length=\(((value as? String) ?? "").count)")
+        super.setAccessibilityValue(value)
+    }
+    override func setAccessibilitySelectedTextRange(_ range: NSRange) {
+        SiriLog.write("ax setSelectedTextRange \(range)")
+        super.setAccessibilitySelectedTextRange(range)
+    }
+    override func accessibilitySelectedText() -> String? {
+        let text = super.accessibilitySelectedText()
+        SiriLog.write("ax read selectedText (\(text?.count ?? 0) chars)")
+        return text
+    }
+    override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        SiriLog.write("services readSelection type=\(type.rawValue) selection=\(selectedRange())")
+        return super.readSelection(from: pboard, type: type)
+    }
+    #endif
+
     override func insertText(_ string: Any, replacementRange: NSRange) {
         // Typing with a chart selected writes on the line after it.
         editor?.leaveSelectedChart()
