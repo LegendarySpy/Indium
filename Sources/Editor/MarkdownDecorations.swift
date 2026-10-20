@@ -65,6 +65,8 @@ final class BlockDecoration: NSObject {
         case math(MathRender, scale: CGFloat)
         case image(NSImage?, size: NSSize, caption: String?, name: String)
         case table(TableRender)
+        /// A ```chart or ```desmos-graph block, drawn.
+        case chart(ChartRender)
     }
     let content: Content
     let placement: Placement

@@ -15,6 +15,7 @@ enum FormulaSelfTest {
             if first.contains("kind: evaluator") { failed += runEvaluatorCases(path: path) }
             else if first.contains("kind: tables") { failed += runTableCases(path: path, verbose: verbose) }
             else if first.contains("kind: excel") { failed += runExcelCases(path: path) }
+            else if first.contains("kind: variables") { failed += runVariableCases(path: path) }
             else { failed += runQuickAnswerCases(path: path) }
         }
         print(failed == 0 ? "ALL FORMULA CASES PASSED" : "FORMULA CASES FAILED: \(failed)")
@@ -46,6 +47,43 @@ enum FormulaSelfTest {
             print(ok ? "PASS" : "FAIL", p[0], "→", got, ok ? "" : roundTrip ? "(expected \(p[1]))" : "(doesn't read back)")
         }
         print("EVALUATOR CASES: \(total - failed)/\(total) passed")
+        return failed
+    }
+
+    /// Frontmatter editing cases (VariableEditing.swift), `↵` for a line break:
+    /// `set<TAB>note<TAB>name<TAB>value<TAB>expected`, `rename<TAB>note<TAB>old<TAB>new<TAB>expected`,
+    /// `remove<TAB>note<TAB>name<TAB><TAB>expected`, `entries<TAB>note<TAB><TAB><TAB>expected` (`name=status` joined by `,`).
+    /// `nil` expects the change to be refused.
+    private static func runVariableCases(path: String) -> Int {
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { print("can't read \(path)"); return 1 }
+        var failed = 0, total = 0
+        func lines(_ s: String) -> String { s.replacingOccurrences(of: "↵", with: "\n") }
+        func shown(_ s: String?) -> String { s.map { $0.replacingOccurrences(of: "\n", with: "↵") } ?? "nil" }
+        for raw in text.components(separatedBy: "\n") where !raw.isEmpty && !raw.hasPrefix("#") {
+            let p = raw.components(separatedBy: "\t")
+            guard p.count >= 5 else { continue }
+            total += 1
+            let note = lines(p[1])
+            let got: String
+            switch p[0] {
+            case "set": got = shown(VariableEditing.setting(p[2], to: p[3], in: note))
+            case "rename": got = shown(VariableEditing.renaming(p[2], to: p[3], in: note))
+            case "remove": got = shown(VariableEditing.removing(p[2], in: note))
+            case "entries":
+                got = VariableEditing.entries(noteText: note).map { e in
+                    switch e.status {
+                    case let .variable(q): return "\(e.name)=\(q.formatted())"
+                    case .skipped: return "\(e.name)=skipped"
+                    case .overridden: return "\(e.name)=overridden"
+                    }
+                }.joined(separator: ",")
+            default: got = "unknown case kind \(p[0])"
+            }
+            let ok = got == p[4]
+            if !ok { failed += 1 }
+            print(ok ? "PASS" : "FAIL", p[0], p[2], ok ? "" : "→ \(got) (expected \(p[4]))")
+        }
+        print("VARIABLE CASES: \(total - failed)/\(total) passed")
         return failed
     }
 

@@ -7,6 +7,8 @@ struct SlashCommand {
         /// Text replacing the typed command; `select` is relative to the inserted text.
         case text(String, select: NSRange, block: Bool)
         case image
+        /// A chart of the table just above, or a chart to fill in when there isn't one.
+        case chart
     }
     let name: String
     let insertion: Insertion
@@ -28,6 +30,8 @@ struct SlashCommand {
         .init(name: "page break", insertion: .text("<!-- pagebreak -->\n", select: NSRange(location: 19, length: 0), block: true)),
         .init(name: "columns", insertion: .text("<!-- columns -->\n\n<!-- column -->\n\n<!-- /columns -->\n", select: NSRange(location: 17, length: 0), block: true)),
         .init(name: "image", insertion: .image),
+        .init(name: "chart", insertion: .chart),
+        .init(name: "graph", insertion: .text(EditorController.graphTemplate, select: NSRange(location: 59, length: 5), block: true)),
         .init(name: "date", insertion: .text(Self.today, select: NSRange(location: (Self.today as NSString).length, length: 0), block: false)),
     ]
 
@@ -206,7 +210,18 @@ extension EditorController {
         let text = storage.string as NSString
         var s = 0, e = 0, ce = 0
         text.getLineStart(&s, end: &e, contentsEnd: &ce, for: NSRange(location: state.range.location, length: 0))
-        switch state.current.insertion {
+        var insertion = state.current.insertion
+        if case .chart = insertion {
+            if let table = tableAbove(state.range.location) {
+                insertChart(forTable: table, replacing: state.range)
+                return
+            }
+            // Selects the labels, to type over.
+            insertion = .text(Self.chartTemplate, select: NSRange(location: 28, length: 7), block: true)
+        }
+        switch insertion {
+        case .chart:
+            break
         case .image:
             replace(state.range, with: "", select: NSRange(location: state.range.location, length: 0), actionName: "Image")
             (textView.window?.windowController as? DocumentWindowController)?.insertImage(nil)
@@ -221,6 +236,11 @@ extension EditorController {
             replace(replaceRange, with: full,
                     select: NSRange(location: replaceRange.location + offset + select.location, length: select.length),
                     actionName: state.current.name.capitalized)
+            // A chart or graph: selected, and built in the inspector.
+            if state.current.name == "graph" || state.current.name == "chart", let block = chartBlock(containing: replaceRange.location + offset) {
+                selectChart(at: block.range.location)
+                onChartInserted?()
+            }
         }
     }
 }

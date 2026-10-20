@@ -25,7 +25,7 @@ Indium opens an Obsidian vault as it is and writes plain Markdown back. This pag
 - A `%%` comment that starts partway through a line and runs onto later lines isn't treated as a comment. Comments on one line, or starting a line, are.
 - Inline footnotes (`^[text]`) are shown small and dimmed where they're written, but not numbered.
 - Callouts are recognized at the top level only. A callout inside a quote or another callout reads as a quote.
-- No Dataview, Mermaid, canvases, or plugin syntax. It's kept as written.
+- No Dataview, Mermaid, canvases, or plugin syntax, apart from the Charts and Desmos plugins' blocks (below). It's kept as written.
 
 ## LaTeX Suite
 
@@ -73,6 +73,27 @@ In Indium you type a formula in a cell the way you would in a spreadsheet, `=B2-
 - Formulas run in dependency order, like a spreadsheet, so running them twice changes nothing.
 
 **Not supported:** `IF` and comparisons, text, dates and times (`;dt`, `;hm`). Lines with them are kept exactly as written.
+
+## Charts and graphs
+
+Indium draws two kinds of fenced blocks, in the formats of the Obsidian plugins that already draw them, so a chart made in one app draws in the other. Without the plugin, Obsidian shows the block as code.
+
+**Charts (`chart`), as the [Charts](https://github.com/phibr0/obsidian-charts) plugin writes them**
+
+- `type: line` and `type: bar`, with data written in the block (`labels`, `series` with `title` and `data`) or read from a table.
+- A table is named the plugin's way: a `^name` line under it, after a blank line, and `id: name` in the chart. `layout: rows` or `columns` and `select: [...]` work as in the plugin. Make Chart and `/chart` write both for you.
+- Also read: `title`, `xTitle`, `yTitle`, `xMin`, `xMax`, `yMin`, `yMax`, `beginAtZero`, `bestFit`, `bestFitTitle`, `bestFitNumber`, `legend`, `stacked`, `spanGaps`, `width`. Other keys are kept and ignored.
+- Different on purpose: when every label is a number, the x axis is spaced by value, as a lab graph needs. The plugin spaces labels evenly.
+- Indium only: `type: scatter`, `plot: y = 2x + 1` for a curve over the data, values with units (`101.2 kPa`, the unit goes in the axis title), and a best-fit equation with R². The plugin shows the chart without these.
+- Not drawn: pie, doughnut, radar, polar area and sankey charts, Dataview data, and tables in other notes (`file:`). The chart says so.
+
+**Graphs (`desmos-graph`), as the [Desmos](https://github.com/Nigecat/obsidian-desmos) plugin writes them**
+
+- One LaTeX equation per line: `y=` curves, `x=` lines, points `(3,4)`, constants (`k=2`) and functions (`f(x)=…`) that later lines use. Indium draws them itself, offline.
+- Settings before `---`: `left`, `right`, `top`, `bottom`, `width`, `height`, `grid`, `degreeMode`, `defaultColor`.
+- Flags after `|`: colors, `dashed` and `dotted`, `point`, `open` and `cross`, `hidden`, `label:…`, and restrictions such as `x>0`.
+- Indium only: the note's frontmatter variables by name. In Obsidian, define them in the graph (`k=2`) instead.
+- Not drawn: implicit curves (`x^2+y^2=1`), inequalities, derivatives, lists, and sliders. The graph lists those lines under it.
 
 ## Quick Look
 

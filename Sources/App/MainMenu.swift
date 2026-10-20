@@ -167,6 +167,7 @@ enum MainMenu {
     private static func viewMenu() -> NSMenu {
         let m = NSMenu(title: "View")
         add(m, "Show Sidebar", #selector(W.toggleFiles(_:)), "s", [.command, .control])
+        add(m, "Show Inspector", #selector(W.toggleInspector(_:)), "i", [.command, .option])
         m.addItem(.separator())
         add(m, "Bigger", #selector(AppDelegate.increaseTextSize(_:)), "+")
         add(m, "Smaller", #selector(AppDelegate.decreaseTextSize(_:)), "-")

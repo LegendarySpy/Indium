@@ -612,6 +612,9 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
                 content = NSRect(x: col.x + (col.width - size.width) / 2, y: area.minY + deco.padding, width: size.width, height: size.height)
             case let .table(table):
                 content = NSRect(x: col.x, y: area.minY + deco.padding, width: table.width, height: table.height)
+            case let .chart(chart):
+                let w = min(chart.size.width, col.width)
+                content = NSRect(x: col.x + (col.width - w) / 2, y: area.minY + deco.padding, width: w, height: chart.size.height * w / max(chart.size.width, 1))
             }
             content = content.integral
             result.append((deco, range, area, content))
@@ -659,6 +662,14 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
             let scale = content.width / max(render.width, 1)
             render.draw(baselineAt: NSPoint(x: content.minX, y: content.minY + render.ascent * scale),
                         color: Palette.text, scale: scale)
+        case let .chart(chart):
+            chart.draw(in: content)
+            if deco.isSelected {
+                Palette.accentRing.setStroke()
+                let ring = NSBezierPath(roundedRect: content.insetBy(dx: -6, dy: -6), xRadius: 10, yRadius: 10)
+                ring.lineWidth = 2
+                ring.stroke()
+            }
         case let .table(table):
             // Squeezed past its padding, a cell's text could still poke out sideways;
             // never past the column the table sits in.
@@ -733,6 +744,7 @@ extension MarkdownLayoutManager {
                 case let .table(t): size = NSSize(width: t.width, height: t.height)
                 case let .image(_, s, _, _): size = s
                 case let .math(r, scale): size = NSSize(width: r.width * scale, height: r.height * scale)
+                case let .chart(c): size = c.size
                 }
                 let x = f.right ? width - gutter - size.width : gutter
                 // The table's top lines up with the first text beside it (a heading's

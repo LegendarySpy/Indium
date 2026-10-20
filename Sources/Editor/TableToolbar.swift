@@ -107,6 +107,7 @@ final class TableToolbarView: NSView {
     var onDeleteRow: (() -> Void)?
     var onDeleteColumn: (() -> Void)?
     var onDeleteTable: (() -> Void)?
+    var onMakeChart: (() -> Void)?
     var onCopyTable: (() -> Void)?
     /// Starts a formula in the focused cell.
     var onFormula: (() -> Void)?
@@ -203,6 +204,7 @@ final class TableToolbarView: NSView {
             menu.addItem(ClosureMenuItem("Delete Column") { self?.onDeleteColumn?() })
             menu.addItem(.separator())
             menu.addItem(ClosureMenuItem("Copy Table") { self?.onCopyTable?() })
+            menu.addItem(ClosureMenuItem("Make Chart") { self?.onMakeChart?() })
             menu.addItem(ClosureMenuItem("Delete Table") { self?.onDeleteTable?() })
         }
         if size == .minimal {

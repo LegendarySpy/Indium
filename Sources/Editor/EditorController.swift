@@ -24,6 +24,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var onImageNeedsAccess: (() -> Void)?
     /// Title (file name) changed.
     var onTitleChange: (() -> Void)?
+    /// The text, the caret or the note changed: what the inspector shows may have too.
+    var onContextChange: (() -> Void)?
 
     private(set) var isLoading = false
     private(set) var hasUnsavedEdits = false
@@ -32,6 +34,12 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var lastSelection: [NSRange] = [NSRange(location: 0, length: 0)]
     private var selectedImageLine: Int?
     private var changingImageSelection = false
+    /// Set while the editor itself moves the caret for a selected chart.
+    var changingChartSelection = false
+    /// A chart was selected: the window shows the inspector, where it's edited.
+    var onChartSelected: (() -> Void)?
+    /// A chart or graph was just put in the note: the inspector takes the keys.
+    var onChartInserted: (() -> Void)?
     private var resolvingConflict = false
     private let imageControls = ImageControlsView()
     let selectionBar = SelectionBarView(frame: .zero)
@@ -355,6 +363,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         completeLayoutSoon()
         textView.pageStarts = []
         updatePageLines(delay: 0.1)
+        onContextChange?()
         return true
     }
 
@@ -731,6 +740,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         math.syncCopies()
         math.updatePreview()
         if note?.isTemporary == false { scheduleSave() }
+        onContextChange?()
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
@@ -738,6 +748,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         // On the next turn of the run loop, outside the event that moved the caret.
         if frontmatterSession != nil, !caretInFrontmatter { RunLoop.main.perform { [weak self] in MainActor.assumeIsolated { self?.endFrontmatterSession() } } }
         if selectedImageLine != nil, !changingImageSelection { clearImageSelection() }
+        if !changingChartSelection, chartSelectionFollowsCaret() { return }
         if textView.isTrackingMouse {
             selectionBar.dismiss()
             return
@@ -748,6 +759,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         updateAnswerSuggestion()
         math.selectionChanged()
         math.updatePreview()
+        onContextChange?()
     }
 
     private func applySelectionStyling() {
@@ -1189,6 +1201,12 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 if block.decoration.placement == .replace {
                     textView.window?.makeFirstResponder(textView)
                     textView.setSelectedRange(NSRange(location: lineRange(at: block.range.location).content.location + 2, length: 0))
+                    return true
+                }
+            case .chart:
+                // Selected as an object; the inspector is where it's changed.
+                if block.decoration.placement == .replace {
+                    selectChart(at: lineRange(at: block.range.location).content.location)
                     return true
                 }
             }

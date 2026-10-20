@@ -105,6 +105,9 @@ targets:
       - Sources/Editor/MarkdownLayoutManager.swift
       - Sources/Editor/MathRenderer.swift
       - Sources/Editor/TableRender.swift
+      - Sources/Charts
+      - Sources/Formulas/Evaluator.swift
+      - Sources/Formulas/Variables.swift
     dependencies:
       - package: SwiftMath
       - sdk: QuickLookUI.framework
@@ -238,6 +241,9 @@ targets:
       - Sources/Editor/MarkdownLayoutManager.swift
       - Sources/Editor/MathRenderer.swift
       - Sources/Editor/TableRender.swift
+      - Sources/Charts
+      - Sources/Formulas/Evaluator.swift
+      - Sources/Formulas/Variables.swift
       - path: AppStore/QuickLook/PrivacyInfo.xcprivacy
         buildPhase: resources
     dependencies:

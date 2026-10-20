@@ -21,6 +21,11 @@ final class MarkdownStyler {
     private(set) var blocks: [MDBlock] = []
     /// Location of an image line selected as an object (its source stays hidden).
     var selectedImageLine: Int?
+    /// A chart selected as an object (where its block starts): drawn with a ring, its
+    /// source hidden. Charts are edited in the inspector.
+    var selectedChart: Int?
+    /// The chart whose Markdown is open for editing (Edit Markdown in the inspector).
+    var chartSourceShown: Int?
     /// A table being edited in place stays rendered even with the caret nearby.
     var editingTableLocation: Int?
     /// Its column widths, held while it's edited so typing never moves the grid.
@@ -119,7 +124,7 @@ final class MarkdownStyler {
         let run = blockIndex(containing: editedRange.location).map(quoteRun)
         for (i, b) in new.enumerated() {
             let touchesEdit = NSMaxRange(b.range) >= editedRange.location && b.range.location <= NSMaxRange(editedRange)
-            if touchesEdit || run?.contains(i) == true || !unchanged.contains(BlockKey(b.range, b.kind)) {
+            if touchesEdit || run?.contains(i) == true || !unchanged.contains(BlockKey(b.range, b.kind)) || chartIsStale(b, in: storage) {
                 style(at: i, in: storage)
                 restyled = restyled.map { NSUnionRange($0, b.range) } ?? b.range
             }
@@ -522,6 +527,14 @@ final class MarkdownStyler {
         case .blank:
             s.addAttribute(.paragraphStyle, value: paragraph(after: 0, lineSpacing: round(typo.lineSpacing * 0.5)), range: r)
 
+        case .paragraph where lineRanges.count == 1 && Self.isBlockID(text.substring(with: first)):
+            // `^results` naming the table above for a chart: out of the way, as Obsidian shows it.
+            if hides(active: touches(first)) {
+                collapse(lineWithTerminator(first), in: s)
+            } else {
+                s.addAttributes([.font: typo.code, .foregroundColor: Palette.syntax], range: first)
+            }
+
         case .paragraph:
             inline(first, in: s, font: { self.typo.text(bold: $0, italic: $1) }, color: Palette.text)
 
@@ -617,6 +630,9 @@ final class MarkdownStyler {
                                range: last)
             }
 
+        case let .code(language) where ChartModel.handles(language):
+            styleChart(language: language, block: block, lines: lineRanges, in: s)
+
         case .code:
             styleCode(block, lines: lineRanges, in: s)
 
@@ -684,6 +700,129 @@ final class MarkdownStyler {
         if !hide {
             s.addAttribute(.paragraphStyle, value: paragraph(indent: pad, tail: pad, after: 0, lineSpacing: codeStyle.lineSpacing), range: lines[0])
         }
+    }
+
+    // MARK: Charts
+
+    /// A ```chart or ```desmos-graph block: the chart in place of its source, or with the
+    /// caret in it, the source above the chart as it's typed (as display math does).
+    private func styleChart(language: String, block: MDBlock, lines: [NSRange], in s: NSTextStorage) {
+        let (body, closed) = chartSource(lines)
+        let model = chartModel(language: language, body: body)
+        let pad = round(typo.size * (config.printing ? 0.35 : 0.6))
+        let chart = ChartRender.make(model, column: contentWidth, maxHeight: config.maxBlockHeight - pad * 2)
+        let height = chart.size.height + pad * 2
+        let content = NSRange(location: block.range.location, length: max(0, NSMaxRange(lines.last!) - block.range.location))
+
+        // Charts are worked on in the inspector; their source only opens when asked
+        // for, or when Markdown is always shown.
+        let showSource = !config.printing && (chartSourceShown == block.range.location || (config.syntax == .always && touches(content)))
+        if showSource {
+            let font = typo.code
+            s.addAttributes([.font: font, .foregroundColor: Palette.secondaryText,
+                             .paragraphStyle: paragraph(after: 0, lineSpacing: round(font.pointSize * 0.4))], range: block.range)
+            for line in [lines[0]] + (closed ? [lines[lines.count - 1]] : []) {
+                s.addAttribute(.foregroundColor, value: Palette.syntax, range: line)
+            }
+            let last = lines.last!
+            let anchor = last.length > 0 ? last : lineWithTerminator(last)
+            s.addAttributes([.paragraphStyle: paragraph(after: height, lineSpacing: round(font.pointSize * 0.4)),
+                             .mdBlock: BlockDecoration(content: .chart(chart), placement: .below, height: height, padding: pad)],
+                            range: anchor)
+        } else {
+            for (i, line) in lines.enumerated() {
+                let full = lineWithTerminator(line)
+                if i == 0 {
+                    s.setAttributes([.font: typo.body, .foregroundColor: NSColor.clear, .mdHidden: true,
+                                     .paragraphStyle: paragraph(fixedHeight: height)], range: full)
+                    let decoration = BlockDecoration(content: .chart(chart), placement: .replace, height: height, padding: pad)
+                    decoration.isSelected = selectedChart == block.range.location && !config.printing
+                    s.addAttribute(.mdBlock, value: decoration, range: line.length > 0 ? line : full)
+                } else {
+                    collapse(full, in: s)
+                }
+            }
+        }
+    }
+
+    /// The chart block at `location`: its language, the lines between its fences, and what
+    /// they draw. For the inspector.
+    func chart(at location: Int, in storage: NSTextStorage) -> (language: String, body: String, model: ChartModel, columns: [String])? {
+        guard let i = blockIndex(containing: location), case let .code(language) = blocks[i].kind, ChartModel.handles(language) else { return nil }
+        text = storage.string as NSString
+        let body = chartSource(lines(of: blocks[i].range)).body
+        // The series the linked table offers: its columns after the first, or its rows' names.
+        var columns: [String] = []
+        let yaml = MiniYAML.parse(body)
+        if language.lowercased() == "chart", let id = yaml["id"]?.text, let grid = Self.table(named: id, in: text, blocks: blocks) {
+            columns = yaml["layout"]?.text?.lowercased() == "rows" ? grid.dropFirst().compactMap(\.first) : Array((grid.first ?? []).dropFirst())
+        }
+        return (language, body, chartModel(language: language, body: body), columns)
+    }
+
+    /// A chart whose table or variables changed elsewhere in the note draws again.
+    private func chartIsStale(_ block: MDBlock, in storage: NSTextStorage) -> Bool {
+        guard case let .code(language) = block.kind, ChartModel.handles(language), NSMaxRange(block.range) <= storage.length else { return false }
+        var shown: ChartModel?
+        storage.enumerateAttribute(.mdBlock, in: block.range) { value, _, stop in
+            if let deco = value as? BlockDecoration, case let .chart(chart) = deco.content { shown = chart.model; stop.pointee = true }
+        }
+        guard let shown else { return true }
+        return chartModel(language: language, body: chartSource(lines(of: block.range)).body) != shown
+    }
+
+    /// Models by what they're made from (the block, its table, the variables), so typing
+    /// elsewhere in a note doesn't work out its charts again.
+    private static var chartModels: [String: ChartModel] = [:]
+
+    private func chartModel(language: String, body: String) -> ChartModel {
+        let context = chartContext
+        var key = language + "\u{1}" + body + "\u{1}"
+        key += context.variables.values.keys.sorted().map { "\($0)=\(context.variables.values[$0]!.value)" }.joined(separator: ",")
+        if let id = MiniYAML.parse(body)["id"]?.text, language.lowercased() == "chart" {
+            key += "\u{1}" + (context.table(id)?.map { $0.joined(separator: "\t") }.joined(separator: "\n") ?? "-")
+        }
+        if let hit = Self.chartModels[key] { return hit }
+        let model = ChartModel.build(language: language, body: body, context: context)
+        if Self.chartModels.count > 64 { Self.chartModels.removeAll() }
+        Self.chartModels[key] = model
+        return model
+    }
+
+    /// The lines between a chart block's fences, and whether it has a closing fence.
+    private func chartSource(_ lines: [NSRange]) -> (body: String, closed: Bool) {
+        let fence = text.substring(with: lines[0]).trimmingCharacters(in: .whitespaces).first
+        let closed = lines.count > 1 && text.substring(with: lines[lines.count - 1]).trimmingCharacters(in: .whitespaces).first == fence
+        return (lines.dropFirst().dropLast(closed ? 1 : 0).map { text.substring(with: $0) }.joined(separator: "\n"), closed)
+    }
+
+    private static let blockID = try! NSRegularExpression(pattern: #"^\s*\^[A-Za-z0-9-]+\s*$"#)
+    static func isBlockID(_ line: String) -> Bool {
+        blockID.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length)) != nil
+    }
+
+    /// What a chart reads from the rest of the note: tables named by a `^id` line, and
+    /// the frontmatter's variables.
+    private var chartContext: ChartModel.Context {
+        let text = self.text, blocks = self.blocks
+        return ChartModel.Context(table: { id in Self.table(named: id, in: text, blocks: blocks) },
+                                  variables: NoteVariables.parse(noteText: text as String))
+    }
+
+    /// The grid of the table a `^id` line names: the nearest table above it, past blank
+    /// lines and its formula lines, as Obsidian ties a block id to the block before it.
+    static func table(named id: String, in text: NSString, blocks: [MDBlock]) -> [[String]]? {
+        guard let i = blocks.firstIndex(where: { text.substring(with: $0.range).trimmingCharacters(in: .whitespacesAndNewlines) == "^" + id })
+        else { return nil }
+        var j = i - 1
+        while j >= 0 {
+            switch blocks[j].kind {
+            case .blank, .tableFormulas: j -= 1
+            case let .table(spec): return spec.rows.map { $0.map { TableSpec.unescapeCell($0.text) } }
+            default: return nil
+            }
+        }
+        return nil
     }
 
     private func lineWithTerminator(_ content: NSRange) -> NSRange {

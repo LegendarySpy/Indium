@@ -114,6 +114,7 @@ extension EditorController {
         bar.onDeleteRow = { [weak editor] in editor?.deleteRow() }
         bar.onDeleteColumn = { [weak editor] in editor?.deleteColumn() }
         bar.onDeleteTable = { [weak self] in self?.deleteEditedTable() }
+        bar.onMakeChart = { [weak self] in self?.makeChartForEditedTable() }
         bar.onDone = { [weak self] in self?.endTableEditing(caretAfter: true) }
         bar.placement = floatSide
         bar.onPlace = { [weak self] side in self?.placeEditedTable(float: side) }

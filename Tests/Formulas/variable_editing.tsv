@@ -1,0 +1,18 @@
+# kind: variables
+entries	---↵title: Lab 3↵hydrated: "2.008 g" # weighed twice↵anhydrous: 0.715 g↵tags:↵  - chem↵pi: 3↵mass:↵---↵| a | b |↵| - | - |↵| 1 | 2 |↵<!-- TBLFM: @2$2=(@2$1*hydrated) -->↵hydrated in prose			title=skipped,hydrated=2.008 g,anhydrous=0.715 g,tags=skipped,pi=skipped,mass=skipped
+entries	---↵a: 1↵a: 2 g↵---			a=overridden,a=2 g
+set	---↵title: Lab 3↵hydrated: "2.008 g" # weighed twice↵anhydrous: 0.715 g↵tags:↵  - chem↵pi: 3↵mass:↵---↵| a | b |↵| - | - |↵| 1 | 2 |↵<!-- TBLFM: @2$2=(@2$1*hydrated) -->↵hydrated in prose	hydrated	2.5 g	---↵title: Lab 3↵hydrated: "2.5 g" # weighed twice↵anhydrous: 0.715 g↵tags:↵  - chem↵pi: 3↵mass:↵---↵| a | b |↵| - | - |↵| 1 | 2 |↵<!-- TBLFM: @2$2=(@2$1*hydrated) -->↵hydrated in prose
+set	---↵title: Lab 3↵hydrated: "2.008 g" # weighed twice↵anhydrous: 0.715 g↵tags:↵  - chem↵pi: 3↵mass:↵---↵| a | b |↵| - | - |↵| 1 | 2 |↵<!-- TBLFM: @2$2=(@2$1*hydrated) -->↵hydrated in prose	trials	3	---↵title: Lab 3↵hydrated: "2.008 g" # weighed twice↵anhydrous: 0.715 g↵tags:↵  - chem↵pi: 3↵mass:↵trials: 3↵---↵| a | b |↵| - | - |↵| 1 | 2 |↵<!-- TBLFM: @2$2=(@2$1*hydrated) -->↵hydrated in prose
+set	---↵title: Lab 3↵hydrated: "2.008 g" # weighed twice↵anhydrous: 0.715 g↵tags:↵  - chem↵pi: 3↵mass:↵---↵| a | b |↵| - | - |↵| 1 | 2 |↵<!-- TBLFM: @2$2=(@2$1*hydrated) -->↵hydrated in prose	mass	4 g	---↵title: Lab 3↵hydrated: "2.008 g" # weighed twice↵anhydrous: 0.715 g↵tags:↵  - chem↵pi: 3↵mass: 4 g↵---↵| a | b |↵| - | - |↵| 1 | 2 |↵<!-- TBLFM: @2$2=(@2$1*hydrated) -->↵hydrated in prose
+set	---↵title: Lab 3↵hydrated: "2.008 g" # weighed twice↵anhydrous: 0.715 g↵tags:↵  - chem↵pi: 3↵mass:↵---↵| a | b |↵| - | - |↵| 1 | 2 |↵<!-- TBLFM: @2$2=(@2$1*hydrated) -->↵hydrated in prose	tags	4	nil
+set	---↵title: Lab 3↵hydrated: "2.008 g" # weighed twice↵anhydrous: 0.715 g↵tags:↵  - chem↵pi: 3↵mass:↵---↵| a | b |↵| - | - |↵| 1 | 2 |↵<!-- TBLFM: @2$2=(@2$1*hydrated) -->↵hydrated in prose	sum	1	nil
+set	---↵title: Lab 3↵hydrated: "2.008 g" # weighed twice↵anhydrous: 0.715 g↵tags:↵  - chem↵pi: 3↵mass:↵---↵| a | b |↵| - | - |↵| 1 | 2 |↵<!-- TBLFM: @2$2=(@2$1*hydrated) -->↵hydrated in prose	2x	1	nil
+set	# Hi↵	x	1	---↵x: 1↵---↵# Hi↵
+set		x	1	---↵x: 1↵---↵
+set	---↵unclosed	x	1	nil
+set	---↵a: 1↵a: 2↵---	a	3	---↵a: 1↵a: 3↵---
+rename	---↵title: Lab 3↵hydrated: "2.008 g" # weighed twice↵anhydrous: 0.715 g↵tags:↵  - chem↵pi: 3↵mass:↵---↵| a | b |↵| - | - |↵| 1 | 2 |↵<!-- TBLFM: @2$2=(@2$1*hydrated) -->↵hydrated in prose	hydrated	wet	---↵title: Lab 3↵wet: "2.008 g" # weighed twice↵anhydrous: 0.715 g↵tags:↵  - chem↵pi: 3↵mass:↵---↵| a | b |↵| - | - |↵| 1 | 2 |↵<!-- TBLFM: @2$2=(@2$1*wet) -->↵hydrated in prose
+rename	---↵title: Lab 3↵hydrated: "2.008 g" # weighed twice↵anhydrous: 0.715 g↵tags:↵  - chem↵pi: 3↵mass:↵---↵| a | b |↵| - | - |↵| 1 | 2 |↵<!-- TBLFM: @2$2=(@2$1*hydrated) -->↵hydrated in prose	hydrated	anhydrous	nil
+rename	---↵m: 1↵mm: 2↵---↵<!-- TBLFM: @2$2=(m+mm) -->	m	k	---↵k: 1↵mm: 2↵---↵<!-- TBLFM: @2$2=(k+mm) -->
+remove	---↵title: Lab 3↵hydrated: "2.008 g" # weighed twice↵anhydrous: 0.715 g↵tags:↵  - chem↵pi: 3↵mass:↵---↵| a | b |↵| - | - |↵| 1 | 2 |↵<!-- TBLFM: @2$2=(@2$1*hydrated) -->↵hydrated in prose	anhydrous		---↵title: Lab 3↵hydrated: "2.008 g" # weighed twice↵tags:↵  - chem↵pi: 3↵mass:↵---↵| a | b |↵| - | - |↵| 1 | 2 |↵<!-- TBLFM: @2$2=(@2$1*hydrated) -->↵hydrated in prose
+remove	---↵title: Lab 3↵hydrated: "2.008 g" # weighed twice↵anhydrous: 0.715 g↵tags:↵  - chem↵pi: 3↵mass:↵---↵| a | b |↵| - | - |↵| 1 | 2 |↵<!-- TBLFM: @2$2=(@2$1*hydrated) -->↵hydrated in prose	tags		nil

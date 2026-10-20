@@ -321,6 +321,8 @@ final class EditorTextView: NSTextView {
     }
 
     override func insertText(_ string: Any, replacementRange: NSRange) {
+        // Typing with a chart selected writes on the line after it.
+        editor?.leaveSelectedChart()
         // A key typed at the caret (not text put in by a command or an input method).
         if let s = string as? String, !hasMarkedText(),
            replacementRange.location == NSNotFound || replacementRange == selectedRange() {
@@ -355,6 +357,7 @@ final class EditorTextView: NSTextView {
 
     override func insertNewline(_ sender: Any?) {
         if editor?.handleSlashKey(#selector(insertNewline(_:))) == true { return }
+        editor?.leaveSelectedChart()
         let shift = (keyEvent ?? NSApp.currentEvent)?.modifierFlags.contains(.shift) == true
         if editor?.math.handleNewline(shift: shift) == true { return }
         if editor?.handleNewline() == true { return }
@@ -376,25 +379,28 @@ final class EditorTextView: NSTextView {
 
     override func deleteBackward(_ sender: Any?) {
         if editor?.deleteSelectedImage() == true { return }
+        if editor?.deleteSelectedChart() == true { return }
         if editor?.math.handleBackspace() == true { return }
         super.deleteBackward(sender)
     }
 
     override func deleteForward(_ sender: Any?) {
         if editor?.deleteSelectedImage() == true { return }
+        if editor?.deleteSelectedChart() == true { return }
         super.deleteForward(sender)
     }
 
     override func cancelOperation(_ sender: Any?) {
         if editor?.handleSlashKey(#selector(cancelOperation(_:))) == true { return }
         if editor?.deselectImage() == true { return }
+        if editor?.deselectChart() == true { return }
         editor?.math.clearStops()
         super.cancelOperation(sender)
     }
 
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
         // A selected image is the selection; a caret the height of the image would be noise.
-        if editor?.hasSelectedImage == true { return }
+        if editor?.hasSelectedImage == true || editor?.styler.selectedChart != nil { return }
         super.drawInsertionPoint(in: caretRect(clamping: rect), color: color, turnedOn: flag)
     }
 

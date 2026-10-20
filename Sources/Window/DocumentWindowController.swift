@@ -21,6 +21,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private var sidebarVisible = false
     /// Where the page starts: past the sidebar when it's open and there's room.
     private var pageLeading: [NSLayoutConstraint] = []
+    /// Where it ends: before the inspector, the same way.
+    private var pageTrailing: [NSLayoutConstraint] = []
+    private var inspector: InspectorView?
+    private var inspectorGlass: NSView?
+    private var inspectorVisible = false
     private var quickOpen: QuickOpenView?
     private var monitors: [Any] = []
     private var observers: [Any] = []
@@ -81,6 +86,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 setSidebarVisible(true, remember: false)
             }
         }
+        if UserDefaults.standard.bool(forKey: Self.inspectorKey) { setInspectorVisible(true, remember: false) }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -108,13 +114,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             emptyState.leadingAnchor.constraint(equalTo: root.leadingAnchor),
         ]
-        NSLayoutConstraint.activate(pageLeading + [
+        pageTrailing = [
+            scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            emptyState.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+        ]
+        NSLayoutConstraint.activate(pageLeading + pageTrailing + [
             // The page begins below the title bar, so nothing of it sits under the controls.
             scroll.topAnchor.constraint(equalTo: root.topAnchor, constant: TitleBarView.height),
-            scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             emptyState.topAnchor.constraint(equalTo: root.topAnchor),
-            emptyState.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             emptyState.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             findHost.topAnchor.constraint(equalTo: root.topAnchor, constant: TitleBarView.height + 6),
             findHost.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
@@ -178,6 +186,17 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         editor.workspace = workspace
         editor.onTyping = { [weak self] in self?.titleBar.setChromeVisible(false) }
         editor.onTitleChange = { [weak self] in self?.updateTitle() }
+        editor.onContextChange = { [weak self] in self?.inspector?.refresh() }
+        // Charts are built in the inspector, so selecting one brings it out.
+        editor.onChartSelected = { [weak self] in
+            guard let self, !self.inspectorVisible else { return }
+            self.setInspectorVisible(true, animated: true)
+        }
+        editor.onChartInserted = { [weak self] in
+            guard let self else { return }
+            if !self.inspectorVisible { self.setInspectorVisible(true, animated: true) }
+            self.inspector?.focusChart()
+        }
         editor.onOpenNote = { [weak self] url in self?.open(url) }
         editor.onImageNeedsAccess = { [weak self] in
             // Styling is under way; show the offer once it's done.
@@ -235,6 +254,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     #if DEBUG
+    var debugInspector: InspectorView? { inspector }
     var debugFolderAccessBarShown: Bool { folderAccessBar != nil }
     func debugGrantFolderAccess() { folderAccessBar?.debugGrant() }
     #endif
@@ -243,7 +263,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         super.showWindow(sender)
         titleBar.alignWithTrafficLights()
         layoutTopFade()
-        if sidebarVisible { applyPageInset(pageInset()) }
+        if sidebarVisible || inspectorVisible { applyPageInsets(pageInsets()) }
     }
 
     /// Windowed, the controls live in the system title bar so they get its clicks. In
@@ -297,7 +317,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     func windowDidResize(_ notification: Notification) {
         titleBar.alignWithTrafficLights()
         layoutTopFade()
-        if sidebarVisible, pageLeading.first?.constant != pageInset() { applyPageInset(pageInset()) }
+        let insets = pageInsets()
+        if pageLeading.first?.constant != insets.leading || pageTrailing.first?.constant != -insets.trailing { applyPageInsets(insets) }
     }
     func windowDidEnterFullScreen(_ notification: Notification) { titleBar.alignWithTrafficLights() }
     func windowWillEnterFullScreen(_ notification: Notification) { hostTitleBar(inFullScreen: true) }
@@ -507,30 +528,37 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         root.layoutSubtreeIfNeeded()
         if !visible, sidebar.hasFocus, note != nil { window?.makeFirstResponder(editor.textView) }
 
-        let inset = pageInset()
+        animatePanel(glass, content: sidebar, visible: visible, animated: animated) { [weak self] in self?.sidebarVisible == visible }
+    }
+
+    /// Fades and blurs a side panel in or out while the page makes room for it (or
+    /// takes the room back). `current` is false once the panel was toggled again, and
+    /// the newer animation cleans up.
+    private func animatePanel(_ glass: NSView, content: NSView, visible: Bool, animated: Bool, current: @escaping () -> Bool) {
+        let insets = pageInsets()
         guard animated, window?.isVisible == true else {
             glass.alphaValue = visible ? 1 : 0
             glass.isHidden = !visible
-            applyPageInset(inset)
+            applyPageInsets(insets)
             return
         }
         glass.isHidden = false
         editor.textView.isAnimatingFrame = true
-        blur(sidebar, from: visible ? 14 : 0, to: visible ? 0 : 14, duration: 0.3)
+        blur(content, from: visible ? 14 : 0, to: visible ? 0 : 14, duration: 0.3)
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.3
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.8, 0.2, 1)
             context.allowsImplicitAnimation = true
             glass.animator().alphaValue = visible ? 1 : 0
-            for c in pageLeading { c.animator().constant = inset }
-            titleBar.setContentInset(inset, animated: true)
+            for c in pageLeading { c.animator().constant = insets.leading }
+            for c in pageTrailing { c.animator().constant = -insets.trailing }
+            titleBar.setContentInsets(leading: insets.leading, trailing: insets.trailing, animated: true)
             root.layoutSubtreeIfNeeded()
         }, completionHandler: { [weak self] in
-            // Toggled again before this finished: the newer animation cleans up.
-            guard let self, self.sidebarVisible == visible else { return }
+            guard let self, current() else { return }
             self.editor.textView.isAnimatingFrame = false
             if !visible { glass.isHidden = true }
-            sidebar.contentFilters = []
+            content.contentFilters = []
         })
     }
 
@@ -567,15 +595,77 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         sidebarGlass = glass
     }
 
-    private func pageInset() -> CGFloat {
-        let reserve = SidebarView.width + Self.sidebarInset
-        guard sidebarVisible, root.bounds.width - reserve >= Self.minPageWidth else { return 0 }
-        return reserve
+    /// Room the page leaves for each open panel. A panel that doesn't fit beside the
+    /// page floats over it instead; the sidebar gets the room first.
+    private func pageInsets() -> (leading: CGFloat, trailing: CGFloat) {
+        var available = root.bounds.width - Self.minPageWidth
+        var leading: CGFloat = 0, trailing: CGFloat = 0
+        let sidebarReserve = SidebarView.width + Self.sidebarInset
+        if sidebarVisible, available >= sidebarReserve {
+            leading = sidebarReserve
+            available -= sidebarReserve
+        }
+        let inspectorReserve = InspectorView.width + Self.sidebarInset
+        if inspectorVisible, available >= inspectorReserve { trailing = inspectorReserve }
+        return (leading, trailing)
     }
 
-    private func applyPageInset(_ inset: CGFloat) {
-        for c in pageLeading { c.constant = inset }
-        titleBar.setContentInset(inset, animated: false)
+    private func applyPageInsets(_ insets: (leading: CGFloat, trailing: CGFloat)) {
+        for c in pageLeading { c.constant = insets.leading }
+        for c in pageTrailing { c.constant = -insets.trailing }
+        titleBar.setContentInsets(leading: insets.leading, trailing: insets.trailing, animated: false)
+    }
+
+    // MARK: Inspector
+
+    private static let inspectorKey = "showInspector"
+
+    @objc func toggleInspector(_ sender: Any?) {
+        setInspectorVisible(!inspectorVisible, animated: true)
+        // From the keyboard, the keys go to the inspector; a click leaves you in the note.
+        if inspectorVisible, NSApp.currentEvent?.type == .keyDown { inspector?.focus() }
+    }
+
+    /// The inspector docks on the window's right edge, the sidebar's mirror.
+    private func setInspectorVisible(_ visible: Bool, animated: Bool = false, remember: Bool = true) {
+        if remember { UserDefaults.standard.set(visible, forKey: Self.inspectorKey) }
+        guard visible != inspectorVisible else { return }
+        inspectorVisible = visible
+        titleBar.inspectorButton.isOn = visible
+        if visible { installInspector() }
+        guard let glass = inspectorGlass, let inspector else { return }
+        root.layoutSubtreeIfNeeded()
+        if !visible, inspector.hasFocus, note != nil { window?.makeFirstResponder(editor.textView) }
+        if visible { inspector.refresh() }
+        animatePanel(glass, content: inspector, visible: visible, animated: animated) { [weak self] in self?.inspectorVisible == visible }
+    }
+
+    private func installInspector() {
+        guard inspector == nil else { return }
+        let view = InspectorView(frame: NSRect(x: 0, y: 0, width: InspectorView.width, height: 480))
+        view.editor = editor
+        view.onDismiss = { [weak self] in
+            guard let self, self.note != nil else { return }
+            self.window?.makeFirstResponder(self.editor.textView)
+        }
+        let glass = Glass.make(cornerRadius: 16, content: view)
+        glass.translatesAutoresizingMaskIntoConstraints = false
+        glass.alphaValue = 0
+        glass.isHidden = true
+        if titleBar.superview === root {
+            root.addSubview(glass, positioned: .below, relativeTo: titleBar)
+        } else {
+            root.addSubview(glass)
+        }
+        let inset = Self.sidebarInset
+        NSLayoutConstraint.activate([
+            glass.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -inset),
+            glass.topAnchor.constraint(equalTo: root.topAnchor, constant: TitleBarView.height + 2),
+            glass.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -inset),
+            glass.widthAnchor.constraint(equalToConstant: InspectorView.width),
+        ])
+        inspector = view
+        inspectorGlass = glass
     }
 
     /// Softens a view in or out of focus while it fades.
@@ -768,6 +858,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         case #selector(toggleFiles(_:)):
             item.title = sidebarVisible ? "Hide Sidebar" : "Show Sidebar"
             return workspace != nil && kind == .vault
+        case #selector(toggleInspector(_:)):
+            item.title = inspectorVisible ? "Hide Inspector" : "Show Inspector"
+            return true
         case #selector(openQuickly(_:)), #selector(searchNotes(_:)):
             return workspace != nil
         case #selector(renameNote(_:)), #selector(trashNote(_:)):

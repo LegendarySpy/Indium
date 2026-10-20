@@ -28,6 +28,7 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
     private let linkButton: HoverButton
     private let imageButton: HoverButton
     let moreButton: HoverButton
+    let inspectorButton: HoverButton
     private let titleField = TitleField()
     private var titleIcon: HoverButton!
     /// The note's icon was clicked: offer the icon picker.
@@ -64,7 +65,7 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
         set { titleField.isRenamable = newValue && !isTemporary }
     }
     var formattingEnabled = true {
-        didSet { rightStack.arrangedSubviews.filter { $0 !== moreButton }.forEach { $0.isHidden = !formattingEnabled } }
+        didSet { rightStack.arrangedSubviews.filter { $0 !== moreButton && $0 !== inspectorButton }.forEach { $0.isHidden = !formattingEnabled } }
     }
 
     override init(frame: NSRect) {
@@ -76,6 +77,7 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
         linkButton = HoverButton(symbol: "link", label: "Link (⌘K)", target: nil, action: #selector(DocumentWindowController.insertLink(_:)))
         imageButton = HoverButton(symbol: "photo", label: "Insert Image (⇧⌘I)", target: nil, action: #selector(DocumentWindowController.insertImage(_:)))
         moreButton = HoverButton(symbol: "ellipsis", label: "More", target: nil, action: nil)
+        inspectorButton = HoverButton(symbol: "sidebar.right", label: "Inspector (⌥⌘I)", target: nil, action: #selector(DocumentWindowController.toggleInspector(_:)))
         super.init(frame: frame)
         installArrowCursorArea()
 
@@ -93,6 +95,7 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
         for b in [headingButton, boldButton, italicButton, linkButton, imageButton] { rightStack.addArrangedSubview(b) }
         rightStack.setCustomSpacing(10, after: imageButton)
         rightStack.addArrangedSubview(moreButton)
+        rightStack.addArrangedSubview(inspectorButton)
 
         titleField.isBezeled = false
         titleField.drawsBackground = false
@@ -137,8 +140,9 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
     }
 
     /// Keeps the title centered over the page when the sidebar takes the window's left side.
-    func setContentInset(_ inset: CGFloat, animated: Bool) {
-        (animated ? titleCenter.animator() : titleCenter).constant = inset / 2
+    /// Centers the title over the page between the open side panels.
+    func setContentInsets(leading: CGFloat, trailing: CGFloat, animated: Bool) {
+        (animated ? titleCenter.animator() : titleCenter).constant = (leading - trailing) / 2
     }
 
     /// Aligns the controls with the window's traffic lights.

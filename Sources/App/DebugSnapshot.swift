@@ -1585,6 +1585,44 @@ enum DebugSnapshot {
                 }
             }
             if d.bool(forKey: "IndiumFiles") { target.toggleFiles(nil) }
+            if d.bool(forKey: "IndiumInspector") { target.toggleInspector(nil) }
+            // `-IndiumInspectorSteps "set:mass=2 g;undo;rename:mass=m"`: inspector edits (see
+            // `InspectorView.debugStep`) and `undo`/`redo`, printing the note and panel after each.
+            if let steps = d.string(forKey: "IndiumInspectorSteps") {
+                if target.debugInspector == nil { target.toggleInspector(nil) }
+                // One step per event, as clicks would come, so each is its own undo step.
+                for (i, step) in steps.split(separator: ";").map(String.init).enumerated() {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5 + Double(i) * 0.2) {
+                        // Undo groups by event only for real input; these come from timers.
+                        guard let undo = target.editor.note?.undoManager else { return }
+                        if undo.groupingLevel > 0 { undo.endUndoGrouping() }
+                        undo.groupsByEvent = false
+                        switch step {
+                        case "undo": undo.undo()
+                        case "redo": undo.redo()
+                        case let s where s.hasPrefix("caret:"):
+                            target.editor.textView.setSelectedRange(NSRange(location: Int(s.dropFirst(6)) ?? 0, length: 0))
+                        case let s where s.hasPrefix("type:"):
+                            undo.beginUndoGrouping()
+                            target.editor.textView.insertText(String(s.dropFirst(5)), replacementRange: NSRange(location: NSNotFound, length: 0))
+                            undo.endUndoGrouping()
+                        case let s where s.hasPrefix("key:"):
+                            undo.beginUndoGrouping()
+                            target.editor.textView.doCommand(by: NSSelectorFromString(String(s.dropFirst(4)) + ":"))
+                            undo.endUndoGrouping()
+                            print("  caret", target.editor.textView.selectedRange().location, "chart", target.editor.styler.selectedChart.map(String.init) ?? "none")
+                        default:
+                            undo.beginUndoGrouping()
+                            target.debugInspector?.debugStep(step)
+                            undo.endUndoGrouping()
+                        }
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6 + Double(i) * 0.2) {
+                        print("STEP \(step)\n" + target.editor.text + "\n-- inspector\n" + (target.debugInspector?.debugDump() ?? "none") + "\n")
+                        fflush(stdout)
+                    }
+                }
+            }
             if d.bool(forKey: "IndiumQuick") { target.openQuickly(nil) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 if d.bool(forKey: "IndiumDumpLayout") {
