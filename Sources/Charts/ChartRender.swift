@@ -154,18 +154,13 @@ enum ChartPalette {
     /// terracotta) and quiet greens and plums beside them, lightened for dark mode.
     static let softLight: [UInt32] = [0x3F6E9A, 0xC2694A, 0x6E9A6B, 0xC9A13E, 0x8C5E8C, 0x4E9196, 0xC98584, 0x6F7782]
     static let softDark: [UInt32] = [0x8FB3D6, 0xE0937A, 0x9CC197, 0xE2C06A, 0xC195C0, 0x86C1C4, 0xE6A9A6, 0xA5ADB8]
-    /// Vivid: far apart and bright (validated for color-vision deficiency against Indium's
-    /// paper in both modes; see the dataviz reference palette).
-    static let vividLight: [UInt32] = [0x2A78D6, 0xEB6834, 0x1BAF7A, 0xEDA100, 0xE87BA4, 0x008300, 0x6250D6, 0xE34948]
-    static let vividDark: [UInt32] = [0x3987E5, 0xD95926, 0x199E70, 0xC98500, 0xD55181, 0x008300, 0x9085E9, 0xE66767]
     /// Mono: the text color mixed into the paper, darkest first.
     private static let monoShares: [Double] = [0.78, 0.5, 0.32, 0.2, 0.64, 0.42, 0.26, 0.14]
 
     static func hex(_ c: ChartColor, style: ChartModel.Style, dark: Bool) -> UInt32 {
         guard case let .palette(i) = c else { if case let .hex(h) = c { return h }; return 0 }
         switch style {
-        case .soft, .hatched, .gradient, .dotted: let p = dark ? softDark : softLight; return p[i % p.count]
-        case .vivid: let p = dark ? vividDark : vividLight; return p[i % p.count]
+        case .soft, .hatched, .dotted: let p = dark ? softDark : softLight; return p[i % p.count]
         case .mono: return mix(dark ? 0xE7E3DC : 0x2A2826, into: dark ? 0x1F1E1C : 0xFAF8F4, monoShares[i % monoShares.count])
         }
     }
@@ -195,8 +190,6 @@ enum ChartPalette {
 enum ChartPattern: Hashable {
     case hatch(Int)
     case dots
-    /// The color from one strength to another, top to bottom, over `height` points.
-    case fade(from: Double, to: Double, height: Int)
 
     private static var cache: [String: NSImage] = [:]
 
@@ -232,8 +225,6 @@ enum ChartPattern: Hashable {
                     }
                     NSColor(patternImage: small).setFill()
                     bar.fill()
-                case .gradient:
-                    NSGradient(starting: color, ending: color.withAlphaComponent(0.36))?.draw(in: bar, angle: 90)
                 default:
                     color.setFill()
                     bar.fill()
@@ -247,14 +238,6 @@ enum ChartPattern: Hashable {
     /// Drawn at three times its size, so the lines stay sharp.
     private static func tile(_ pattern: ChartPattern, color: NSColor, dark: Bool) -> NSImage {
         let scale: CGFloat = 3
-        if case let .fade(from, to, height) = pattern {
-            let size = NSSize(width: 2 * scale, height: CGFloat(height) * scale)
-            let image = NSImage(size: size, flipped: true) { rect in
-                NSGradient(starting: color.withAlphaComponent(from), ending: color.withAlphaComponent(to))?.draw(in: rect, angle: 90)
-                return true
-            }
-            return image
-        }
         let side: CGFloat = pattern == .dots ? 6 : 7
         let px = Int(side * scale)
         guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px, bitsPerSample: 8, samplesPerPixel: 4,
@@ -272,8 +255,6 @@ enum ChartPattern: Hashable {
             for c in [CGPoint(x: s * 0.25, y: s * 0.25), CGPoint(x: s * 0.75, y: s * 0.75)] {
                 NSBezierPath(ovalIn: NSRect(x: c.x - scale * 1.05, y: c.y - scale * 1.05, width: scale * 2.1, height: scale * 2.1)).fill()
             }
-        case .fade:
-            break
         case let .hatch(index):
             let path = NSBezierPath()
             path.lineWidth = scale * 1.25
@@ -514,12 +495,6 @@ private struct ChartView: View {
                 let color = paint(.palette(s.color))
                 ForEach(Array(s.segments.enumerated()), id: \.offset) { j, segment in
                     ForEach(Array(segment.enumerated()), id: \.offset) { _, p in
-                        if model.kind != .scatter, model.style == .gradient, let floor = areaFloor {
-                            // A wash under the line, fading to nothing at the bottom.
-                            AreaMark(x: .value("x", p.x), yStart: .value("y", floor), yEnd: .value("y", p.y), series: .value("Area", "a\(i)-\(j)"))
-                                .foregroundStyle(ChartPattern.paint(.fade(from: 0.28, to: 0, height: fadeHeight),
-                                                                    color: ChartPalette.nsColor(.palette(s.color), style: model.style, dark: dark), dark: dark))
-                        }
                         if model.kind != .scatter {
                             LineMark(x: .value("x", p.x), y: .value("y", p.y), series: .value("Series", "s\(i)-\(j)"))
                                 .foregroundStyle(color)
@@ -576,15 +551,12 @@ private struct ChartView: View {
 
     // MARK: Styles
 
-    /// How bars and slices are filled: flat, lined, faded or stippled.
+    /// How bars and slices are filled: flat, lined or stippled.
     private func fill(_ c: ChartColor, _ index: Int) -> AnyShapeStyle {
         let color = paint(c)
         switch model.style {
         case .hatched: return AnyShapeStyle(ChartPattern.paint(.hatch(index), color: ChartPalette.nsColor(c, style: model.style, dark: dark), dark: dark))
         case .dotted: return AnyShapeStyle(ChartPattern.paint(.dots, color: ChartPalette.nsColor(c, style: model.style, dark: dark), dark: dark))
-        // A gradient drawn as a picture: the PDF the chart renders into keeps only a gradient's first color.
-        case .gradient: return AnyShapeStyle(ChartPattern.paint(.fade(from: 1, to: dark ? 0.3 : 0.36, height: fadeHeight),
-                                                                color: ChartPalette.nsColor(c, style: model.style, dark: dark), dark: dark))
         default: return AnyShapeStyle(color)
         }
     }
@@ -610,19 +582,6 @@ private struct ChartView: View {
         case .dotted: Circle().strokeBorder(lineWidth: 1.6)
         default: Circle()
         }
-    }
-
-    /// How far a fade runs: about the plot's height.
-    private var fadeHeight: Int { Int(min(max(width * 0.5, 200), 400)) }
-
-    /// Where a line's wash starts: the bottom of the plot, zero when the values sit well
-    /// above it, as the axis then starts there too.
-    private var areaFloor: Double? {
-        if model.beginAtZero { return 0 }
-        if let d = model.yDomain { return d.lowerBound }
-        let ys = model.series.flatMap { $0.segments.flatMap { $0.map(\.y) } }
-        guard let lo = ys.min(), let hi = ys.max() else { return nil }
-        return lo > 0 && lo < hi * 0.5 ? 0 : lo
     }
 
     private func symbol(_ shape: ChartModel.Shape) -> AnyChartSymbolShape {

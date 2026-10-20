@@ -694,7 +694,7 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
         style.target = self
         style.action = #selector(styleChanged)
         style.setAccessibilityLabel("Chart Style")
-        style.toolTip = "Soft is Indium’s own muted colors, Mono shades of the text color for printing, Vivid bright ones; Hatched, Gradient and Dotted fill bars and slices with lines, a fade or dots"
+        style.toolTip = "Soft is Indium’s own muted colors, Mono shades of the text color for printing; Hatched and Dotted fill bars and slices with lines or dots"
         pointsName.placeholderString = "Name, like Trial 1"
         pointsName.toolTip = "What the points are, for the legend"
         for (field, key, label) in [(titleField, "title", "Title"), (xTitle, "xTitle", "X Axis Title"), (yTitle, "yTitle", "Y Axis Title"),

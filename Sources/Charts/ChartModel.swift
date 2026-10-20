@@ -19,11 +19,11 @@ struct ChartModel: Hashable {
     enum Dash: Hashable { case solid, dashed, dotted }
     enum Shape: Hashable { case point, open, cross }
     /// How a chart is drawn (`style:`): `soft`, Indium's own muted inks, by default;
-    /// `mono`, shades of the text color, for print; `vivid`, bright and far apart;
-    /// `hatched`, bars and slices lined like a textbook figure, each set at its own angle
-    /// so it reads in grey; `gradient`, fills that fade downward; `dotted`, stippled fills
-    /// and open markers. The last three use the soft colors.
-    enum Style: String, Hashable, CaseIterable { case soft, mono, vivid, hatched, gradient, dotted }
+    /// `mono`, shades of the text color, for print; `hatched`, bars and slices lined like
+    /// a textbook figure, each set at its own angle so it reads in grey; `dotted`,
+    /// stippled fills and open markers. A style Indium doesn't know (or no longer has,
+    /// like `vivid`) draws soft.
+    enum Style: String, Hashable, CaseIterable { case soft, mono, hatched, dotted }
 
     struct Point: Hashable {
         var x: Double

@@ -68,10 +68,11 @@ setdata	type: bar↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]	A
 setdata	type: bar↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]↵bestFit: true	A, B|	type: bar↵labels: [A, B]↵series:↵  - title: ""↵    data: []↵bestFit: true
 setdata	type: pie	Water, "Salt, fine"|Mass: total=50, 30	type: pie↵labels: [Water, "Salt, fine"]↵series:↵  - title: "Mass: total"↵    data: [50, 30]
 setdata	type: bar↵labels: [A]↵series:↵  - title: X↵    data: [1]		type: bar
-# Styles: soft unless the block names another; one it doesn't know is soft too
+# Styles: soft unless the block names another; one it doesn't know (or the retired vivid and gradient) is soft too
 model	type: bar↵style: mono↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]		bar labels A,B | series X (0, 1) (1, 2) | style mono
-model	type: bar↵style: Vivid↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]		bar labels A,B | series X (0, 1) (1, 2) | style vivid
+model	type: bar↵style: Vivid↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]		bar labels A,B | series X (0, 1) (1, 2)
 model	type: bar↵style: neon↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]		bar labels A,B | series X (0, 1) (1, 2)
 model	type: pie↵style: hatched↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 3]		pie labels A,B | series  (0, 1) (1, 3) | style hatched
-model	type: line↵style: gradient↵points: (0, 1), (1, 2)		line x 0..1 | series Points (0, 1) (1, 2) | style gradient
+model	type: line↵style: gradient↵points: (0, 1), (1, 2)		line x 0..1 | series Points (0, 1) (1, 2)
+model	type: bar↵style: hatched↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]		bar labels A,B | series X (0, 1) (1, 2) | style hatched
 model	type: scatter↵style: Dotted↵points: (0, 1), (1, 2)		scatter x 0..1 | series Points (0, 1) (1, 2) | style dotted
