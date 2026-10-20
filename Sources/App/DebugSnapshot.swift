@@ -1702,6 +1702,10 @@ enum DebugSnapshot {
                             try? rep.representation(using: .png, properties: [:])?.write(to: url)
                         }
                         print("NOTE AFTER:", target.editor.text.debugDescription)
+                        if let pop { print("PANEL WINDOW:", pop.windowNumber); fflush(stdout) }
+                        // `-IndiumAskHold 3`: stays up that long, for a real screen capture of the panel.
+                        let hold = d.double(forKey: "IndiumAskHold")
+                        if hold > 0 { RunLoop.current.run(until: Date().addingTimeInterval(hold)) }
                         exit(0)
                     }
                 }
