@@ -22,6 +22,11 @@ enum ChartBlockEditing {
         if let i = lines.firstIndex(where: { line in
             line.prefix { $0 == " " }.count == base && line.trimmingCharacters(in: .whitespaces).hasPrefix(key + ":")
         }) {
+            // A list under the key (`- (1, 2)` lines) goes with it: the new value is on its line.
+            while i + 1 < lines.count, !lines[i + 1].trimmingCharacters(in: .whitespaces).isEmpty,
+                  lines[i + 1].prefix(while: { $0 == " " }).count > base || lines[i + 1].trimmingCharacters(in: .whitespaces).hasPrefix("- ") {
+                lines.remove(at: i + 1)
+            }
             if let written { lines[i] = "\(pad)\(key): \(written)" } else { lines.remove(at: i) }
         } else if let written {
             // After the last line, so a `series:` list above keeps its items.
@@ -158,6 +163,16 @@ enum ChartBlockEditing {
         let kept = plots.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         let value: String? = kept.isEmpty ? nil : kept.count == 1 ? kept[0] : "[" + kept.joined(separator: ", ") + "]"
         return settingChart("plot", raw: value, in: body)
+    }
+
+    /// `points:` as written, the ones Indium can read.
+    static func points(_ body: String) -> [ChartPoints.Entry] {
+        ChartPoints.parse(ChartPoints.written(MiniYAML.parse(body)["points"])).entries
+    }
+
+    /// `points: (1, 2), (2, 4)` on one line, or taken out when there are none.
+    static func settingPoints(_ points: [ChartPoints.Entry], in body: String) -> String {
+        settingChart("points", raw: points.isEmpty ? nil : ChartPoints.text(points), in: body)
     }
 
     /// `select:` the columns to draw; taken out when it's all of them.

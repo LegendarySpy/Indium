@@ -216,8 +216,8 @@ extension EditorController {
                 insertChart(forTable: table, replacing: state.range)
                 return
             }
-            // Selects the labels, to type over.
-            insertion = .text(Self.chartTemplate, select: NSRange(location: 28, length: 7), block: true)
+            // Selects the points, to type over.
+            insertion = .text(Self.chartTemplate, select: NSRange(location: 27, length: 22), block: true)
         }
         switch insertion {
         case .chart:
