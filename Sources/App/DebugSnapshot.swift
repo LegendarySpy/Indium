@@ -1058,6 +1058,51 @@ enum DebugSnapshot {
 
     static func runIfRequested(_ controller: DocumentWindowController) {
         let d = UserDefaults.standard
+        // `-IndiumSelectCycle 6`: selects the whole note and back to a caret, every 0.6s, that
+        // many times, then quits: for recording the screen to catch a redraw glitch.
+        if d.integer(forKey: "IndiumSelectCycle") > 0 {
+            let cycles = d.integer(forKey: "IndiumSelectCycle")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                if controller.note == nil, let first = AppDelegate.shared.workspace?.notes.first { controller.open(first) }
+            }
+            for i in 0..<(cycles * 2) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5 + Double(i) * 0.6) {
+                    let tv = controller.editor.textView
+                    controller.window?.makeFirstResponder(tv)
+                    // `-IndiumSelectCycleMode drag|triple`: the selecting is done with mouse events
+                    // through the window, as a hand would.
+                    let mode = d.string(forKey: "IndiumSelectCycleMode") ?? "all"
+                    guard let window = controller.window, i % 2 == 0, mode != "all" else {
+                        if i % 2 == 0 { tv.selectAll(nil) } else { tv.setSelectedRange(NSRange(location: 0, length: 0)) }
+                        return
+                    }
+                    let lm = tv.layoutManager!, tc = tv.textContainer!
+                    let end = lm.boundingRect(forGlyphRange: NSRange(location: max(0, lm.numberOfGlyphs - 1), length: 1), in: tc)
+                    let start = NSPoint(x: tv.textContainerOrigin.x + 2, y: tv.textContainerOrigin.y + 8)
+                    let stop = NSPoint(x: tv.textContainerOrigin.x + end.maxX, y: tv.textContainerOrigin.y + end.midY)
+                    func event(_ type: NSEvent.EventType, _ p: NSPoint, clicks: Int = 1) -> NSEvent {
+                        NSEvent.mouseEvent(with: type, location: tv.convert(p, to: nil), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                           windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: clicks, pressure: type == .leftMouseUp ? 0 : 1)!
+                    }
+                    if mode == "triple" {
+                        let mid = NSPoint(x: start.x + 20, y: start.y + 40)
+                        for c in 1...3 {
+                            NSApp.postEvent(event(.leftMouseUp, mid, clicks: c), atStart: false)
+                            if c < 3 { NSApp.postEvent(event(.leftMouseDown, mid, clicks: c + 1), atStart: false) }
+                        }
+                        window.sendEvent(event(.leftMouseDown, mid))
+                    } else {
+                        for k in 1...8 {
+                            let t = CGFloat(k) / 8
+                            NSApp.postEvent(event(.leftMouseDragged, NSPoint(x: start.x + (stop.x - start.x) * t, y: start.y + (stop.y - start.y) * t)), atStart: false)
+                        }
+                        NSApp.postEvent(event(.leftMouseUp, stop), atStart: false)
+                        window.sendEvent(event(.leftMouseDown, start))
+                    }
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2 + Double(cycles * 2) * 0.6) { exit(0) }
+        }
         // Harness runs copy and paste on a board of their own, never the real clipboard.
         if d.object(forKey: "IndiumSnapshot") != nil || d.object(forKey: "IndiumPDF") != nil || d.object(forKey: "IndiumClipboardCases") != nil {
             TableClipboard.board = NSPasteboard.withUniqueName()
