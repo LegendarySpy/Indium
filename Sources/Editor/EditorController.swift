@@ -267,6 +267,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func columnDidChange(_ column: CGFloat) {
         guard styler.config.columnWidth != column else { return }
         styler.config.columnWidth = column
+        resizeCharts()
         restyleTimer?.invalidate()
         let needsRestyle = !styler.regions.isEmpty
             || styler.blocks.contains {
@@ -275,6 +276,29 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard needsRestyle else { return }
         restyleTimer = Timer.scheduledTimer(withTimeInterval: textView.inLiveResize || textView.isAnimatingFrame ? 0.12 : 0, repeats: false) { [weak self] _ in
             self?.restyleAll()
+        }
+    }
+
+    private static var chartSettleTimer: Timer?
+
+    /// Charts take the new width in the same step as the text around them, so none sits at
+    /// its old size while the text reflows: their blocks are restyled now (their pictures
+    /// stretched for the moment, see `ChartRender.deferring`), and drawn sharp at the new
+    /// size once the width has held still briefly.
+    private func resizeCharts() {
+        let charts = styler.blocks.filter { if case let .code(language) = $0.kind { return ChartModel.handles(language) }; return false }
+        guard !charts.isEmpty else { return }
+        ChartRender.deferring = true
+        storage.beginEditing()
+        for block in charts where block.range.location < storage.length { styler.restyleBlock(at: block.range.location, in: storage) }
+        storage.endEditing()
+        updateFloats()
+        Self.chartSettleTimer?.invalidate()
+        Self.chartSettleTimer = Timer.scheduledTimer(withTimeInterval: 0.18, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                ChartRender.settled()
+                self?.textView.needsDisplay = true
+            }
         }
     }
 

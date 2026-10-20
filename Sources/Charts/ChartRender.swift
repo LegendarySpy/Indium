@@ -73,8 +73,28 @@ final class ChartRender {
     }
     static var legendFont: NSFont { font(12) }
 
+    /// While the page's width is changing (a live resize, zoom, full screen), a chart at a
+    /// size not drawn yet shows its last picture scaled to fit, which costs nothing;
+    /// Swift Charts takes about 5 ms a chart, too slow for every step of a resize. Once
+    /// the width settles, `settled()` lets it draw them properly.
+    static var deferring = false
+    /// The last picture drawn of each chart, light and dark, at whatever size.
+    private static var latest: [ChartModel: [Bool: NSImage]] = [:]
+
+    static func settled() {
+        deferring = false
+    }
+
     func draw(in rect: NSRect) {
         let dark = NSAppearance.currentDrawing().bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        if images[dark] == nil, Self.deferring, let standIn = Self.latest[model]?[dark], standIn.size.width > 0, standIn.size.height > 0 {
+            // Kept in proportion (a pie stays round), centered in the space it will fill.
+            let scale = min(rect.width / standIn.size.width, rect.height / standIn.size.height)
+            let size = NSSize(width: standIn.size.width * scale, height: standIn.size.height * scale)
+            let fit = NSRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2, width: size.width, height: size.height)
+            standIn.draw(in: fit, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            return
+        }
         image(dark: dark).draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
     }
 
@@ -82,6 +102,8 @@ final class ChartRender {
         if let image = images[dark] { return image }
         let image = MainActor.assumeIsolated { Self.render(ChartView(model: model, dark: dark, width: size.width), size: size) }
         images[dark] = image
+        if Self.latest.count > 48 { Self.latest.removeAll() }
+        Self.latest[model, default: [:]][dark] = image
         return image
     }
 

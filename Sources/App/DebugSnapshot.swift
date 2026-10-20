@@ -991,7 +991,8 @@ enum DebugSnapshot {
     /// `chartclick:n,clicks` clicks it once or twice, then prints the inspector's title.
     /// `click:prefix` clicks at the start of the block beginning with `prefix`; `inspector` opens it, `panel`
     /// prints what the inspector shows, as it is; `insp:step` is an inspector step (see
-    /// `InspectorView.debugStep`); `scroll:y` scrolls the note.
+    /// `InspectorView.debugStep`); `scroll:y` scrolls the note; `resize:WxH[,shot]` sizes the
+    /// window and prints each chart's frame; `settle` waits for charts to draw sharp.
     /// Each mutating step is its own undo group.
     static func runDragSteps(_ steps: [String], editor: EditorController, window: NSWindow) {
         let tv = editor.textView
@@ -1108,6 +1109,25 @@ enum DebugSnapshot {
                 undo?.beginUndoGrouping()
                 controller?.debugInspector?.debugStep(parts.count > 1 ? parts[1] : "")
                 undo?.endUndoGrouping()
+            case "resize":
+                // `resize:WxH[,shot]`: the window to that size in one step, drawn at once, as a
+                // frame of a live resize or zoom is; then each chart's frame against its block.
+                let wh = (args.first ?? "").split(separator: "x").compactMap { Double($0) }
+                guard wh.count == 2 else { break }
+                window.setContentSize(NSSize(width: wh[0], height: wh[1]))
+                window.contentView?.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                if args.count > 1 { debugShot(window: window, path: args[1]) }
+                for block in editor.visibleBlocks() {
+                    guard case let .chart(chart) = block.decoration.content else { continue }
+                    let fits = abs(block.area.height - (block.content.height + block.decoration.padding * 2)) < 1.5
+                    print("  CHART at \(block.range.location): drawn \(Int(block.content.width))x\(Int(block.content.height)) render \(Int(chart.size.width))x\(Int(chart.size.height))",
+                          "block height fits:", fits, "stretched:", ChartRender.deferring, block.decoration.placement == .replace ? "" : "\(block.decoration.placement)")
+                }
+            case "settle":
+                RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+                window.displayIfNeeded()
+                print("  SETTLED stretched:", ChartRender.deferring)
             case "scroll":
                 tv.scroll(NSPoint(x: 0, y: Double(parts.count > 1 ? parts[1] : "0") ?? 0))
             case "undo": undo?.undo()
@@ -1380,6 +1400,24 @@ enum DebugSnapshot {
         }
         // `-IndiumChartCases Tests/Charts/cases.tsv`: what chart blocks draw, and points and
         // curves written back into them (see ChartSelfTest).
+        // `-IndiumChartBench YES`: how long Swift Charts takes to draw a chart, at a run of
+        // widths as a window resize would ask for them.
+        if d.bool(forKey: "IndiumChartBench") {
+            let bodies = ["type: bar\nlabels: [A, B, C, D]\nseries:\n  - title: T1\n    data: [3, 5, 2, 6]\n  - title: T2\n    data: [4, 4, 3, 5]",
+                          "type: scatter\npoints: (1, 2.1), (2, 3.9), (3, 6.2), (4, 7.8), (5, 9.9)\nbestFit: true\nstyle: hatched",
+                          "type: pie\nlabels: [A, B, C]\nseries:\n  - title: S\n    data: [5, 3, 2]"]
+            for body in bodies {
+                let model = ChartModel.build(language: "chart", body: body, context: .init(table: { _ in nil }, variables: NoteVariables.parse(noteText: "")))
+                let start = Date()
+                var n = 0
+                for w in stride(from: 400.0, through: 700.0, by: 10) {
+                    _ = ChartRender.make(model, column: w).image(dark: false)
+                    n += 1
+                }
+                print("CHART BENCH \(model.kind): \(String(format: "%.1f", Date().timeIntervalSince(start) * 1000 / Double(n))) ms a render, \(n) widths")
+            }
+            exit(0)
+        }
         if let paths = d.string(forKey: "IndiumChartCases") {
             exit(ChartSelfTest.run(paths: paths.split(separator: ",").map(String.init)) == 0 ? 0 : 1)
         }
