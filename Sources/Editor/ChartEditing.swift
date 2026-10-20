@@ -187,6 +187,7 @@ extension EditorController {
         styler.selectedChart = nil
         if loc < storage.length { styler.restyleBlock(at: loc, in: storage) }
         textView.needsDisplay = true
+        onContextChange?()
     }
 
     /// Escape: the chart lets go, and the caret goes to the line after it.

@@ -811,6 +811,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         updateSelectionBar()
         math.selectionChanged()
         math.updatePreview()
+        // A click moved the caret: the inspector follows it, off a chart it was showing.
+        onContextChange?()
     }
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {

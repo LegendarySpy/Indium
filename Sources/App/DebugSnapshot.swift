@@ -989,6 +989,9 @@ enum DebugSnapshot {
     /// first drop zone of a kind: `end`, `endleft`, `endright`, `column`, `below`, `gap`, `side`.
     /// `chartdrag:n,prefix,where[,shot]` presses chart n itself and drags it the same way;
     /// `chartclick:n,clicks` clicks it once or twice, then prints the inspector's title.
+    /// `click:prefix` clicks at the start of the block beginning with `prefix`; `inspector` opens it, `panel`
+    /// prints what the inspector shows, as it is; `insp:step` is an inspector step (see
+    /// `InspectorView.debugStep`); `scroll:y` scrolls the note.
     /// Each mutating step is its own undo group.
     static func runDragSteps(_ steps: [String], editor: EditorController, window: NSWindow) {
         let tv = editor.textView
@@ -1086,6 +1089,27 @@ enum DebugSnapshot {
                 let controller = window.windowController as? DocumentWindowController
                 print("  CLICKED chart \(clicks)x: selected", editor.styler.selectedChart.map(String.init) ?? "none",
                       "inspector", controller?.debugInspector.map { $0.isHiddenOrHasHiddenAncestor ? "hidden" : ($0.debugDump().components(separatedBy: "\n").first ?? "") } ?? "closed")
+            case "click":
+                guard let target = editor.visibleGroupFrames().first(where: { $0.group.text.hasPrefix(parts.count > 1 ? parts[1] : "") }) else { print("  CLICK: no block \(parts)"); break }
+                let p = NSPoint(x: target.rect.minX + 4, y: target.rect.minY + 6)
+                NSApp.postEvent(mouse(.leftMouseUp, p), atStart: false)
+                tv.mouseDown(with: mouse(.leftMouseDown, p))
+                RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+                print("  CLICKED \(parts[1]): caret", tv.selectedRange().location, "selected chart", editor.styler.selectedChart.map(String.init) ?? "none")
+            case "inspector":
+                // Opens the inspector, as its button does.
+                let controller = window.windowController as? DocumentWindowController
+                if controller?.debugInspector == nil { controller?.toggleInspector(nil) }
+            case "panel":
+                let controller = window.windowController as? DocumentWindowController
+                print("  PANEL:", controller?.debugInspector?.debugDump().components(separatedBy: "\n").prefix(2).joined(separator: " / ") ?? "closed")
+            case "insp":
+                let controller = window.windowController as? DocumentWindowController
+                undo?.beginUndoGrouping()
+                controller?.debugInspector?.debugStep(parts.count > 1 ? parts[1] : "")
+                undo?.endUndoGrouping()
+            case "scroll":
+                tv.scroll(NSPoint(x: 0, y: Double(parts.count > 1 ? parts[1] : "0") ?? 0))
             case "undo": undo?.undo()
             case "redo": undo?.redo()
             case "text": print("NOTE TEXT:\n" + editor.text + "\nEND NOTE TEXT")

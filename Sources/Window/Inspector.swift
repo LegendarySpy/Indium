@@ -19,6 +19,9 @@ final class InspectorView: NSView, NSTextFieldDelegate {
     private let stack = NSStackView()
     private let variables = VariablesSection()
     private let chart = ChartSection()
+    /// Where the chart shown starts, while one is: its controls change that chart and no
+    /// other, whatever the caret has done since.
+    private var shownChart: Int?
     private var refreshQueued = false
 
     override init(frame: NSRect) {
@@ -41,11 +44,11 @@ final class InspectorView: NSView, NSTextFieldDelegate {
         stack.addArrangedSubview(variables)
         chart.isHidden = true
         chart.onEdit = { [weak self] name, edit in
-            guard let self, let editor = self.editor, case let .chart(location) = editor.inspectorContext else { return }
+            guard let self, let editor = self.editor, let location = self.shownChart, editor.chartBlock(containing: location) != nil else { return }
             editor.changeChart(at: location, actionName: name, edit)
         }
         chart.onEditSource = { [weak self] in
-            guard let self, let editor = self.editor, case let .chart(location) = editor.inspectorContext else { return }
+            guard let self, let editor = self.editor, let location = self.shownChart, editor.chartBlock(containing: location) != nil else { return }
             editor.showChartSource(at: location)
         }
         variables.onChange = { [weak self] name, edit in self?.editor?.changeVariables(actionName: name, edit) ?? false }
@@ -124,6 +127,7 @@ final class InspectorView: NSView, NSTextFieldDelegate {
             return
         }
         chart.isHidden = true
+        shownChart = nil
         switch editor.inspectorContext {
         case .note: titleLabel.stringValue = "Note"
         case .table: titleLabel.stringValue = "Table"
@@ -133,6 +137,7 @@ final class InspectorView: NSView, NSTextFieldDelegate {
                 titleLabel.stringValue = graph ? "Graph" : "Chart"
                 chart.show(graph: graph, body: info.body, model: info.model, columns: info.columns, editable: editor.textView.isEditable)
                 chart.isHidden = false
+                shownChart = location
             }
         }
         let text = editor.text
