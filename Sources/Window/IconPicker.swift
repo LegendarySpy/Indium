@@ -69,6 +69,9 @@ final class IconPickerController: NSViewController {
         if views.count > 1 { stack.setCustomSpacing(6, after: views[1]) }
         // Room so a highlighted cell at the edge never touches the popover's rim.
         stack.edgeInsets = NSEdgeInsets(top: 16, left: 20, bottom: 14, right: 20)
+        // Exactly the grid plus both margins, so the popover can't come out narrower and
+        // leave the last column against its right edge.
+        stack.widthAnchor.constraint(equalToConstant: grid.frame.width + stack.edgeInsets.left + stack.edgeInsets.right).isActive = true
         view = stack
 
         if let noteURL {
