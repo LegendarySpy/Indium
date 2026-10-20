@@ -593,6 +593,135 @@ enum DebugSnapshot {
                                                    : NSRange(location: a.location, length: b.location - a.location - 1))
     }
 
+    /// `-IndiumWritingToolsCases /path`: Writing Tools (and Siri through it) handing back a
+    /// change, as the system does: the text view is asked for its context, then to replace a
+    /// range of it. A case is `### name`, then sections whose body is the lines under them:
+    /// `<<< note` the note, with the selection marked `«…»`; `<<< scope selection|document`
+    /// what's asked for (default document); `<<< propose whole|selection` the text sent back
+    /// for the whole context or just the selection, `<<< list` items (a tab per level, `1.` first
+    /// for a numbered list) or `<<< table` rows (cells split by `⇥`) sent as a list or table.
+    /// Checks: `>>> note` the note after, `>>> undone` after Undo, `>>> preserved` the
+    /// stretches marked as not to change, one per line (`↵` a line break).
+    static func runWritingToolsCases(_ text: String, editor: EditorController, window: NSWindow) {
+        typealias Sections = [(kind: String, arg: String, body: String)]
+        var cases: [(name: String, sections: Sections)] = []
+        for line in text.components(separatedBy: "\n") {
+            if line.hasPrefix("### ") { cases.append((String(line.dropFirst(4)), [])); continue }
+            guard !cases.isEmpty else { continue }
+            if line.hasPrefix("<<< ") || line.hasPrefix(">>> ") {
+                let rest = line.dropFirst(4).split(separator: " ", maxSplits: 1).map(String.init)
+                cases[cases.count - 1].sections.append((String(line.prefix(1)) + rest[0], rest.count > 1 ? rest[1] : "", ""))
+            } else if var last = cases[cases.count - 1].sections.popLast() {
+                last.body += (last.body.isEmpty ? "" : "\n") + line.replacingOccurrences(of: "⇥", with: "\t")
+                cases[cases.count - 1].sections.append(last)
+            }
+        }
+        for i in cases.indices {
+            for j in cases[i].sections.indices {
+                while cases[i].sections[j].body.hasSuffix("\n") { cases[i].sections[j].body.removeLast() }
+            }
+        }
+        let tv = editor.textView
+        window.makeFirstResponder(tv)
+        let ensure = NSSelectorFromString("_ensureWritingToolsCoordinatorCreated")
+        if tv.responds(to: ensure) { _ = tv.perform(ensure) }
+        guard let coordinator = tv.writingToolsCoordinator else { print("WRITING TOOLS CASES: no coordinator"); exit(1) }
+        typealias Contexts = @convention(c) (AnyObject, Selector, NSWritingToolsCoordinator, Int,
+                                             @escaping @convention(block) ([NSWritingToolsCoordinator.Context]) -> Void) -> Void
+        let contextsSelector = NSSelectorFromString("writingToolsCoordinator:requestsContextsForScope:completion:")
+        let contexts = unsafeBitCast(tv.method(for: contextsSelector), to: Contexts.self)
+        typealias ChangeState = @convention(c) (AnyObject, Selector, NSWritingToolsCoordinator, Int, @escaping @convention(block) () -> Void) -> Void
+        let stateSelector = NSSelectorFromString("writingToolsCoordinator:willChangeToState:completion:")
+        let changeState = unsafeBitCast(tv.method(for: stateSelector), to: ChangeState.self)
+        var failed = 0
+
+        func run(_ index: Int) {
+            guard index < cases.count else {
+                print("WRITING TOOLS CASES: \(cases.count - failed)/\(cases.count) passed")
+                exit(failed == 0 ? 0 : 1)
+            }
+            let c = cases[index]
+            func section(_ kind: String) -> (arg: String, body: String)? { c.sections.first { $0.kind == kind }.map { ($0.arg, $0.body) } }
+            var notes: [String] = []
+            func finish() {
+                if !notes.isEmpty { failed += 1 }
+                print(notes.isEmpty ? "PASS" : "FAIL", c.name, notes.isEmpty ? "" : "· " + notes.joined(separator: "; "))
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { run(index + 1) }
+            }
+            // The last case's session ends, as Writing Tools ends it when its panel closes.
+            if tv.isWritingToolsActive { changeState(tv, stateSelector, coordinator, NSWritingToolsCoordinator.State.inactive.rawValue) { } }
+            editor.writingToolsSpan = nil
+            let (start, selection) = unmark(section("<note")?.body ?? "")
+            editor.replace(NSRange(location: 0, length: editor.storage.length), with: start)
+            editor.restyleAll()
+            tv.setSelectedRange(selection)
+            tv.undoManager?.removeAllActions()
+
+            let scope = section("<scope")?.arg == "selection" ? NSWritingToolsCoordinator.ContextScope.userSelection : .fullDocument
+            var context: NSWritingToolsCoordinator.Context?
+            contexts(tv, contextsSelector, coordinator, scope.rawValue) { context = $0.first }
+            guard let context else { notes.append("no context"); return finish() }
+            if let want = section(">preserved") {
+                let s = context.attributedString
+                var got: [String] = []
+                s.enumerateAttribute(NSAttributedString.Key("WTWritingToolsPreserved"), in: NSRange(location: 0, length: s.length)) { value, r, _ in
+                    if value != nil { got.append((s.string as NSString).substring(with: r).replacingOccurrences(of: "\n", with: "↵")) }
+                }
+                let joined = got.joined(separator: "\n")
+                if joined != want.body { notes.append("preserved: got \(got), want \(want.body.components(separatedBy: "\n"))") }
+            }
+
+            var proposed: NSAttributedString?
+            var range = context.range
+            if let p = section("<propose") {
+                proposed = NSAttributedString(string: p.body)
+                if p.arg == "whole" { range = NSRange(location: 0, length: context.attributedString.length) }
+            } else if let l = section("<list") {
+                let m = NSMutableAttributedString()
+                var items = l.body.components(separatedBy: "\n")
+                let ordered = items.first?.hasPrefix("1.") == true
+                if ordered { items = items.map { $0.replacingOccurrences(of: #"^(\t*)\d+\.\s*"#, with: "$1", options: .regularExpression) } }
+                var levels: [NSTextList] = []
+                for item in items {
+                    let depth = item.prefix { $0 == "\t" }.count
+                    while levels.count <= depth { levels.append(NSTextList(markerFormat: ordered ? .decimal : .disc, options: 0)) }
+                    let style = NSMutableParagraphStyle()
+                    style.textLists = Array(levels[...depth])
+                    m.append(NSAttributedString(string: item.trimmingCharacters(in: .whitespaces) + "\n", attributes: [.paragraphStyle: style]))
+                }
+                proposed = m
+            } else if let t = section("<table") {
+                let m = NSMutableAttributedString()
+                let rows = t.body.components(separatedBy: "\n").map { $0.components(separatedBy: "\t") }
+                let table = NSTextTable()
+                table.numberOfColumns = rows.map(\.count).max() ?? 0
+                for (r, row) in rows.enumerated() {
+                    for (col, cell) in row.enumerated() {
+                        let style = NSMutableParagraphStyle()
+                        style.textBlocks = [NSTextTableBlock(table: table, startingRow: r, rowSpan: 1, startingColumn: col, columnSpan: 1)]
+                        m.append(NSAttributedString(string: cell + "\n", attributes: [.paragraphStyle: style]))
+                    }
+                }
+                proposed = m
+            }
+            if let proposed {
+                tv.writingToolsCoordinator(coordinator, replaceRange: range, in: context, proposedText: proposed,
+                                           reason: .interactive, animationParameters: nil) { _ in }
+            }
+            let endGroups = NSSelectorFromString("_endTopLevelGroupings")
+            if (UndoManager.self as AnyObject).responds(to: endGroups) { _ = (UndoManager.self as AnyObject).perform(endGroups) }
+            if let want = section(">note"), editor.text != want.body {
+                notes.append("note: got \(editor.text.debugDescription), want \(want.body.debugDescription)")
+            }
+            if let want = section(">undone") {
+                tv.undoManager?.undo()
+                if editor.text != want.body { notes.append("undone: got \(editor.text.debugDescription), want \(want.body.debugDescription)") }
+            }
+            finish()
+        }
+        run(0)
+    }
+
     /// A key press (down and up) sent through the window, as typing would.
     static func sendKey(_ chars: String, flags: NSEvent.ModifierFlags = [], code: UInt16 = 0, to window: NSWindow) {
         for type in [NSEvent.EventType.keyDown, .keyUp] {
@@ -1528,6 +1657,10 @@ enum DebugSnapshot {
             }
             if let path = d.string(forKey: "IndiumTypingCases"), let cases = try? String(contentsOfFile: path, encoding: .utf8) {
                 runTypingCases(cases, editor: target.editor, window: window)
+                return
+            }
+            if let path = d.string(forKey: "IndiumWritingToolsCases"), let cases = try? String(contentsOfFile: path, encoding: .utf8) {
+                runWritingToolsCases(cases, editor: target.editor, window: window)
                 return
             }
             if let path = d.string(forKey: "IndiumMathCases"), let cases = try? String(contentsOfFile: path, encoding: .utf8) {

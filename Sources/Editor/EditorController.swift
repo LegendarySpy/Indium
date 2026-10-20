@@ -70,6 +70,9 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// Typing waits until the cell is left to recalculate the table's formulas.
     var tableFormulasPending = false
     var frontmatterSession: FrontmatterSession?
+    /// The text selected when Writing Tools (or Siri) started on it: the only text it may
+    /// change, kept in step with its own edits (see WritingTools.swift).
+    var writingToolsSpan: NSRange?
     /// Undo registration is off for the frontmatter edit under way (until `textDidChange`).
     var frontmatterEditUnrecorded = false
     /// The frontmatter changed: table captions, which read its variables, are drawn again.
@@ -148,6 +151,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         tv.mathExpressionCompletionType = .no
         tv.smartInsertDeleteEnabled = false
         tv.isGrammarCheckingEnabled = false
+        // Lists and tables come back as Markdown (see WritingTools.swift), not rich text.
+        tv.allowedWritingToolsResultOptions = [.plainText, .list, .table]
         tv.usesInspectorBar = false
         tv.usesRuler = false
         tv.allowsDocumentBackgroundColorChange = false
@@ -344,6 +349,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         math.clearStops()
         math.hidePreview()
         note = newNote
+        writingToolsSpan = nil
         setText(newNote?.savedText ?? "")
         hasUnsavedEdits = false
         let length = storage.length
@@ -745,6 +751,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func textViewDidChangeSelection(_ notification: Notification) {
         guard !isLoading else { return }
+        if !textView.isWritingToolsActive { writingToolsSpan = nil }
         // On the next turn of the run loop, outside the event that moved the caret.
         if frontmatterSession != nil, !caretInFrontmatter { RunLoop.main.perform { [weak self] in MainActor.assumeIsolated { self?.endFrontmatterSession() } } }
         if selectedImageLine != nil, !changingImageSelection { clearImageSelection() }
