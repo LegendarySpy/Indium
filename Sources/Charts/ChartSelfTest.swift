@@ -2,15 +2,18 @@
 import Foundation
 
 /// Regression cases for charts, driven from the DEBUG harness (`-IndiumChartCases
-/// Tests/Charts/cases.tsv`). Foundation only, like the models it checks. One case per
-/// line, tab-separated, `↵` for a line break in a block:
+/// Tests/Charts/cases.tsv`). One case per line, tab-separated, `↵` for a line break in a
+/// block:
 ///
-/// - `model<TAB>block body<TAB>frontmatter<TAB>expected`: what the block draws, as `summary`
-///   writes it.
+/// - `model<TAB>block body<TAB>frontmatter or table<TAB>expected`: what the block draws, as
+///   `summary` writes it.
 /// - `points<TAB>typed<TAB><TAB>expected`: the points read from text, then `! problem` if any.
 /// - `setpoints<TAB>block body<TAB>typed points<TAB>expected body`: the block with its
 ///   `points:` set to those read from `typed`, as the inspector writes them.
 /// - `name<TAB>equation<TAB><TAB>expected`: a curve as the legend names it.
+/// - `setdata<TAB>block body<TAB>labels|title=values|…<TAB>expected body`: the block with its
+///   `labels:` and `series:` set from those fields, as the inspector writes them.
+/// - `legend<TAB>block body<TAB><TAB>expected`: the legend's names, ` | ` between them.
 enum ChartSelfTest {
     static func run(paths: [String]) -> Int {
         var failed = 0, total = 0
@@ -25,8 +28,14 @@ enum ChartSelfTest {
                 let got: String
                 switch p[0] {
                 case "model":
-                    let variables = NoteVariables.parse(noteText: p[2].replacingOccurrences(of: "↵", with: "\n"))
-                    got = summary(ChartModel.build(language: "chart", body: input, context: .init(table: { _ in nil }, variables: variables)))
+                    // The third field is the note's frontmatter, or a table any `id:` finds.
+                    let third = p[2].replacingOccurrences(of: "↵", with: "\n")
+                    let table = third.hasPrefix("|")
+                        ? third.components(separatedBy: "\n").enumerated().filter { $0.offset != 1 }
+                            .map { MarkdownScanner.splitRow($0.element).map { TableSpec.unescapeCell($0.text) } }
+                        : nil
+                    let variables = NoteVariables.parse(noteText: table == nil ? third : "")
+                    got = summary(ChartModel.build(language: "chart", body: input, context: .init(table: { _ in table }, variables: variables)))
                 case "points":
                     let parsed = ChartPoints.parse(input)
                     got = ChartPoints.text(parsed.entries) + (parsed.problem.map { " ! " + $0 } ?? "")
@@ -34,6 +43,17 @@ enum ChartSelfTest {
                     got = ChartBlockEditing.settingPoints(ChartPoints.parse(p[2]).entries, in: input).replacingOccurrences(of: "\n", with: "↵")
                 case "name":
                     got = ChartModel.readable(input)
+                case "setdata":
+                    var fields = p[2].components(separatedBy: "|")
+                    let labels = ChartBlockEditing.splitTyped(fields.removeFirst())
+                    let series = fields.map { f in
+                        let kv = f.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+                        return ChartBlockEditing.InlineSeries(title: kv[0], data: ChartBlockEditing.splitTyped(kv.count > 1 ? kv[1] : ""))
+                    }
+                    got = ChartBlockEditing.settingInlineData(labels: labels, series: series, in: input).replacingOccurrences(of: "\n", with: "↵")
+                case "legend":
+                    let m = ChartModel.build(language: "chart", body: input, context: .init(table: { _ in nil }, variables: NoteVariables.parse(noteText: "")))
+                    got = m.legendItems.map(\.name).joined(separator: " | ")
                 default:
                     got = "unknown case kind \(p[0])"
                 }
@@ -51,7 +71,7 @@ enum ChartSelfTest {
     static func summary(_ m: ChartModel) -> String {
         func n(_ v: Double) -> String { LinearFit.short(v) }
         func pt(_ p: ChartModel.Point) -> String { "(\(n(p.x)), \(n(p.y)))" }
-        var parts = ["\(m.kind)"]
+        var parts = ["\(m.kind)" + (m.donut ? " donut" : "")]
         if let c = m.categories { parts[0] += " labels " + c.joined(separator: ",") }
         if let x = m.xDomain { parts[0] += " x \(n(x.lowerBound))..\(n(x.upperBound))" }
         if let y = m.yDomain { parts[0] += " y \(n(y.lowerBound))..\(n(y.upperBound))" }

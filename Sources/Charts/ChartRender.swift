@@ -43,6 +43,8 @@ final class ChartRender {
         var height: CGFloat
         if let h = m.height {
             height = CGFloat(h) * (m.width.map { width / CGFloat($0) } ?? 1)
+        } else if m.kind == .pie {
+            height = min(max(width * 0.4, 180), 260)
         } else if m.kind == .graph {
             height = width * (m.width == nil ? 0.62 : 400 / 600)
         } else {
@@ -100,9 +102,18 @@ extension ChartModel {
     /// A legend for two or more things drawn; one series is named by its axis title.
     var showsLegend: Bool { legend && legendItems.count >= 2 }
 
-    /// What the legend lists: series as a dot (scatter) or a line, then curves.
+    /// What the legend lists: series as a dot (scatter) or a line, then curves. A pie's
+    /// slices, each with its share.
     var legendItems: [(name: String, color: ChartColor, dash: Dash, dot: Bool)] {
-        series.map { ($0.name.isEmpty ? "Untitled" : $0.name, .palette($0.color), .solid, kind == .scatter) }
+        if kind == .pie, let labels = categories, let slices = series.first?.segments.first {
+            let total = slices.map(\.y).reduce(0, +)
+            return slices.enumerated().map { i, p in
+                let share = total > 0 ? p.y / total * 100 : 0
+                let percent = share < 10 && share.rounded() != share ? String(format: "%.1f", share) : String(format: "%.0f", share)
+                return ("\(i < labels.count ? labels[i] : "") \(percent)%", .palette(i), .solid, true)
+            }
+        }
+        return series.map { ($0.name.isEmpty ? "Untitled" : $0.name, .palette($0.color), .solid, kind == .scatter) }
             + curves.map { ($0.name, $0.color, $0.dash, false) }
     }
 
@@ -242,11 +253,28 @@ private struct ChartView: View {
         if model.isEmpty {
             RoundedRectangle(cornerRadius: 8).fill(gridColor.opacity(0.6))
                 .overlay(Text(model.problems.isEmpty ? "Nothing to draw yet" : "Nothing to draw").font(.system(size: 12)).foregroundStyle(secondary))
+        } else if model.kind == .pie {
+            pieChart
         } else if let categories = model.categories {
             categoryChart(categories)
         } else {
             numericChart
         }
+    }
+
+    // MARK: Pies
+
+    /// Slices in the palette's order, a hairline apart; the legend says what each is.
+    private var pieChart: some View {
+        let slices = model.series.first?.segments.first ?? []
+        return Chart {
+            ForEach(Array(slices.enumerated()), id: \.offset) { i, p in
+                SectorMark(angle: .value("Value", p.y), innerRadius: .ratio(model.donut ? 0.58 : 0), angularInset: 1.5)
+                    .foregroundStyle(ChartPalette.color(.palette(i), dark: dark))
+                    .cornerRadius(3)
+            }
+        }
+        .chartLegend(.hidden)
     }
 
     // MARK: Text labels along x (bar charts, labels that aren't numbers)

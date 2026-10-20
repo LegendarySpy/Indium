@@ -6,15 +6,16 @@ import Foundation
 ///
 /// - ```` ```chart ````: the Charts plugin's YAML (phibr0/obsidian-charts). Data inline
 ///   (`labels`, `series`) or from a table named by a `^id` line under it (`id`, `layout`,
-///   `select`). Line and bar charts as the plugin draws them, plus `type: scatter`,
-///   `plot:` curves and `points: (1, 2), (2, 4)`, which only Indium reads.
+///   `select`). Line, bar, pie and doughnut charts as the plugin draws them, plus
+///   `type: scatter`, `plot:` curves and `points: (1, 2), (2, 4)` (named by
+///   `pointsTitle:`), which only Indium reads.
 /// - ```` ```desmos-graph ````: the Desmos plugin's equations (Nigecat/obsidian-desmos),
 ///   one LaTeX equation per line, with `key=value` settings before a `---` line.
 ///
 /// Foundation only: the block's text and the note in, a model out. Drawing is
 /// `ChartRender`'s.
 struct ChartModel: Hashable {
-    enum Kind: String, Hashable { case line, bar, scatter, graph }
+    enum Kind: String, Hashable { case line, bar, scatter, pie, graph }
     enum Dash: Hashable { case solid, dashed, dotted }
     enum Shape: Hashable { case point, open, cross }
 
@@ -60,6 +61,8 @@ struct ChartModel: Hashable {
     var legend = true
     var grid = true
     var stacked = false
+    /// A pie with a hole in the middle (`type: doughnut`).
+    var donut = false
     /// Share of the column (`width: 80%`) or points (`width: 400px`).
     var widthFraction: Double?
     var width: Double?
@@ -103,8 +106,10 @@ struct ChartModel: Hashable {
         case "line": m.kind = .line
         case "bar": m.kind = .bar
         case "scatter": m.kind = .scatter
+        case "pie": m.kind = .pie
+        case "doughnut", "donut": m.kind = .pie; m.donut = true
         default:
-            m.problems.append("Indium draws line, bar and scatter charts, not \(type) charts. Obsidian’s Charts plugin still can.")
+            m.problems.append("Indium draws line, bar, scatter and pie charts, not \(type) charts. Obsidian’s Charts plugin still can.")
             return m
         }
         m.title = yaml["title"]?.text
@@ -151,9 +156,11 @@ struct ChartModel: Hashable {
         let points = typed.entries.compactMap(\.point)
         let plots = yaml["plot"]?.list ?? yaml["plot"]?.text.map { [$0] } ?? []
         guard !columns.isEmpty || !points.isEmpty || !plots.isEmpty else {
-            m.problems.append("Nothing to draw yet. Add points like (3, 4) or a line like y = 3, or make the chart from a table.")
+            m.problems.append(m.kind == .pie ? "Nothing to draw yet. Add labels and values, or make the chart from a table."
+                              : "Nothing to draw yet. Add points like (3, 4) or a line like y = 3, or make the chart from a table.")
             return m
         }
+        if m.kind == .pie { return pie(m, labels: labels, columns: columns, points: typed.entries, plots: plots) }
         // Bars stand on labels: points in a bar chart without a table make their own.
         if m.kind == .bar, columns.isEmpty, labels.isEmpty {
             labels = Set(points.map(\.x)).sorted().map(ChartPoints.format)
@@ -214,7 +221,8 @@ struct ChartModel: Hashable {
             if !outside.isEmpty {
                 m.problems.append("\(ChartPoints.text(outside)) " + (outside.count == 1 ? "is" : "are") + " off this chart. \(offChart)")
             }
-            m.series.append(Series(name: m.kind == .bar ? "Values" : "Points", color: columns.count, segments: drawn.isEmpty ? [] : [drawn.sorted { $0.x < $1.x }]))
+            let name = yaml["pointsTitle"]?.text ?? (m.kind == .bar ? "Values" : "Points")
+            m.series.append(Series(name: name, color: columns.count, segments: drawn.isEmpty ? [] : [drawn.sorted { $0.x < $1.x }]))
         }
 
         // Curves read now, so the x range takes in upright lines and points among them.
@@ -307,6 +315,33 @@ struct ChartModel: Hashable {
                 m.yDomain = v > 0 ? 0...(v * 2) : v < 0 ? (v * 2)...0 : -1...1
             }
         }
+        return m
+    }
+
+    /// A pie: one slice per label, sized by the first column's values (or by typed points,
+    /// x the label and y the value). Its colors go slice by slice.
+    private static func pie(_ chart: ChartModel, labels: [String], columns: [(name: String, cells: [String])],
+                            points: [ChartPoints.Entry], plots: [String]) -> ChartModel {
+        var m = chart
+        var slices: [(label: String, value: Double)] = []
+        if let column = columns.first {
+            for (j, cell) in column.cells.enumerated() {
+                guard let v = Quantity.parse(cell)?.value, v.isFinite else { continue }
+                slices.append((j < labels.count ? labels[j] : "\(j + 1)", v))
+            }
+            if columns.count > 1 { m.problems.append("A pie shows one set of values; this one shows \(column.name.isEmpty ? "the first" : column.name).") }
+        } else {
+            slices = points.compactMap { e in e.point.map { (e.x, $0.y) } }
+        }
+        if slices.contains(where: { $0.value < 0 }) {
+            m.problems.append("A pie can’t show values below zero; they’re left out.")
+        }
+        slices = slices.filter { $0.value > 0 }
+        if !plots.isEmpty { m.problems.append("A pie has no axes to draw lines on.") }
+        m.categories = slices.map(\.label)
+        m.series = [Series(name: "", color: 0, segments: slices.isEmpty ? [] : [slices.enumerated().map { Point(x: Double($0.offset), y: $0.element.value) }])]
+        m.xTitle = nil
+        m.yTitle = nil
         return m
     }
 
@@ -624,6 +659,9 @@ enum MiniYAML {
         if v.hasPrefix("["), v.hasSuffix("]") { return .list(splitList(String(v.dropFirst().dropLast()))) }
         return .scalar(unquote(v))
     }
+
+    /// The values of an inline list's inside: `a, "b, c"` → [a, b, c].
+    static func list(_ s: String) -> [String] { splitList(s) }
 
     /// `a, "b, c", 'd'` → [a, b, c, d], respecting quotes.
     private static func splitList(_ s: String) -> [String] {
