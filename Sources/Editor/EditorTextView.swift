@@ -112,7 +112,7 @@ final class EditorTextView: NSTextView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        if let editor, editor.handleClick(at: point, clickCount: event.clickCount) { return }
+        if let editor, editor.handleClick(at: point, clickCount: event.clickCount, event: event) { return }
         var event = event
         if event.clickCount == 1 {
             clickAnchor = anchor(at: point)
@@ -204,14 +204,20 @@ final class EditorTextView: NSTextView {
         paste(sender)
     }
 
+    /// .csv and .tsv files dropped on the note come in as tables.
+    private func dataFiles(_ pb: NSPasteboard) -> [URL] {
+        let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        return urls.filter { ["csv", "tsv"].contains($0.pathExtension.lowercased()) }
+    }
+
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        if editor?.pasteboardHasImages(sender.draggingPasteboard) == true { return .copy }
+        if editor?.pasteboardHasImages(sender.draggingPasteboard) == true || !dataFiles(sender.draggingPasteboard).isEmpty { return .copy }
         return super.draggingEntered(sender)
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
         let op = super.draggingUpdated(sender)
-        if editor?.pasteboardHasImages(sender.draggingPasteboard) == true { return .copy }
+        if editor?.pasteboardHasImages(sender.draggingPasteboard) == true || !dataFiles(sender.draggingPasteboard).isEmpty { return .copy }
         return op
     }
 
@@ -222,6 +228,12 @@ final class EditorTextView: NSTextView {
             let index = characterIndexForInsertion(at: point)
             window?.makeFirstResponder(self)
             return editor?.insertImages(from: pb, at: index) ?? false
+        }
+        let files = dataFiles(pb)
+        if !files.isEmpty, let editor {
+            window?.makeFirstResponder(self)
+            setSelectedRange(NSRange(location: characterIndexForInsertion(at: convert(sender.draggingLocation, from: nil)), length: 0))
+            return files.map { editor.insertTable(fromFile: $0) }.contains(true)
         }
         return super.performDragOperation(sender)
     }

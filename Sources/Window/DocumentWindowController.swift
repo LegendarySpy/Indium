@@ -193,6 +193,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             if !self.inspectorVisible { self.setInspectorVisible(true, animated: true) }
             self.inspector?.focusChart()
         }
+        editor.onChartOpen = editor.onChartInserted
         editor.onOpenNote = { [weak self] url in self?.open(url) }
         editor.onImageNeedsAccess = { [weak self] in
             // Styling is under way; show the offer once it's done.
@@ -861,6 +862,20 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         }
     }
 
+    /// A .csv or .tsv file as a table at the caret, to chart or work with.
+    @objc func importTable(_ sender: Any?) {
+        guard let window else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.commaSeparatedText, .tabSeparatedText]
+        panel.prompt = "Insert"
+        panel.message = "Choose a CSV file. Its rows become a table in the note."
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let self, let url = panel.url else { return }
+            self.window?.makeFirstResponder(self.editor.textView)
+            if !self.editor.insertTable(fromFile: url) { NSSound.beep() }
+        }
+    }
+
     // MARK: Export
 
     @objc func exportPDF(_ sender: Any?) {
@@ -912,7 +927,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 .firstIndex(of: item.action!) ?? -2
             item.state = tag == level ? .on : .off
             return hasNote && editor.tableEditor == nil
-        case #selector(insertDisplayMath(_:)), #selector(insertImage(_:)):
+        case #selector(insertDisplayMath(_:)), #selector(insertImage(_:)), #selector(importTable(_:)):
             // Block insertions have no place in a table cell.
             return hasNote && editor.tableEditor == nil
         case #selector(newNote(_:)):

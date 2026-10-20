@@ -40,6 +40,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var onChartSelected: (() -> Void)?
     /// A chart or graph was just put in the note: the inspector takes the keys.
     var onChartInserted: (() -> Void)?
+    /// A chart was double-clicked: the inspector opens on it.
+    var onChartOpen: (() -> Void)?
     private var resolvingConflict = false
     private let imageControls = ImageControlsView()
     let selectionBar = SelectionBarView(frame: .zero)
@@ -267,6 +269,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func columnDidChange(_ column: CGFloat) {
         guard styler.config.columnWidth != column else { return }
         styler.config.columnWidth = column
+        resizeCharts()
         restyleTimer?.invalidate()
         let needsRestyle = !styler.regions.isEmpty
             || styler.blocks.contains {
@@ -275,6 +278,29 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard needsRestyle else { return }
         restyleTimer = Timer.scheduledTimer(withTimeInterval: textView.inLiveResize || textView.isAnimatingFrame ? 0.12 : 0, repeats: false) { [weak self] _ in
             self?.restyleAll()
+        }
+    }
+
+    private static var chartSettleTimer: Timer?
+
+    /// Charts take the new width in the same step as the text around them, so none sits at
+    /// its old size while the text reflows: their blocks are restyled now (their pictures
+    /// stretched for the moment, see `ChartRender.deferring`), and drawn sharp at the new
+    /// size once the width has held still briefly.
+    private func resizeCharts() {
+        let charts = styler.blocks.filter { if case let .code(language) = $0.kind { return ChartModel.handles(language) }; return false }
+        guard !charts.isEmpty else { return }
+        ChartRender.deferring = true
+        storage.beginEditing()
+        for block in charts where block.range.location < storage.length { styler.restyleBlock(at: block.range.location, in: storage) }
+        storage.endEditing()
+        updateFloats()
+        Self.chartSettleTimer?.invalidate()
+        Self.chartSettleTimer = Timer.scheduledTimer(withTimeInterval: 0.18, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                ChartRender.settled()
+                self?.textView.needsDisplay = true
+            }
         }
     }
 
@@ -831,6 +857,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         updateSelectionBar()
         math.selectionChanged()
         math.updatePreview()
+        // A click moved the caret: the inspector follows it, off a chart it was showing.
+        onContextChange?()
     }
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
@@ -1138,6 +1166,24 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// formulas) arrive as a Markdown table on lines of their own.
     func pasteTable(from pb: NSPasteboard) -> Bool {
         guard textView.isEditable, let table = TableClipboard.pageTable(from: pb) else { return false }
+        return insertTable(table, actionName: "Paste Table")
+    }
+
+    /// The cells of a .csv or .tsv file (an instrument's export, a spreadsheet saved as
+    /// CSV) as a Markdown table at the caret, ready to chart. False when it isn't one.
+    @discardableResult
+    func insertTable(fromFile url: URL) -> Bool {
+        guard textView.isEditable, let data = try? Data(contentsOf: url) else { return false }
+        let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
+        let rows = TableClipboard.fileGrid(text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text)
+        guard let header = rows.first, header.count >= 2 || rows.count >= 2 else { return false }
+        let table = TableSpec.markdown(header: header.map(TableSpec.escapeCell), body: rows.dropFirst().map { $0.map(TableSpec.escapeCell) },
+                                       alignments: [], dashes: nil)
+        return insertTable(table, actionName: "Import Table")
+    }
+
+    /// A table's Markdown on lines of its own at the caret, one undo step. Not inside code.
+    private func insertTable(_ table: String, actionName: String) -> Bool {
         let sel = textView.selectedRange()
         if let i = styler.blockIndex(containing: sel.location), case .code = styler.blocks[i].kind { return false }
         let start = lineRange(at: sel.location), end = lineRange(at: NSMaxRange(sel))
@@ -1149,7 +1195,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let lineBelowIsBlank = !atEnd && lineRange(at: NSMaxRange(end.full)).content.length == 0
         let after = NSMaxRange(sel) < NSMaxRange(end.content) ? "\n\n" : atEnd ? "\n" : (lineBelowIsBlank ? "" : "\n")
         let insert = before + table + after
-        replace(sel, with: insert, select: NSRange(location: sel.location + (insert as NSString).length, length: 0), actionName: "Paste Table")
+        replace(sel, with: insert, select: NSRange(location: sel.location + (insert as NSString).length, length: 0), actionName: actionName)
         return true
     }
 
@@ -1235,7 +1281,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return layoutManager.floatBlocks(origin: origin) + layoutManager.blockRects(in: chars, origin: origin)
     }
 
-    func handleClick(at point: NSPoint, clickCount: Int) -> Bool {
+    func handleClick(at point: NSPoint, clickCount: Int, event: NSEvent? = nil) -> Bool {
         if let editor = tableEditor, editor.hitTest(point) == nil { endTableEditing() }
         if let hit = caption(at: point) {
             if hit.onAction { recalculateFormulas(at: hit.formulas) } else { showFormulaList(formulasAt: hit.formulas, from: hit.rect) }
@@ -1278,9 +1324,17 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                     return true
                 }
             case .chart:
-                // Selected as an object; the inspector is where it's changed.
+                // Selected as an object, dragged to move it, and double-clicked to open it in
+                // the inspector, where it's changed.
                 if block.decoration.placement == .replace {
-                    selectChart(at: lineRange(at: block.range.location).content.location)
+                    let location = lineRange(at: block.range.location).content.location
+                    if clickCount == 2 {
+                        selectChart(at: location)
+                        onChartOpen?()
+                        return true
+                    }
+                    selectChart(at: location)
+                    if let event { _ = pressChart(at: location, from: event) }
                     return true
                 }
             }

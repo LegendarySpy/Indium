@@ -48,3 +48,37 @@ setpoints	type: line↵points: (1, 2)↵title: Speed		type: line↵title: Speed
 name	y = k x^2		y = k x²
 name	y = 2*x + x^{3}		y = 2·x + x³
 name	y = 3		y = 3
+# Pies: inline, from a table, from points, and what they can't show
+model	type: pie↵labels: [Water, Salt, Sugar]↵series:↵  - title: Mass↵    data: [50, 30, 20]		pie labels Water,Salt,Sugar | series  (0, 50) (1, 30) (2, 20)
+model	type: doughnut↵labels: [A, B, C]↵series:↵  - title: Share↵    data: [1, -2, 3]		pie donut labels A,C | series  (0, 1) (1, 3) | problem A pie can’t show values below zero; they’re left out.
+model	type: pie↵id: mix	| Part | Mass (g) | Moles |↵| - | - | - |↵| Water | 50 | 2.8 |↵| Salt | 30 | 0.5 |	pie labels Water,Salt | series  (0, 50) (1, 30) | problem A pie shows one set of values; this one shows Mass (g).
+model	type: pie↵points: (1, 5), (2, 5)↵plot: y = 3		pie labels 1,2 | series  (0, 5) (1, 5) | problem A pie has no axes to draw lines on.
+model	type: radar↵labels: [A, B]		line | problem Indium draws line, bar, scatter and pie charts, not radar charts. Obsidian’s Charts plugin still can.
+legend	type: pie↵labels: [Water, Salt, Sugar]↵series:↵  - title: Mass↵    data: [50, 30, 20]		Water  50% | Salt  30% | Sugar  20%
+legend	type: pie↵labels: [A, B, C]↵series:↵  - title: Mass↵    data: [1, 1, 1]		A  33% | B  33% | C  33%
+# Points get a name of their own
+model	type: scatter↵points: (1, 2), (2, 4)↵pointsTitle: Trial 1↵plot: y = 2x		scatter x 1..2 | series Trial 1 (1, 2) (2, 4) | curve y = 2x (1, 2)..(2, 4)
+legend	type: scatter↵points: (1, 2), (2, 4)↵pointsTitle: Trial 1↵plot: y = 2x		Trial 1 | y = 2x
+# Tables: columns as series, text labels as categories
+model	type: line↵id: results	| Time (s) | Distance (m) | Speed |↵| - | - | - |↵| 0 | 0 | 0 |↵| 1 | 2 | 2 |↵| 2 | 8 | 4 |	line x 0..2 | series Distance (m) (0, 0) (1, 2) (2, 8) | series Speed (0, 0) (1, 2) (2, 4)
+model	type: bar↵id: results↵select: [Yield]	| Group | Yield | Cost |↵| - | - | - |↵| A | 3 | 1 |↵| B | 5 | 2 |	bar labels A,B | series Yield (0, 3) (1, 5)
+# Inline values written back as the inspector writes them
+setdata	type: bar↵labels: [A, B, C]↵series:↵  - title: Values↵    data: [3, 5, 2]↵title: Sales	A, B, C, D|Values=3, 5, 2, 7	type: bar↵labels: [A, B, C, D]↵series:↵  - title: Values↵    data: [3, 5, 2, 7]↵title: Sales
+setdata	type: bar↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]	A, B|X=1, 2|Trial 2=3, 4	type: bar↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]↵  - title: Trial 2↵    data: [3, 4]
+setdata	type: bar↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]↵bestFit: true	A, B|	type: bar↵labels: [A, B]↵series:↵  - title: ""↵    data: []↵bestFit: true
+setdata	type: pie	Water, "Salt, fine"|Mass: total=50, 30	type: pie↵labels: [Water, "Salt, fine"]↵series:↵  - title: "Mass: total"↵    data: [50, 30]
+setdata	type: bar↵labels: [A]↵series:↵  - title: X↵    data: [1]		type: bar
+# Styles: soft unless the block names another; one it doesn't know (or the retired vivid and gradient) is soft too
+model	type: bar↵style: mono↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]		bar labels A,B | series X (0, 1) (1, 2) | style mono
+model	type: bar↵style: Vivid↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]		bar labels A,B | series X (0, 1) (1, 2)
+model	type: bar↵style: neon↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]		bar labels A,B | series X (0, 1) (1, 2)
+model	type: pie↵style: hatched↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 3]		pie labels A,B | series  (0, 1) (1, 3) | style hatched
+model	type: line↵style: gradient↵points: (0, 1), (1, 2)		line x 0..1 | series Points (0, 1) (1, 2)
+model	type: bar↵style: hatched↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]		bar labels A,B | series X (0, 1) (1, 2) | style hatched
+model	type: scatter↵style: Dotted↵points: (0, 1), (1, 2)		scatter x 0..1 | series Points (0, 1) (1, 2) | style dotted
+# Years: quoted labels are names, bare ones numbers
+model	type: line↵labels: ["2019", "2020"]↵series:↵  - title: R↵    data: [1, 2]		line labels 2019,2020 | series R (0, 1) (1, 2)
+model	type: line↵labels: [2019, 2020]↵series:↵  - title: R↵    data: [1, 2]		line x 2019..2020 | series R (2019, 1) (2020, 2)
+name	y=\sin(x)		y=sin(x)
+name	y=2^x		y=2ˣ
+name	y=\left(x+1\right)^2		y=(x+1)²

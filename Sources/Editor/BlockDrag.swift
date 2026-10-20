@@ -308,7 +308,7 @@ extension EditorController {
     func hoverTableGrip(at point: NSPoint) {
         if tableGrip?.dragging == true { return }
         guard textView.isEditable, AppSettings.shared.syntax != .always else { return hideTableGrip() }
-        for table in visibleTables() {
+        for table in visibleTables() + visibleCharts().map({ ($0.location, $0.content, CGFloat(24)) }) {
             let frame = Self.gripFrame(table: table.content, headerHeight: table.headerHeight)
             guard table.content.union(frame).insetBy(dx: -4, dy: -4).contains(point) else { continue }
             let grip = tableGrip ?? {
@@ -318,7 +318,11 @@ extension EditorController {
             }()
             grip.frame = frame
             let location = table.location
-            grip.onDrag = { [weak self] event in self?.dragTable(at: location, from: event) }
+            grip.onDrag = { [weak self] event in
+                guard let self else { return }
+                if self.visibleCharts().contains(where: { $0.location == location }) { self.dragChart(at: location, from: event) }
+                else { self.dragTable(at: location, from: event) }
+            }
             return
         }
         hideTableGrip()
@@ -353,19 +357,29 @@ extension EditorController {
     }
 
     private func dragTable(at location: Int, from event: NSEvent) {
-        guard let window = textView.window, let grip = tableGrip else { return }
+        guard let grip = tableGrip else { return }
         if let editing = styler.editingTableLocation, editing == location { endTableEditing() }
         guard let source = layoutModel.group(containing: location),
               let lifted = visibleTables().first(where: { $0.location == location })?.content else { return }
         grip.dragging = true
         grip.isHidden = true
-        // Only the table moves: a selection elsewhere and its bar go.
-        selectionBar.dismiss()
-        textView.setSelectedRange(NSRange(location: source.range.location, length: 0))
         defer {
             grip.dragging = false
             grip.removeFromSuperview()
         }
+        dragBlock(source, lifted: lifted, from: event)
+    }
+
+    /// Lifts the block `source`, drawn at `lifted`, and follows the pointer until it's
+    /// dropped (moved, one undo step) or Escape puts it back. Tables and charts move so.
+    func dragBlock(_ source: LayoutGroup, lifted: NSRect, from event: NSEvent) {
+        guard let window = textView.window else { return }
+        // Only the block moves: a selection elsewhere and its bar go.
+        selectionBar.dismiss()
+        clearChartSelection()
+        changingChartSelection = true
+        textView.setSelectedRange(NSRange(location: source.range.location, length: 0))
+        changingChartSelection = false
 
         // A lifted picture of the table follows the pointer: a wide one shrunk to under
         // half the view, so it never hides where it's going.
@@ -383,6 +397,8 @@ extension EditorController {
             picture.image = image
         }
         picture.wantsLayer = true
+        // On the page's paper, so a chart (drawn on nothing) lifts as a card.
+        picture.layer?.backgroundColor = Palette.background.cgColor
         picture.layer?.cornerRadius = 8 * scale
         picture.layer?.masksToBounds = true
         let ghost = NSView(frame: NSRect(origin: snapshotRect.origin, size: size))
@@ -631,11 +647,14 @@ extension EditorController {
     func moveBlock(_ group: LayoutGroup, to target: DropTarget) {
         guard let edit = layoutModel.move(group, to: target),
               edit.text != (storage.string as NSString).substring(with: edit.range) else { return }
-        let isTable = styler.blocks.contains { block in
-            if case .table = block.kind { return NSLocationInRange(block.range.location, group.range) }
-            return false
+        let kind = styler.blocks.first { NSLocationInRange($0.range.location, group.range) }?.kind
+        let name: String
+        switch kind {
+        case .table: name = "Move Table"
+        case let .code(language) where ChartModel.handles(language): name = "Move Chart"
+        default: name = "Move Block"
         }
         replaceKeepingScroll(edit.range, with: edit.text, select: NSRange(location: edit.range.location + edit.movedOffset, length: 0),
-                             actionName: isTable ? "Move Table" : "Move Block")
+                             actionName: name)
     }
 }

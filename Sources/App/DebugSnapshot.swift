@@ -930,6 +930,11 @@ enum DebugSnapshot {
                         }
                     }
                 case ">page": check("page", TableClipboard.pageTable(from: pb), joined)
+                case ">file":
+                    // The plain text given as a .csv or .tsv file's contents, read into cells.
+                    let text = pb.string(forType: .string) ?? ""
+                    let json = (try? JSONEncoder().encode(TableClipboard.fileGrid(text))).flatMap { String(data: $0, encoding: .utf8) }
+                    check("file", json, joined)
                 case ">cell": check("cell into the page", TableClipboard.singleCell(from: pb), joined)
                 case ">string": check("string", pb.string(forType: .string), joined)
                 case ">tsv": check("tsv", pb.string(forType: TableClipboard.tabularType), joined)
@@ -982,15 +987,26 @@ enum DebugSnapshot {
     /// screenshotting the drop indicator mid-drag; `escape:n,prefix,where` drags and presses Escape;
     /// `text`, `undo`, `redo`, `shot:path`. `zone:n,kind[,shot]` drags table n to the middle of the
     /// first drop zone of a kind: `end`, `endleft`, `endright`, `column`, `below`, `gap`, `side`.
+    /// `chartdrag:n,prefix,where[,shot]` presses chart n itself and drags it the same way;
+    /// `chartclick:n,clicks` clicks it once or twice, then prints the inspector's title.
+    /// `click:prefix` clicks at the start of the block beginning with `prefix`; `inspector` opens it, `panel`
+    /// prints what the inspector shows, as it is; `insp:step` is an inspector step (see
+    /// `InspectorView.debugStep`); `scroll:y` scrolls the note; `resize:WxH[,shot]` sizes the
+    /// window and prints each chart's frame; `settle` waits for charts to draw sharp.
     /// Each mutating step is its own undo group.
     static func runDragSteps(_ steps: [String], editor: EditorController, window: NSWindow) {
         let tv = editor.textView
         let undo = tv.undoManager
         if let undo, undo.groupingLevel > 0 { undo.endUndoGrouping() }
         undo?.groupsByEvent = false
-        func mouse(_ type: NSEvent.EventType, _ p: NSPoint) -> NSEvent {
+        func mouse(_ type: NSEvent.EventType, _ p: NSPoint, clicks: Int = 1) -> NSEvent {
             NSEvent.mouseEvent(with: type, location: tv.convert(p, to: nil), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                               windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: clicks, pressure: 1)!
+        }
+        func chart(_ n: Int) -> NSRect? {
+            let charts = editor.visibleCharts().sorted { $0.location < $1.location }
+            guard n < charts.count else { print("  no chart \(n)"); return nil }
+            return charts[n].content
         }
         func hover(_ n: Int) -> BlockHandleView? {
             let tables = editor.visibleTables().sorted { $0.location < $1.location }
@@ -1046,6 +1062,74 @@ enum DebugSnapshot {
                 undo?.endUndoGrouping()
                 EditorController.onDragStep = nil
                 print("  undo name:", undo?.undoActionName ?? "-", "grip left:", editor.tableGrip == nil)
+            case "chartdrag":
+                guard args.count >= 3, let rect = chart(Int(args[0]) ?? 0),
+                      let target = editor.visibleGroupFrames().first(where: { $0.group.text.hasPrefix(args[1]) }) else { print("  CHARTDRAG: nothing \(args)"); break }
+                let r = target.rect
+                let p = args[2] == "before" ? NSPoint(x: r.midX, y: r.minY + min(6, r.height / 4)) : NSPoint(x: r.midX, y: r.maxY - min(6, r.height / 4))
+                if args.count > 3 { EditorController.onDragStep = { debugShot(window: window, path: args[3]) } }
+                let start = NSPoint(x: rect.midX, y: rect.midY)
+                NSApp.postEvent(mouse(.leftMouseDragged, NSPoint(x: start.x + 2, y: start.y + 1)), atStart: false)
+                NSApp.postEvent(mouse(.leftMouseDragged, NSPoint(x: (start.x + p.x) / 2, y: (start.y + p.y) / 2)), atStart: false)
+                NSApp.postEvent(mouse(.leftMouseDragged, p), atStart: false)
+                NSApp.postEvent(mouse(.leftMouseUp, p), atStart: false)
+                undo?.beginUndoGrouping()
+                tv.mouseDown(with: mouse(.leftMouseDown, start))
+                undo?.endUndoGrouping()
+                EditorController.onDragStep = nil
+                print("  CHART DRAGGED to \(args[1]) \(args[2]); undo name:", undo?.undoActionName ?? "-", "selected chart:", editor.styler.selectedChart.map(String.init) ?? "none")
+            case "chartclick":
+                guard let rect = chart(Int(args.first ?? "0") ?? 0) else { break }
+                let clicks = Int(args.count > 1 ? args[1] : "1") ?? 1
+                let p = NSPoint(x: rect.midX, y: rect.midY)
+                for c in 1...clicks {
+                    NSApp.postEvent(mouse(.leftMouseUp, p, clicks: c), atStart: false)
+                    tv.mouseDown(with: mouse(.leftMouseDown, p, clicks: c))
+                }
+                RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+                let controller = window.windowController as? DocumentWindowController
+                print("  CLICKED chart \(clicks)x: selected", editor.styler.selectedChart.map(String.init) ?? "none",
+                      "inspector", controller?.debugInspector.map { $0.isHiddenOrHasHiddenAncestor ? "hidden" : ($0.debugDump().components(separatedBy: "\n").first ?? "") } ?? "closed")
+            case "click":
+                guard let target = editor.visibleGroupFrames().first(where: { $0.group.text.hasPrefix(parts.count > 1 ? parts[1] : "") }) else { print("  CLICK: no block \(parts)"); break }
+                let p = NSPoint(x: target.rect.minX + 4, y: target.rect.minY + 6)
+                NSApp.postEvent(mouse(.leftMouseUp, p), atStart: false)
+                tv.mouseDown(with: mouse(.leftMouseDown, p))
+                RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+                print("  CLICKED \(parts[1]): caret", tv.selectedRange().location, "selected chart", editor.styler.selectedChart.map(String.init) ?? "none")
+            case "inspector":
+                // Opens the inspector, as its button does.
+                let controller = window.windowController as? DocumentWindowController
+                if controller?.debugInspector == nil { controller?.toggleInspector(nil) }
+            case "panel":
+                let controller = window.windowController as? DocumentWindowController
+                print("  PANEL:", controller?.debugInspector?.debugDump().components(separatedBy: "\n").prefix(2).joined(separator: " / ") ?? "closed")
+            case "insp":
+                let controller = window.windowController as? DocumentWindowController
+                undo?.beginUndoGrouping()
+                controller?.debugInspector?.debugStep(parts.count > 1 ? parts[1] : "")
+                undo?.endUndoGrouping()
+            case "resize":
+                // `resize:WxH[,shot]`: the window to that size in one step, drawn at once, as a
+                // frame of a live resize or zoom is; then each chart's frame against its block.
+                let wh = (args.first ?? "").split(separator: "x").compactMap { Double($0) }
+                guard wh.count == 2 else { break }
+                window.setContentSize(NSSize(width: wh[0], height: wh[1]))
+                window.contentView?.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                if args.count > 1 { debugShot(window: window, path: args[1]) }
+                for block in editor.visibleBlocks() {
+                    guard case let .chart(chart) = block.decoration.content else { continue }
+                    let fits = abs(block.area.height - (block.content.height + block.decoration.padding * 2)) < 1.5
+                    print("  CHART at \(block.range.location): drawn \(Int(block.content.width))x\(Int(block.content.height)) render \(Int(chart.size.width))x\(Int(chart.size.height))",
+                          "block height fits:", fits, "stretched:", ChartRender.deferring, block.decoration.placement == .replace ? "" : "\(block.decoration.placement)")
+                }
+            case "settle":
+                RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+                window.displayIfNeeded()
+                print("  SETTLED stretched:", ChartRender.deferring)
+            case "scroll":
+                tv.scroll(NSPoint(x: 0, y: Double(parts.count > 1 ? parts[1] : "0") ?? 0))
             case "undo": undo?.undo()
             case "redo": undo?.redo()
             case "text": print("NOTE TEXT:\n" + editor.text + "\nEND NOTE TEXT")
@@ -1316,6 +1400,24 @@ enum DebugSnapshot {
         }
         // `-IndiumChartCases Tests/Charts/cases.tsv`: what chart blocks draw, and points and
         // curves written back into them (see ChartSelfTest).
+        // `-IndiumChartBench YES`: how long Swift Charts takes to draw a chart, at a run of
+        // widths as a window resize would ask for them.
+        if d.bool(forKey: "IndiumChartBench") {
+            let bodies = ["type: bar\nlabels: [A, B, C, D]\nseries:\n  - title: T1\n    data: [3, 5, 2, 6]\n  - title: T2\n    data: [4, 4, 3, 5]",
+                          "type: scatter\npoints: (1, 2.1), (2, 3.9), (3, 6.2), (4, 7.8), (5, 9.9)\nbestFit: true\nstyle: hatched",
+                          "type: pie\nlabels: [A, B, C]\nseries:\n  - title: S\n    data: [5, 3, 2]"]
+            for body in bodies {
+                let model = ChartModel.build(language: "chart", body: body, context: .init(table: { _ in nil }, variables: NoteVariables.parse(noteText: "")))
+                let start = Date()
+                var n = 0
+                for w in stride(from: 400.0, through: 700.0, by: 10) {
+                    _ = ChartRender.make(model, column: w).image(dark: false)
+                    n += 1
+                }
+                print("CHART BENCH \(model.kind): \(String(format: "%.1f", Date().timeIntervalSince(start) * 1000 / Double(n))) ms a render, \(n) widths")
+            }
+            exit(0)
+        }
         if let paths = d.string(forKey: "IndiumChartCases") {
             exit(ChartSelfTest.run(paths: paths.split(separator: ",").map(String.init)) == 0 ? 0 : 1)
         }
@@ -1864,6 +1966,11 @@ enum DebugSnapshot {
                         switch step {
                         case "undo": undo.undo()
                         case "redo": undo.redo()
+                        case let s where s.hasPrefix("import:"):
+                            // A .csv or .tsv file as a table at the caret, as Table from CSV File does.
+                            undo.beginUndoGrouping()
+                            target.editor.insertTable(fromFile: URL(fileURLWithPath: String(s.dropFirst(7))))
+                            undo.endUndoGrouping()
                         case let s where s.hasPrefix("caret:"):
                             target.editor.textView.setSelectedRange(NSRange(location: Int(s.dropFirst(6)) ?? 0, length: 0))
                         case let s where s.hasPrefix("type:"):

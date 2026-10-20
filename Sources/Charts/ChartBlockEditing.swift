@@ -175,6 +175,59 @@ enum ChartBlockEditing {
         settingChart("points", raw: points.isEmpty ? nil : ChartPoints.text(points), in: body)
     }
 
+    // MARK: Values written in the chart
+
+    /// One of the plugin's `series:` items: a name and a value for each label.
+    struct InlineSeries: Equatable {
+        var title: String
+        var data: [String]
+    }
+
+    /// The chart's own `labels:` and `series:`, as written.
+    static func inlineData(_ body: String) -> (labels: [String], series: [InlineSeries]) {
+        let yaml = MiniYAML.parse(body)
+        let series = (yaml["series"]?.items ?? []).map { InlineSeries(title: $0["title"]?.text ?? "", data: $0["data"]?.list ?? []) }
+        return (yaml["labels"]?.list ?? [], series)
+    }
+
+    /// `labels: [A, B]` and the `series:` list rewritten in the plugin's own layout, each
+    /// taken out when empty:
+    ///
+    ///     series:
+    ///       - title: Trial 1
+    ///         data: [3, 5]
+    static func settingInlineData(labels: [String], series: [InlineSeries], in body: String) -> String {
+        var out = settingChart("labels", raw: labels.isEmpty ? nil : yamlList(labels), in: body)
+        guard !series.isEmpty else { return settingChart("series", to: nil, in: out) }
+        let marker = "\u{1}"
+        out = settingChart("series", raw: marker, in: out)
+        var lines = out.components(separatedBy: "\n")
+        guard let i = lines.firstIndex(where: { $0.contains(marker) }) else { return out }
+        let pad = String(lines[i].prefix { $0 == " " })
+        lines[i] = pad + "series:"
+        let items = series.flatMap { s in
+            ["\(pad)  - title: \(s.title.isEmpty ? "\"\"" : yamlScalar(s.title))", "\(pad)    data: \(yamlList(s.data))"]
+        }
+        lines.insert(contentsOf: items, at: i + 1)
+        return lines.joined(separator: "\n")
+    }
+
+    /// `[a, "b, c", 3]`: quoted where a comma, bracket or quote would split it.
+    static func yamlList(_ values: [String]) -> String {
+        "[" + values.map { v in
+            v.contains(where: { ",[]\"'#:".contains($0) }) || v != v.trimmingCharacters(in: .whitespaces)
+                ? "\"" + v.replacingOccurrences(of: "\"", with: "'") + "\"" : v
+        }.joined(separator: ", ") + "]"
+    }
+
+    /// `a, b, c` as typed into one field: split at commas, outside quotes.
+    static func splitTyped(_ text: String) -> [String] {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return [] }
+        let inner = trimmed.hasPrefix("[") && trimmed.hasSuffix("]") ? String(trimmed.dropFirst().dropLast()) : trimmed
+        return MiniYAML.list(inner)
+    }
+
     /// `select:` the columns to draw; taken out when it's all of them.
     static func settingSelected(_ selected: [String], of all: [String], in body: String) -> String {
         let quoted = selected.map { $0.contains(",") || $0.contains("]") ? "\"\($0)\"" : $0 }

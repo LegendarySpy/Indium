@@ -19,6 +19,9 @@ final class InspectorView: NSView, NSTextFieldDelegate {
     private let stack = NSStackView()
     private let variables = VariablesSection()
     private let chart = ChartSection()
+    /// Where the chart shown starts, while one is: its controls change that chart and no
+    /// other, whatever the caret has done since.
+    private var shownChart: Int?
     private var refreshQueued = false
 
     override init(frame: NSRect) {
@@ -41,11 +44,11 @@ final class InspectorView: NSView, NSTextFieldDelegate {
         stack.addArrangedSubview(variables)
         chart.isHidden = true
         chart.onEdit = { [weak self] name, edit in
-            guard let self, let editor = self.editor, case let .chart(location) = editor.inspectorContext else { return }
+            guard let self, let editor = self.editor, let location = self.shownChart, editor.chartBlock(containing: location) != nil else { return }
             editor.changeChart(at: location, actionName: name, edit)
         }
         chart.onEditSource = { [weak self] in
-            guard let self, let editor = self.editor, case let .chart(location) = editor.inspectorContext else { return }
+            guard let self, let editor = self.editor, let location = self.shownChart, editor.chartBlock(containing: location) != nil else { return }
             editor.showChartSource(at: location)
         }
         variables.onChange = { [weak self] name, edit in self?.editor?.changeVariables(actionName: name, edit) ?? false }
@@ -124,6 +127,7 @@ final class InspectorView: NSView, NSTextFieldDelegate {
             return
         }
         chart.isHidden = true
+        shownChart = nil
         switch editor.inspectorContext {
         case .note: titleLabel.stringValue = "Note"
         case .table: titleLabel.stringValue = "Table"
@@ -133,6 +137,7 @@ final class InspectorView: NSView, NSTextFieldDelegate {
                 titleLabel.stringValue = graph ? "Graph" : "Chart"
                 chart.show(graph: graph, body: info.body, model: info.model, columns: info.columns, editable: editor.textView.isEditable)
                 chart.isHidden = false
+                shownChart = location
             }
         }
         let text = editor.text
@@ -646,6 +651,7 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
     // Chart
     private let chartGrid = NSGridView()
     private let type = NSPopUpButton()
+    private let style = NSPopUpButton()
     private let titleField = InspectorField()
     private let xTitle = InspectorField()
     private let yTitle = InspectorField()
@@ -655,7 +661,10 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
     private let bestFit = NSButton(checkboxWithTitle: "Line of best fit", target: nil, action: nil)
     private let zero = NSButton(checkboxWithTitle: "Start y at zero", target: nil, action: nil)
     private let legend = NSButton(checkboxWithTitle: "Legend", target: nil, action: nil)
+    private let valuesHeader = SectionHeader(title: "Values")
+    private let values = InlineDataList()
     private let pointsHeader = SectionHeader(title: "Points")
+    private let pointsName = InspectorField()
     private let points = PointList()
     private let curvesHeader = SectionHeader(title: "Lines and Curves")
     private let curves = EquationList(styled: false, placeholder: "y = 2x + 1, or y = 3")
@@ -675,13 +684,26 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
-        type.addItems(withTitles: ["Line", "Bar", "Scatter"])
+        type.addItems(withTitles: Self.types.map(\.title))
         type.controlSize = .small
         type.font = InspectorStyle.font
         type.target = self
         type.action = #selector(typeChanged)
         type.setAccessibilityLabel("Chart Type")
+        style.addItems(withTitles: ChartModel.Style.allCases.map { $0.rawValue.capitalized })
+        // Each with a picture of three bars drawn its way.
+        let darkMenu = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        for (item, kind) in zip(style.itemArray, ChartModel.Style.allCases) { item.image = ChartPattern.preview(kind, dark: darkMenu) }
+        style.controlSize = .small
+        style.font = InspectorStyle.font
+        style.target = self
+        style.action = #selector(styleChanged)
+        style.setAccessibilityLabel("Chart Style")
+        style.toolTip = "Soft is Indium’s own muted colors, Mono shades of the text color for printing; Hatched and Dotted fill bars and slices with lines or dots"
+        pointsName.placeholderString = "Name, like Trial 1"
+        pointsName.toolTip = "What the points are, for the legend"
         for (field, key, label) in [(titleField, "title", "Title"), (xTitle, "xTitle", "X Axis Title"), (yTitle, "yTitle", "Y Axis Title"),
+                                    (pointsName, "pointsTitle", "Name of Points"),
                                     (left, "left", "Smallest x"), (right, "right", "Largest x"), (bottom, "bottom", "Smallest y"), (top, "top", "Largest y")] {
             field.delegate = self
             field.setAccessibilityLabel(label)
@@ -708,6 +730,7 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
         editSource.toolTip = "Show this chart’s Markdown in the note"
 
         chartGrid.addRow(with: [InspectorStyle.label("Type"), type])
+        chartGrid.addRow(with: [InspectorStyle.label("Style"), style])
         chartGrid.addRow(with: [InspectorStyle.label("Title"), titleField])
         chartGrid.addRow(with: [InspectorStyle.label("X axis"), xTitle])
         chartGrid.addRow(with: [InspectorStyle.label("Y axis"), yTitle])
@@ -743,6 +766,10 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
         curvesHeader.addButton.action = #selector(addCurve)
         curvesHeader.addButton.toolTip = "Add Line or Curve"
         curvesHeader.addButton.setAccessibilityLabel("Add Line or Curve")
+        valuesHeader.addButton.target = self
+        valuesHeader.addButton.action = #selector(addValues)
+        valuesHeader.addButton.toolTip = "Add Values"
+        valuesHeader.addButton.setAccessibilityLabel("Add Values")
         pointsHeader.addButton.target = self
         pointsHeader.addButton.action = #selector(addPoint)
         pointsHeader.addButton.toolTip = "Add Points"
@@ -755,6 +782,9 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
         curves.onCommit = { [weak self] lines, name in
             self?.onEdit?(name) { ChartBlockEditing.settingPlots(lines.map(\.expression), in: $0) }
         }
+        values.onCommit = { [weak self] labels, series, name in
+            self?.onEdit?(name) { ChartBlockEditing.settingInlineData(labels: labels, series: series, in: $0) }
+        }
         points.onCommit = { [weak self] entries, name in
             self?.onEdit?(name) { ChartBlockEditing.settingPoints(entries, in: $0) }
         }
@@ -764,10 +794,10 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
         column.spacing = 8
         column.translatesAutoresizingMaskIntoConstraints = false
         let views: [NSView] = [equationsHeader, equations, rangeHeader, rangeGrid, gridLines,
-                               chartGrid, seriesHeader, series, pointsHeader, points, curvesHeader, curves, curvesHint,
+                               chartGrid, seriesHeader, series, valuesHeader, values, pointsHeader, pointsName, points, curvesHeader, curves, curvesHint,
                                optionsHeader, options, problems, source, editSource]
         for v in views { column.addArrangedSubview(v) }
-        for v in [equations, rangeGrid, chartGrid, points, curvesHint] { column.setCustomSpacing(16, after: v) }
+        for v in [equations, rangeGrid, chartGrid, values, points, curvesHint] { column.setCustomSpacing(16, after: v) }
         column.setCustomSpacing(6, after: curves)
         column.setCustomSpacing(16, after: gridLines)
         column.setCustomSpacing(16, after: series)
@@ -779,13 +809,17 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
             column.topAnchor.constraint(equalTo: topAnchor),
             column.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
-        for v in [equationsHeader, equations, rangeHeader, chartGrid, seriesHeader, optionsHeader, pointsHeader, points, curvesHeader, curves,
+        for v in [equationsHeader, equations, rangeHeader, chartGrid, seriesHeader, optionsHeader, valuesHeader, values, pointsHeader, points, curvesHeader, curves,
                   curvesHint, problems, source] as [NSView] {
             v.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
         }
         // Its fields end where the equations' fields do, before their menu buttons.
         rangeGrid.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -20).isActive = true
+        pointsName.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -24).isActive = true
     }
+
+    /// The chart types offered, as the menu shows them and as the block writes them.
+    private static let types: [(title: String, key: String)] = [("Line", "line"), ("Bar", "bar"), ("Scatter", "scatter"), ("Pie", "pie"), ("Doughnut", "doughnut")]
 
     required init?(coder: NSCoder) { fatalError() }
 
@@ -793,6 +827,7 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
         self.graph = graph
         for v in [equationsHeader, equations, rangeHeader, rangeGrid, gridLines] as [NSView] { v.isHidden = !graph }
         for v in [chartGrid, optionsHeader, bestFit.superview!, curvesHeader, curvesHint, pointsHeader, points] as [NSView] { v.isHidden = graph }
+        for v in [valuesHeader, values, pointsName] as [NSView] { v.isHidden = true }
         func set(_ field: InspectorField, _ value: String?, placeholder: String) {
             field.isEditable = editable
             field.placeholderString = placeholder
@@ -810,7 +845,7 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
             set(top, s["top"], placeholder: "7")
             gridLines.state = s["grid"]?.lowercased() == "false" ? .off : .on
             gridLines.isEnabled = editable
-            equations.show(lines: ChartBlockEditing.graphLines(body), rows: model.rows, dark: dark, editable: editable)
+            equations.show(lines: ChartBlockEditing.graphLines(body), rows: model.rows, style: model.style, dark: dark, editable: editable)
             equationsHeader.addButton.isEnabled = editable
             unplaced = model.problems.filter { p in !ChartBlockEditing.graphLines(body).contains { p.hasPrefix($0.expression + ":") } }
             source.stringValue = "Type equations like y = x^2 or y = 2x + 1, or LaTeX as in Desmos. Variables from the note’s properties work by name."
@@ -819,10 +854,17 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
             curves.isHidden = true
         } else {
             let s = ChartBlockEditing.chartSettings(body)
-            let kind = s["type"]?.lowercased() ?? "line"
-            let known = ["line", "bar", "scatter"]
+            var kind = s["type"]?.lowercased() ?? "line"
+            if kind == "donut" { kind = "doughnut" }
+            let known = Self.types.map(\.key)
+            let pie = kind == "pie" || kind == "doughnut"
             type.selectItem(at: known.firstIndex(of: kind) ?? 0)
             type.isEnabled = editable && known.contains(kind)
+            // A pie has no axes.
+            chartGrid.row(at: 3).isHidden = pie
+            chartGrid.row(at: 4).isHidden = pie
+            style.selectItem(at: ChartModel.Style.allCases.firstIndex(of: model.style) ?? 0)
+            style.isEnabled = editable
             set(titleField, s["title"], placeholder: "Chart title")
             set(xTitle, s["xTitle"], placeholder: model.xTitle ?? "Across, like Time (s)")
             set(yTitle, s["yTitle"], placeholder: model.yTitle ?? "Up, like Distance (m)")
@@ -832,17 +874,31 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
             for b in [bestFit, zero, legend] { b.isEnabled = editable }
             showSeries(columns: columns, selected: MiniYAML.parse(body)["select"]?.list, editable: editable)
             let plots = ChartBlockEditing.plots(body)
-            curves.show(lines: plots.map { ChartBlockEditing.GraphLine(expression: $0) }, rows: model.rows, dark: dark, editable: editable)
+            curves.show(lines: plots.map { ChartBlockEditing.GraphLine(expression: $0) }, rows: model.rows, style: model.style, dark: dark, editable: editable)
             // An empty field to type the first one in, so there's no + to find first.
             if plots.isEmpty, editable { curves.addRow(focus: false) }
             curves.isHidden = plots.isEmpty && !curves.hasDraft
             curvesHeader.addButton.isEnabled = editable
-            points.show(ChartBlockEditing.points(body), editable: editable)
+            let typed = ChartBlockEditing.points(body)
+            points.show(typed, editable: editable)
             pointsHeader.addButton.isEnabled = editable
+            set(pointsName, s["pointsTitle"], placeholder: "Name, like Trial 1")
+            // Values written in the chart (the plugin's labels and series), the way bars
+            // and pies start out; points where x and y are both numbers.
+            let data = ChartBlockEditing.inlineData(body)
+            let inline = !data.labels.isEmpty || !data.series.isEmpty
+            let showsValues = s["id"] == nil && (inline || (kind == "bar" || pie) && typed.isEmpty)
+            values.show(labels: data.labels, series: data.series, editable: editable)
+            valuesHeader.addButton.isEnabled = editable
+            for v in [valuesHeader, values] as [NSView] { v.isHidden = !showsValues }
+            // Points go with numbers both ways; a bar or pie of values only shows them once there are some.
+            let pointsShown = !typed.isEmpty || !pie && !(showsValues && kind == "bar")
+            for v in [pointsHeader, points] as [NSView] { v.isHidden = !pointsShown }
+            pointsName.isHidden = typed.isEmpty
+            for v in [curvesHeader, curvesHint, bestFit, zero] as [NSView] { v.isHidden = pie }
+            if pie { curves.isHidden = true }
             unplaced = model.problems.filter { p in !plots.contains { p.hasPrefix($0 + ":") } }
-            let inline = !(MiniYAML.parse(body)["series"]?.items ?? []).isEmpty
-            source.stringValue = s["id"].map { "Values from the table marked ^\($0). Change them in the table." }
-                ?? (inline ? "Some values are written in the chart’s Markdown. Edit Markdown to change them." : "")
+            source.stringValue = s["id"].map { "Values from the table marked ^\($0). Change them in the table." } ?? ""
         }
         source.isHidden = source.stringValue.isEmpty
         problems.stringValue = unplaced.joined(separator: "\n")
@@ -892,6 +948,7 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
         curves.addRow()
     }
     @objc private func addPoint() { points.focusEntry() }
+    @objc private func addValues() { values.addSeries() }
     @objc private func editSourceClicked() { onEditSource?() }
 
     /// Puts the keys in the first equation, or a new one when there are none.
@@ -905,7 +962,13 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
     }
 
     @objc private func typeChanged() {
-        setting("Chart Type", "type", ["line", "bar", "scatter"][max(0, type.indexOfSelectedItem)])
+        setting("Chart Type", "type", Self.types[max(0, type.indexOfSelectedItem)].key)
+    }
+
+    /// Soft, the default, is written as no `style:` line at all.
+    @objc private func styleChanged() {
+        let picked = ChartModel.Style.allCases[max(0, style.indexOfSelectedItem)]
+        setting("Chart Style", "style", picked == .soft ? nil : picked.rawValue)
     }
 
     @objc private func checkboxChanged(_ sender: NSButton) {
@@ -929,7 +992,7 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
             return
         }
         shownValues[ObjectIdentifier(field)] = value
-        setting(graph ? "Graph Range" : "Chart Title", key, value.isEmpty ? nil : value)
+        setting(graph ? "Graph Range" : key == "pointsTitle" ? "Name Points" : "Chart Title", key, value.isEmpty ? nil : value)
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
@@ -944,8 +1007,8 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
     #if DEBUG
     func debugDump() -> String {
         graph ? "graph left=\(left.stringValue) right=\(right.stringValue) bottom=\(bottom.stringValue) top=\(top.stringValue) grid=\(gridLines.state == .on)\n" + equations.debugDump()
-              : "chart type=\(type.titleOfSelectedItem ?? "") title=\(titleField.stringValue) x=\(xTitle.stringValue)|\(xTitle.placeholderString ?? "") y=\(yTitle.stringValue)|\(yTitle.placeholderString ?? "") fit=\(bestFit.state == .on) columns=\(columns) selected=\(selected)\n" + curves.debugDump()
-                + "\npoints:\n" + points.debugDump()
+              : "chart type=\(type.titleOfSelectedItem ?? "") style=\(style.titleOfSelectedItem ?? "") title=\(titleField.stringValue) x=\(xTitle.stringValue)|\(xTitle.placeholderString ?? "") y=\(yTitle.stringValue)|\(yTitle.placeholderString ?? "") fit=\(bestFit.state == .on) columns=\(columns) selected=\(selected)\n" + curves.debugDump()
+                + "\npoints \(pointsName.stringValue):\n" + points.debugDump() + (values.isHidden ? "" : "\nvalues:\n" + values.debugDump())
     }
 
     /// `type:Bar`, `fit`, `field:key=value`, `eq:add=y=2x`, `eq:set=0=y=3x`, `eq:remove=0`,
@@ -956,15 +1019,17 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
         let kv = parts.count == 2 ? parts[1].split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init) : []
         switch parts[0] {
         case "type": type.selectItem(withTitle: parts[1]); typeChanged()
+        case "style": style.selectItem(withTitle: parts[1]); styleChanged()
         case "fit": bestFit.performClick(nil)
         case "field":
             guard kv.count == 2, let field = fieldKeys.first(where: { $0.value == kv[0] }).flatMap({ key in
-                [titleField, xTitle, yTitle, left, right, bottom, top].first { ObjectIdentifier($0) == key.key } }) else { return }
+                [titleField, xTitle, yTitle, pointsName, left, right, bottom, top].first { ObjectIdentifier($0) == key.key } }) else { return }
             field.stringValue = kv[1]
             controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification, object: field))
         case "eq": equations.debugStep(kv)
         case "curve": curves.debugStep(kv)
         case "point": points.debugStep(kv)
+        case "data": values.debugStep(kv)
         case "column":
             if let box = series.arrangedSubviews.compactMap({ $0 as? NSButton }).first(where: { $0.identifier?.rawValue == parts[1] }) {
                 box.performClick(nil)
@@ -1011,7 +1076,7 @@ private final class EquationList: NSView {
 
     private var rows: [EquationRow] { stack.arrangedSubviews.compactMap { $0 as? EquationRow } }
 
-    func show(lines: [ChartBlockEditing.GraphLine], rows info: [ChartModel.Row], dark: Bool, editable: Bool) {
+    func show(lines: [ChartBlockEditing.GraphLine], rows info: [ChartModel.Row], style: ChartModel.Style, dark: Bool, editable: Bool) {
         // Typing that isn't in the note yet stays put.
         if rows.contains(where: { $0 !== draft && $0.hasUncommittedTyping }) { return }
         if lines != self.lines || rows.filter({ $0 !== draft }).count != lines.count {
@@ -1027,7 +1092,7 @@ private final class EquationList: NSView {
         }
         for (i, row) in rows.enumerated() where row !== draft {
             let r = i < info.count ? info[i] : ChartModel.Row()
-            row.update(color: r.color.map { ChartPalette.nsColor($0, dark: dark) }, problem: r.problem, editable: editable)
+            row.update(color: r.color.map { ChartPalette.nsColor($0, style: style, dark: dark) }, problem: r.problem, editable: editable)
         }
     }
 
@@ -1489,6 +1554,247 @@ private final class PointRow: NSView, NSTextFieldDelegate {
 
     func controlTextDidEndEditing(_ obj: Notification) {
         list?.change(self, x: x, y: y)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if selector == #selector(NSResponder.cancelOperation(_:)) {
+            revert()
+            window?.makeFirstResponder(nil)
+            return true
+        }
+        return false
+    }
+}
+
+// MARK: - Values written in the chart
+
+/// A chart's own values, as the Charts plugin writes them (`labels:` and `series:`): a
+/// field of labels, then a row for each set of values with its name, each list typed
+/// with commas as it reads in the Markdown.
+private final class InlineDataList: NSView, NSTextFieldDelegate {
+    /// (labels, every set of values, undo name)
+    var onCommit: (([String], [ChartBlockEditing.InlineSeries], String) -> Void)?
+
+    private let labelsField = InspectorField()
+    private let stack = NSStackView()
+    private let message = NSTextField(wrappingLabelWithString: "")
+    private var labels: [String] = []
+    private var series: [ChartBlockEditing.InlineSeries] = []
+    private var shownLabels = ""
+    private static let hint = "Commas between values. Each value goes with the label in its place."
+
+    init() {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        let labelsTitle = InspectorStyle.label("Labels")
+        labelsField.placeholderString = "A, B, C"
+        labelsField.delegate = self
+        labelsField.setAccessibilityLabel("Labels")
+        labelsField.toolTip = "The names along the bottom, or of the slices"
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 4
+        message.font = NSFont.systemFont(ofSize: 11)
+        message.textColor = .secondaryLabelColor
+        message.isSelectable = false
+        message.stringValue = Self.hint
+        for v in [labelsTitle, labelsField, stack, message] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(v)
+        }
+        NSLayoutConstraint.activate([
+            labelsTitle.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
+            labelsTitle.firstBaselineAnchor.constraint(equalTo: labelsField.firstBaselineAnchor),
+            // Lined up with the rows' values, before their delete buttons.
+            labelsField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DataRow.nameWidth + 6),
+            labelsField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
+            labelsField.topAnchor.constraint(equalTo: topAnchor),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: labelsField.bottomAnchor, constant: 6),
+            message.leadingAnchor.constraint(equalTo: leadingAnchor),
+            message.trailingAnchor.constraint(equalTo: trailingAnchor),
+            message.topAnchor.constraint(equalTo: stack.bottomAnchor, constant: 4),
+            message.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private var rows: [DataRow] { stack.arrangedSubviews.compactMap { $0 as? DataRow } }
+
+    func show(labels: [String], series: [ChartBlockEditing.InlineSeries], editable: Bool) {
+        labelsField.isEditable = editable
+        shownLabels = labels.joined(separator: ", ")
+        if labelsField.currentEditor() == nil { labelsField.stringValue = shownLabels }
+        self.labels = labels
+        // Typing that isn't in the note yet stays put.
+        if rows.contains(where: { $0.hasUncommittedTyping }) { return }
+        if series != self.series || rows.count != series.count {
+            // Tabbing from a name to its values commits the name; the keys stay put.
+            let focused = rows.enumerated().compactMap { i, row in row.focusedField.map { (i, $0) } }.first
+            rows.forEach { $0.removeFromSuperview() }
+            for (i, s) in series.enumerated() {
+                let row = DataRow(list: self, series: s, index: i)
+                stack.addArrangedSubview(row)
+                row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+            }
+            self.series = series
+            if let (i, field) = focused, i < rows.count { rows[i].focus(field) }
+        }
+        rows.forEach { $0.isEditable = editable }
+    }
+
+    /// A new set of values, named for its place, its values field ready to type in.
+    func addSeries() {
+        let name = series.isEmpty ? "Values" : "Series \(series.count + 1)"
+        onCommit?(labels, series + [ChartBlockEditing.InlineSeries(title: name, data: [])], "Add Values")
+        RunLoop.main.perform { [weak self] in MainActor.assumeIsolated { self?.rows.last?.focusValues() } }
+    }
+
+    func focusFirst() {
+        if let first = rows.first { first.focusValues() } else { window?.makeFirstResponder(labelsField) }
+    }
+
+    private func say(_ problem: String?) {
+        message.stringValue = problem ?? Self.hint
+        message.textColor = problem == nil ? .secondaryLabelColor : .systemRed
+    }
+
+    fileprivate func change(_ row: DataRow, title: String, values: String) {
+        guard let i = rows.firstIndex(where: { $0 === row }), i < series.count else { return }
+        let data = ChartBlockEditing.splitTyped(values)
+        if let bad = data.first(where: { !$0.isEmpty && ChartPoints.number($0) == nil }) {
+            say("“\(bad)” isn’t a number. Values are numbers, like 3 or 2.5, with commas between them.")
+            NSSound.beep()
+            row.revert()
+            return
+        }
+        say(nil)
+        var new = series
+        new[i] = ChartBlockEditing.InlineSeries(title: title.trimmingCharacters(in: .whitespaces), data: data)
+        if new != series { onCommit?(labels, new, "Change Values") }
+    }
+
+    fileprivate func remove(_ row: DataRow) {
+        guard let i = rows.firstIndex(where: { $0 === row }), i < series.count else { return }
+        var new = series
+        new.remove(at: i)
+        onCommit?(labels, new, "Delete Values")
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard obj.object as? NSTextField === labelsField, labelsField.stringValue != shownLabels else { return }
+        onCommit?(ChartBlockEditing.splitTyped(labelsField.stringValue), series, "Change Labels")
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if selector == #selector(NSResponder.cancelOperation(_:)), control === labelsField {
+            labelsField.stringValue = shownLabels
+            window?.makeFirstResponder(nil)
+            return true
+        }
+        return false
+    }
+
+    #if DEBUG
+    func debugDump() -> String {
+        "  labels=\(labelsField.stringValue)\n" + rows.map { "  \($0.title)=\($0.values)" }.joined(separator: "\n") + "\n  note: \(message.stringValue)"
+    }
+
+    /// `labels=A, B`, `add=`, `name=0=Trial 1`, `values=0=1, 2`, `remove=0`.
+    func debugStep(_ kv: [String]) {
+        guard kv.count == 2 else { return }
+        let rest = kv[1].split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+        switch kv[0] {
+        case "labels":
+            labelsField.stringValue = kv[1]
+            controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification, object: labelsField))
+        case "add": addSeries()
+        case "name": if let i = Int(rest[0]), i < rows.count, rest.count == 2 { change(rows[i], title: rest[1], values: rows[i].values) }
+        case "values": if let i = Int(rest[0]), i < rows.count, rest.count == 2 { change(rows[i], title: rows[i].title, values: rest[1]) }
+        case "remove": if let i = Int(kv[1]), i < rows.count { remove(rows[i]) }
+        default: break
+        }
+    }
+    #endif
+}
+
+/// One set of values: `[Trial 1] [3, 5, 2]` and a delete button.
+private final class DataRow: NSView, NSTextFieldDelegate {
+    static let nameWidth: CGFloat = 76
+
+    private weak var list: InlineDataList?
+    private let series: ChartBlockEditing.InlineSeries
+    private let nameField = InspectorField()
+    private let valuesField = InspectorField()
+    private let delete = HoverButton(symbol: "minus.circle", label: "Delete Values", pointSize: 12, target: nil, action: nil)
+
+    var title: String { nameField.stringValue }
+    var values: String { valuesField.stringValue }
+    var isEditable = true {
+        didSet {
+            nameField.isEditable = isEditable
+            valuesField.isEditable = isEditable
+            delete.isEnabled = isEditable
+        }
+    }
+    var hasUncommittedTyping: Bool {
+        focusedField != nil && (title != series.title || values != Self.text(series.data))
+    }
+    /// 0 for the name, 1 for the values, when one has the keys.
+    var focusedField: Int? { nameField.currentEditor() != nil ? 0 : valuesField.currentEditor() != nil ? 1 : nil }
+
+    private static func text(_ data: [String]) -> String { data.joined(separator: ", ") }
+
+    init(list: InlineDataList, series: ChartBlockEditing.InlineSeries, index: Int) {
+        self.list = list
+        self.series = series
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        nameField.stringValue = series.title
+        nameField.placeholderString = "Name"
+        nameField.setAccessibilityLabel("Name of values \(index + 1)")
+        nameField.toolTip = "What these values are, for the legend"
+        valuesField.stringValue = Self.text(series.data)
+        valuesField.placeholderString = "3, 5, 2"
+        valuesField.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize(for: .small), weight: .regular)
+        valuesField.setAccessibilityLabel(series.title.isEmpty ? "Values \(index + 1)" : "Values of \(series.title)")
+        for field in [nameField, valuesField] { field.delegate = self }
+        delete.target = self
+        delete.action = #selector(deleteClicked)
+        delete.toolTip = "Delete Values"
+        for v in [nameField, valuesField, delete] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(v)
+        }
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 24),
+            nameField.leadingAnchor.constraint(equalTo: leadingAnchor),
+            nameField.widthAnchor.constraint(equalToConstant: Self.nameWidth),
+            nameField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            valuesField.leadingAnchor.constraint(equalTo: nameField.trailingAnchor, constant: 6),
+            valuesField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            delete.leadingAnchor.constraint(equalTo: valuesField.trailingAnchor, constant: 4),
+            delete.trailingAnchor.constraint(equalTo: trailingAnchor, constant: 4),
+            delete.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func focusValues() { window?.makeFirstResponder(valuesField) }
+    func focus(_ field: Int) { window?.makeFirstResponder(field == 0 ? nameField : valuesField) }
+
+    func revert() {
+        nameField.stringValue = series.title
+        valuesField.stringValue = Self.text(series.data)
+    }
+
+    @objc private func deleteClicked() { list?.remove(self) }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        list?.change(self, title: title, values: values)
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {

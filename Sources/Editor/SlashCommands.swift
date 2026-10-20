@@ -7,8 +7,9 @@ struct SlashCommand {
         /// Text replacing the typed command; `select` is relative to the inserted text.
         case text(String, select: NSRange, block: Bool)
         case image
-        /// A chart of the table just above, or a chart to fill in when there isn't one.
-        case chart
+        /// A chart of the table just above, or a chart to fill in when there isn't one, of
+        /// a type (`bar`, `line`, `scatter`, `pie`); nil lets the table decide.
+        case chart(String?)
     }
     let name: String
     let insertion: Insertion
@@ -30,7 +31,11 @@ struct SlashCommand {
         .init(name: "page break", insertion: .text("<!-- pagebreak -->\n", select: NSRange(location: 19, length: 0), block: true)),
         .init(name: "columns", insertion: .text("<!-- columns -->\n\n<!-- column -->\n\n<!-- /columns -->\n", select: NSRange(location: 17, length: 0), block: true)),
         .init(name: "image", insertion: .image),
-        .init(name: "chart", insertion: .chart),
+        .init(name: "chart", insertion: .chart(nil)),
+        .init(name: "bar chart", insertion: .chart("bar")),
+        .init(name: "line chart", insertion: .chart("line")),
+        .init(name: "scatter plot", insertion: .chart("scatter")),
+        .init(name: "pie chart", insertion: .chart("pie")),
         .init(name: "graph", insertion: .text(EditorController.graphTemplate, select: NSRange(location: 59, length: 5), block: true)),
         .init(name: "date", insertion: .text(Self.today, select: NSRange(location: (Self.today as NSString).length, length: 0), block: false)),
     ]
@@ -211,13 +216,14 @@ extension EditorController {
         var s = 0, e = 0, ce = 0
         text.getLineStart(&s, end: &e, contentsEnd: &ce, for: NSRange(location: state.range.location, length: 0))
         var insertion = state.current.insertion
-        if case .chart = insertion {
+        if case let .chart(type) = insertion {
             if let table = tableAbove(state.range.location) {
-                insertChart(forTable: table, replacing: state.range)
+                insertChart(forTable: table, type: type, replacing: state.range)
                 return
             }
-            // Selects the points, to type over.
-            insertion = .text(Self.chartTemplate, select: NSRange(location: 27, length: 22), block: true)
+            // The chart is selected and built in the inspector; the caret waits after its type.
+            let type = type ?? "bar"
+            insertion = .text(Self.chartTemplate(type), select: NSRange(location: ("```chart\ntype: " + type as NSString).length, length: 0), block: true)
         }
         switch insertion {
         case .chart:
@@ -237,7 +243,8 @@ extension EditorController {
                     select: NSRange(location: replaceRange.location + offset + select.location, length: select.length),
                     actionName: state.current.name.capitalized)
             // A chart or graph: selected, and built in the inspector.
-            if state.current.name == "graph" || state.current.name == "chart", let block = chartBlock(containing: replaceRange.location + offset) {
+            if state.current.name == "graph" || state.current.name.hasSuffix("chart") || state.current.name.hasSuffix("plot"),
+               let block = chartBlock(containing: replaceRange.location + offset) {
                 selectChart(at: block.range.location)
                 onChartInserted?()
             }

@@ -6,17 +6,24 @@ import Foundation
 ///
 /// - ```` ```chart ````: the Charts plugin's YAML (phibr0/obsidian-charts). Data inline
 ///   (`labels`, `series`) or from a table named by a `^id` line under it (`id`, `layout`,
-///   `select`). Line and bar charts as the plugin draws them, plus `type: scatter`,
-///   `plot:` curves and `points: (1, 2), (2, 4)`, which only Indium reads.
+///   `select`). Line, bar, pie and doughnut charts as the plugin draws them, plus
+///   `type: scatter`, `plot:` curves and `points: (1, 2), (2, 4)` (named by
+///   `pointsTitle:`), which only Indium reads.
 /// - ```` ```desmos-graph ````: the Desmos plugin's equations (Nigecat/obsidian-desmos),
 ///   one LaTeX equation per line, with `key=value` settings before a `---` line.
 ///
 /// Foundation only: the block's text and the note in, a model out. Drawing is
 /// `ChartRender`'s.
 struct ChartModel: Hashable {
-    enum Kind: String, Hashable { case line, bar, scatter, graph }
+    enum Kind: String, Hashable { case line, bar, scatter, pie, graph }
     enum Dash: Hashable { case solid, dashed, dotted }
     enum Shape: Hashable { case point, open, cross }
+    /// How a chart is drawn (`style:`): `soft`, Indium's own muted inks, by default;
+    /// `mono`, shades of the text color, for print; `hatched`, bars and slices lined like
+    /// a textbook figure, each set at its own angle so it reads in grey; `dotted`,
+    /// stippled fills and open markers. A style Indium doesn't know (or no longer has,
+    /// like `vivid`) draws soft.
+    enum Style: String, Hashable, CaseIterable { case soft, mono, hatched, dotted }
 
     struct Point: Hashable {
         var x: Double
@@ -60,6 +67,9 @@ struct ChartModel: Hashable {
     var legend = true
     var grid = true
     var stacked = false
+    /// A pie with a hole in the middle (`type: doughnut`).
+    var donut = false
+    var style: Style = .soft
     /// Share of the column (`width: 80%`) or points (`width: 400px`).
     var widthFraction: Double?
     var width: Double?
@@ -103,10 +113,13 @@ struct ChartModel: Hashable {
         case "line": m.kind = .line
         case "bar": m.kind = .bar
         case "scatter": m.kind = .scatter
+        case "pie": m.kind = .pie
+        case "doughnut", "donut": m.kind = .pie; m.donut = true
         default:
-            m.problems.append("Indium draws line, bar and scatter charts, not \(type) charts. Obsidian’s Charts plugin still can.")
+            m.problems.append("Indium draws line, bar, scatter and pie charts, not \(type) charts. Obsidian’s Charts plugin still can.")
             return m
         }
+        m.style = yaml["style"]?.text.flatMap { Style(rawValue: $0.lowercased()) } ?? .soft
         m.title = yaml["title"]?.text
         m.xTitle = yaml["xTitle"]?.text
         m.yTitle = yaml["yTitle"]?.text
@@ -151,9 +164,11 @@ struct ChartModel: Hashable {
         let points = typed.entries.compactMap(\.point)
         let plots = yaml["plot"]?.list ?? yaml["plot"]?.text.map { [$0] } ?? []
         guard !columns.isEmpty || !points.isEmpty || !plots.isEmpty else {
-            m.problems.append("Nothing to draw yet. Add points like (3, 4) or a line like y = 3, or make the chart from a table.")
+            m.problems.append(m.kind == .pie ? "Nothing to draw yet. Add labels and values, or make the chart from a table."
+                              : "Nothing to draw yet. Add points like (3, 4) or a line like y = 3, or make the chart from a table.")
             return m
         }
+        if m.kind == .pie { return pie(m, labels: labels, columns: columns, points: typed.entries, plots: plots) }
         // Bars stand on labels: points in a bar chart without a table make their own.
         if m.kind == .bar, columns.isEmpty, labels.isEmpty {
             labels = Set(points.map(\.x)).sorted().map(ChartPoints.format)
@@ -162,8 +177,10 @@ struct ChartModel: Hashable {
         if labels.isEmpty, let longest = columns.map(\.cells.count).max(), longest > 0 { labels = (1...longest).map(String.init) }
 
         // Numbers along x when every label is one (and it isn't a bar chart): spaced by value.
+        // Labels written in quotes (`["2019", "2020"]`) are names, evenly spaced, whatever they say.
         let xs = labels.map { Quantity.parse($0) }
-        let numericX = labels.isEmpty || m.kind != .bar && xs.allSatisfy { $0 != nil }
+        let quoted = yaml["id"] == nil && body.range(of: #"(?m)^\s*labels:\s*\[\s*["']"#, options: .regularExpression) != nil
+        let numericX = labels.isEmpty || m.kind != .bar && !quoted && xs.allSatisfy { $0 != nil }
         if numericX {
             xUnit = xs.compactMap { $0?.unit?.text }.first
         } else {
@@ -214,7 +231,8 @@ struct ChartModel: Hashable {
             if !outside.isEmpty {
                 m.problems.append("\(ChartPoints.text(outside)) " + (outside.count == 1 ? "is" : "are") + " off this chart. \(offChart)")
             }
-            m.series.append(Series(name: m.kind == .bar ? "Values" : "Points", color: columns.count, segments: drawn.isEmpty ? [] : [drawn.sorted { $0.x < $1.x }]))
+            let name = yaml["pointsTitle"]?.text ?? (m.kind == .bar ? "Values" : "Points")
+            m.series.append(Series(name: name, color: columns.count, segments: drawn.isEmpty ? [] : [drawn.sorted { $0.x < $1.x }]))
         }
 
         // Curves read now, so the x range takes in upright lines and points among them.
@@ -310,12 +328,44 @@ struct ChartModel: Hashable {
         return m
     }
 
+    /// A pie: one slice per label, sized by the first column's values (or by typed points,
+    /// x the label and y the value). Its colors go slice by slice.
+    private static func pie(_ chart: ChartModel, labels: [String], columns: [(name: String, cells: [String])],
+                            points: [ChartPoints.Entry], plots: [String]) -> ChartModel {
+        var m = chart
+        var slices: [(label: String, value: Double)] = []
+        if let column = columns.first {
+            for (j, cell) in column.cells.enumerated() {
+                guard let v = Quantity.parse(cell)?.value, v.isFinite else { continue }
+                slices.append((j < labels.count ? labels[j] : "\(j + 1)", v))
+            }
+            if columns.count > 1 { m.problems.append("A pie shows one set of values; this one shows \(column.name.isEmpty ? "the first" : column.name).") }
+        } else {
+            slices = points.compactMap { e in e.point.map { (e.x, $0.y) } }
+        }
+        if slices.contains(where: { $0.value < 0 }) {
+            m.problems.append("A pie can’t show values below zero; they’re left out.")
+        }
+        slices = slices.filter { $0.value > 0 }
+        if !plots.isEmpty { m.problems.append("A pie has no axes to draw lines on.") }
+        m.categories = slices.map(\.label)
+        m.series = [Series(name: "", color: 0, segments: slices.isEmpty ? [] : [slices.enumerated().map { Point(x: Double($0.offset), y: $0.element.value) }])]
+        m.xTitle = nil
+        m.yTitle = nil
+        return m
+    }
+
     /// A curve as the legend names it: `y = k x^2` as y = k x², `2*x` as 2·x.
     static func readable(_ equation: String) -> String {
         let superscripts: [Character: Character] = ["0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷",
-                                                    "8": "⁸", "9": "⁹", "-": "⁻"]
+                                                    "8": "⁸", "9": "⁹", "-": "⁻", "x": "ˣ", "n": "ⁿ"]
         var t = equation.replacingOccurrences(of: "\\cdot", with: "·").replacingOccurrences(of: "*", with: "·")
-        let power = try! NSRegularExpression(pattern: #"\^\s*(?:\{(-?\d+)\}|\((-?\d+)\)|(-?\d+))"#)
+        // LaTeX as Desmos takes it: \sin(x) as sin(x), \left( as (.
+        for (latex, plain) in [("\\left", ""), ("\\right", ""), ("\\pi", "π"), ("\\theta", "θ")] {
+            t = t.replacingOccurrences(of: latex, with: plain)
+        }
+        t = t.replacingOccurrences(of: #"\\(sin|cos|tan|ln|log|exp|sqrt)\b"#, with: "$1", options: .regularExpression)
+        let power = try! NSRegularExpression(pattern: #"\^\s*(?:\{(-?[\dxn]+)\}|\((-?[\dxn]+)\)|(-?[\dxn]+))"#)
         for m in power.matches(in: t, range: NSRange(t.startIndex..., in: t)).reversed() {
             let digits = (1...3).compactMap { Range(m.range(at: $0), in: t).map { String(t[$0]) } }.first ?? ""
             t.replaceSubrange(Range(m.range, in: t)!, with: String(digits.compactMap { superscripts[$0] }))
@@ -328,7 +378,8 @@ struct ChartModel: Hashable {
     private static func graph(_ body: String, context: Context) -> ChartModel {
         var m = ChartModel()
         m.kind = .graph
-        m.legend = false
+        // Named in a legend when there are two or more lines, so each can be told apart.
+        m.legend = true
         var lines = body.components(separatedBy: .newlines)
         var settings: [String: String] = [:]
         if let sep = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "---" }) {
@@ -380,13 +431,13 @@ struct ChartModel: Hashable {
             case let .curve(expression):
                 colorIndex += color == nil ? 1 : 0
                 m.rows.append(Row(color: resolved))
-                m.curves.append(Curve(name: equation, color: resolved, dash: dash,
+                m.curves.append(Curve(name: Self.readable(equation), color: resolved, dash: dash,
                                       segments: GraphMath.sample(expression, functions: functions, x: m.xDomain!, y: m.yDomain,
                                                                  restrictions: restrictions)))
             case let .vertical(x):
                 colorIndex += color == nil ? 1 : 0
                 m.rows.append(Row(color: resolved))
-                m.curves.append(Curve(name: equation, color: resolved, dash: dash,
+                m.curves.append(Curve(name: Self.readable(equation), color: resolved, dash: dash,
                                       segments: [[Point(x: x, y: bottom), Point(x: x, y: top)]]))
             case let .point(x, y):
                 colorIndex += color == nil ? 1 : 0
@@ -624,6 +675,9 @@ enum MiniYAML {
         if v.hasPrefix("["), v.hasSuffix("]") { return .list(splitList(String(v.dropFirst().dropLast()))) }
         return .scalar(unquote(v))
     }
+
+    /// The values of an inline list's inside: `a, "b, c"` → [a, b, c].
+    static func list(_ s: String) -> [String] { splitList(s) }
 
     /// `a, "b, c", 'd'` → [a, b, c, d], respecting quotes.
     private static func splitList(_ s: String) -> [String] {
