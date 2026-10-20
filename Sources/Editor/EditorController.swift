@@ -1008,6 +1008,13 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return false
     }
 
+    /// A list line's indent and marker (`-`, `1.`), and where the marker ends.
+    private static func listMarker(_ line: String) -> (indent: String, marker: String, end: Int)? {
+        let l = line as NSString
+        guard let m = MarkdownScanner.Regex.list.firstMatch(in: line, range: NSRange(location: 0, length: l.length)) else { return nil }
+        return (l.substring(with: m.range(at: 1)), l.substring(with: m.range(at: 2)), NSMaxRange(m.range(at: 2)))
+    }
+
     func indentListItem(outdent: Bool) -> Bool {
         let sel = textView.selectedRange()
         let first = lineRange(at: sel.location).full
@@ -1018,16 +1025,33 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             l.isEmpty || MarkdownScanner.Regex.list.firstMatch(in: l, range: NSRange(location: 0, length: (l as NSString).length)) != nil
         }
         guard isList, lines.contains(where: { !$0.isEmpty }) else { return false }
+        // The marker last used at each indent in the list above, so an item moved out to a
+        // numbered level picks up its numbering.
+        var markers: [String: String] = [:]
+        for l in ns.substring(to: block.location).components(separatedBy: "\n").reversed().dropFirst() {
+            guard !l.isEmpty else { continue }
+            guard let m = Self.listMarker(l) else { break }
+            if markers[m.indent] == nil, !markers.keys.contains(where: { $0.count < m.indent.count }) { markers[m.indent] = m.marker }
+        }
         var firstDelta = 0
         let changed = lines.enumerated().map { i, l -> String in
-            guard !l.isEmpty else { return l }
-            var out = l
+            guard !l.isEmpty, let m = Self.listMarker(l) else { return l }
+            var indent = m.indent, marker = m.marker
             if outdent {
-                if out.hasPrefix("\t") { out.removeFirst() }
-                else { out = String(out.dropFirst(min(4, out.prefix { $0 == " " }.count))) }
+                guard !indent.isEmpty else { return l }
+                if indent.hasPrefix("\t") { indent.removeFirst() }
+                else { indent = String(indent.dropFirst(min(4, indent.prefix { $0 == " " }.count))) }
+                // Back out to a numbered list: the next number. To a bulleted one: its bullet.
+                if let above = markers[indent] {
+                    if let n = Int(above.dropLast()) { marker = "\(n + 1)\(above.last!)" } else { marker = above }
+                }
             } else {
-                out = "\t" + out
+                indent = "\t" + indent
+                // An item tucked under a numbered one is a point about it, not the next step.
+                if Int(marker.dropLast()) != nil { marker = "-" }
             }
+            markers[indent] = marker
+            let out = indent + marker + (l as NSString).substring(from: m.end)
             if i == 0 { firstDelta = (out as NSString).length - (l as NSString).length }
             return out
         }

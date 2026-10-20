@@ -469,7 +469,7 @@ enum DebugSnapshot {
     /// bold) is a flicker and fails the case. An optional fifth column is the suggestion shown
     /// after the caret (∅ none); one drawn over text or a float fails any case.
     /// `-IndiumTypingShots dir` saves the window after each case as `dir/<n>.png`. Quits when done. Keys: Ⓑ Ⓘ Ⓢ Ⓗ Ⓒ the Format commands, → ←
-    /// arrows, ⇨ Shift-→, ⌥ Option-→, ⇥ Tab, ⤓ a click at the end of the note, ✎ ✔ an input method's か marked and committed, ⏎ Return, ⌫ Backspace, ↶ Undo, ↷ Redo.
+    /// arrows, ⇨ Shift-→, ⌥ Option-→, ⇥ Tab, ⇤ Shift-Tab, ⤓ a click at the end of the note, ✎ ✔ an input method's か marked and committed, ⏎ Return, ⌫ Backspace, ↶ Undo, ↷ Redo.
     static func runTypingCases(_ cases: String, editor: EditorController, window: NSWindow) {
         let tv = editor.textView
         window.makeFirstResponder(tv)
@@ -509,6 +509,7 @@ enum DebugSnapshot {
                 case "✎": tv.setMarkedText("か", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
                 case "✔": tv.insertText("か", replacementRange: NSRange(location: NSNotFound, length: 0))
                 case "⇥": sendKey("\t", code: 48, to: window)
+                case "⇤": sendKey("\u{19}", flags: .shift, code: 48, to: window)
                 case "⏎": sendKey("\r", code: 36, to: window)
                 case "⌫": sendKey("\u{7f}", code: 51, to: window)
                 case "↶": undo?.undo()
