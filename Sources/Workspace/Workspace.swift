@@ -56,7 +56,11 @@ final class Workspace {
         let root = self.root
         let access = self.access
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let scan = withExtendedLifetime(access) { Workspace.scan(root) }
+            let scan = withExtendedLifetime(access) { () -> Scan in
+                let scan = Workspace.scan(root)
+                Workspace.syncWithICloud(scan)
+                return scan
+            }
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.apply(scan)
@@ -72,13 +76,19 @@ final class Workspace {
         var tree: FileNode
         var notes: [URL]
         var byName: [String: [URL]]
+        /// Notes iCloud hasn't brought to this Mac yet.
+        var notDownloaded: [URL] = []
+        /// Notes edited on two devices at once, with the other version still waiting.
+        var conflicted: [URL] = []
     }
 
     private static func scan(_ root: URL) -> Scan {
         var notes: [URL] = []
         var byName: [String: [URL]] = [:]
+        var notDownloaded: [URL] = []
+        var conflicted: [URL] = []
         let fm = FileManager.default
-        let keys: [URLResourceKey] = [.isDirectoryKey, .isHiddenKey]
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isHiddenKey, .ubiquitousItemDownloadingStatusKey, .ubiquitousItemHasUnresolvedConflictsKey]
 
         func walk(_ url: URL) -> FileNode {
             let node = FileNode(url: url, isFolder: true)
@@ -95,6 +105,9 @@ final class Workspace {
                     byName[name.lowercased(), default: []].append(item)
                     if markdownExtensions.contains(item.pathExtension.lowercased()) {
                         notes.append(item)
+                        let cloud = try? item.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey, .ubiquitousItemHasUnresolvedConflictsKey])
+                        if cloud?.ubiquitousItemDownloadingStatus == .notDownloaded { notDownloaded.append(item) }
+                        if cloud?.ubiquitousItemHasUnresolvedConflicts == true { conflicted.append(item) }
                         byName[item.deletingPathExtension().lastPathComponent.lowercased(), default: []].append(item)
                         files.append(FileNode(url: item, isFolder: false))
                     }
@@ -106,7 +119,48 @@ final class Workspace {
         }
 
         let tree = walk(root)
-        return Scan(tree: tree, notes: notes, byName: byName)
+        return Scan(tree: tree, notes: notes, byName: byName, notDownloaded: notDownloaded, conflicted: conflicted)
+    }
+
+    // MARK: iCloud
+
+    /// Keeps a folder in iCloud Drive usable the way a local one is. Notes are small, so
+    /// every one iCloud left in the cloud is asked for now, in the background: opening,
+    /// searching and embedding them then reads this Mac's copy instead of waiting on the
+    /// network. Runs off the main thread, after each scan.
+    private static func syncWithICloud(_ scan: Scan) {
+        #if DEBUG
+        // `-IndiumNoCloudPrefetch YES`: leave notes in iCloud, to exercise opening one that isn't here.
+        if UserDefaults.standard.bool(forKey: "IndiumNoCloudPrefetch") { return }
+        #endif
+        for url in scan.notDownloaded { try? FileManager.default.startDownloadingUbiquitousItem(at: url) }
+        for url in scan.conflicted { keepConflictingVersions(of: url) }
+    }
+
+    /// A note edited on two devices before they synced: iCloud keeps one and holds the
+    /// other aside. Nothing is thrown away: each other version is saved beside the note
+    /// as "Name (from Device, date).md", then the conflict is marked resolved.
+    private static func keepConflictingVersions(of url: URL) {
+        guard let versions = NSFileVersion.unresolvedConflictVersionsOfItem(at: url), !versions.isEmpty else { return }
+        let format = DateFormatter()
+        format.dateFormat = "MMM d, h.mm a"
+        let base = url.deletingPathExtension().lastPathComponent
+        var allSaved = true
+        for version in versions {
+            var label = version.localizedNameOfSavingComputer ?? "another device"
+            if let date = version.modificationDate { label += ", " + format.string(from: date) }
+            let copy = uniqueURL(in: url.deletingLastPathComponent(), base: sanitize("\(base) (from \(label))"), ext: url.pathExtension)
+            do {
+                try coordinate(writing: copy, options: []) { try FileManager.default.copyItem(at: version.url, to: $0) }
+                version.isResolved = true
+            } catch {
+                // Left unresolved, so the next scan tries again rather than losing it.
+                allSaved = false
+            }
+        }
+        // iCloud's held-aside copies go only once every one of them is saved as a note.
+        guard allSaved else { return }
+        try? coordinate(writing: url, options: []) { _ in try NSFileVersion.removeOtherVersionsOfItem(at: url) }
     }
 
     private func filesChanged(_ paths: [String]) {
@@ -119,7 +173,11 @@ final class Workspace {
             let root = self.root
             let access = self.access
             DispatchQueue.global(qos: .userInitiated).async {
-                let scan = withExtendedLifetime(access) { Workspace.scan(root) }
+                let scan = withExtendedLifetime(access) { () -> Scan in
+                    let scan = Workspace.scan(root)
+                    Workspace.syncWithICloud(scan)
+                    return scan
+                }
                 DispatchQueue.main.async {
                     self.rescanPending = false
                     self.apply(scan)

@@ -420,15 +420,56 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             return
         }
         let key = url.standardizedFileURL
+        fetching = nil
         let note: Note
         if let cached = noteCache[key], FileManager.default.fileExists(atPath: key.path) {
             note = cached
             if case let .changed(text) = cached.checkDisk() { cached.adopt(diskText: text) }
+        } else if !Note.isDownloaded(key) {
+            fetch(key, select: query)
+            return
         } else {
             do { note = try Note(url: key) } catch {
                 if let window { NSAlert(error: error).beginSheetModal(for: window) }
                 return
             }
+            show(note, at: key, select: query)
+            return
+        }
+        show(note, at: key, select: query)
+    }
+
+    /// The note being downloaded from iCloud to open, until it's here or another is opened.
+    private var fetching: URL?
+
+    /// Opens a note iCloud hasn't brought to this Mac yet: says so in place of the page,
+    /// rather than freezing the window while it downloads, then opens it once it lands.
+    private func fetch(_ key: URL, select query: String?) {
+        fetching = key
+        emptyState.showDownloading(key.deletingPathExtension().lastPathComponent)
+        emptyState.isHidden = false
+        editor.scrollView.isHidden = true
+        let access = workspace?.access
+        Note.fetch(key) { [weak self] result in
+            withExtendedLifetime(access) {}
+            guard let self, self.fetching == key else { return }
+            self.fetching = nil
+            switch result {
+            case let .success(text):
+                self.show(Note(url: key, text: text), at: key, select: query)
+            case let .failure(error):
+                self.refreshEmptyState()
+                guard let window = self.window else { return }
+                let alert = NSAlert(error: error)
+                alert.messageText = "“\(key.deletingPathExtension().lastPathComponent)” couldn't be downloaded from iCloud."
+                alert.informativeText = "Check that this Mac is online and signed in to iCloud, then open it again."
+                alert.beginSheetModal(for: window)
+            }
+        }
+    }
+
+    private func show(_ note: Note, at key: URL, select query: String?) {
+        if noteCache[key] !== note {
             note.access = workspace?.access
             noteCache[key] = note
         }
@@ -438,7 +479,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
         // A note whose edits couldn't be saved stays until that's resolved (the editor
         // shows why and what you can do).
-        if editor.note !== note, !editor.load(note) { return }
+        if editor.note !== note, !editor.load(note) {
+            // The page may have made way for a download; bring the unsaved note back.
+            refreshEmptyState()
+            return
+        }
         refreshEmptyState()
         updateTitle()
         window?.makeFirstResponder(editor.textView)

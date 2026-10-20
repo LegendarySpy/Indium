@@ -51,6 +51,14 @@ final class EmptyStateView: NSView {
                     ("Open Note", "⌘O", #selector(DocumentWindowController.openQuickly(_:)))])
     }
 
+    /// A note iCloud is still bringing to this Mac; it opens once it's here.
+    func showDownloading(_ name: String) {
+        heading.isHidden = true
+        message.stringValue = "Downloading “\(name)” from iCloud…"
+        button.isHidden = true
+        setActions([])
+    }
+
     /// Real buttons rather than a line of shortcut hints.
     private func setActions(_ items: [(String, String, Selector)]) {
         actions.arrangedSubviews.forEach { $0.removeFromSuperview() }

@@ -37,6 +37,36 @@ final class Note {
         diskDate = Note.modificationDate(url)
     }
 
+    /// A note already read off the main thread (see `fetch`).
+    init(url: URL, text: String) {
+        self.url = url
+        savedText = text
+        diskDate = Note.modificationDate(url)
+    }
+
+    // MARK: iCloud
+
+    /// False for a note iCloud hasn't brought to this Mac yet: reading it would wait on
+    /// the network, for seconds or, offline, until it fails.
+    static func isDownloaded(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey]))?.ubiquitousItemDownloadingStatus != .notDownloaded
+    }
+
+    /// Reads a note iCloud may still have to fetch, away from the main thread: asks for
+    /// the download, then reads through file coordination, which waits for it to land.
+    static func fetch(_ url: URL, completion: @escaping (Result<String, Error>) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            try? FileManager.default.startDownloadingUbiquitousItem(at: url)
+            var coordinationError: NSError?
+            var result: Result<String, Error> = .failure(CocoaError(.fileReadUnknown, userInfo: [NSURLErrorKey: url]))
+            NSFileCoordinator(filePresenter: nil).coordinate(readingItemAt: url, options: [], error: &coordinationError) { target in
+                result = Result { try Note.read(target) }
+            }
+            if let coordinationError { result = .failure(coordinationError) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
     static func read(_ url: URL) throws -> String {
         let data = try Data(contentsOf: url)
         if let s = String(data: data, encoding: .utf8) { return s }
