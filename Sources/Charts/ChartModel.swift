@@ -18,6 +18,9 @@ struct ChartModel: Hashable {
     enum Kind: String, Hashable { case line, bar, scatter, pie, graph }
     enum Dash: Hashable { case solid, dashed, dotted }
     enum Shape: Hashable { case point, open, cross }
+    /// The colors a chart is drawn in (`style:`): `soft`, Indium's own muted inks, by
+    /// default; `mono`, shades of the text color, for print; `vivid`, bright and far apart.
+    enum Style: String, Hashable, CaseIterable { case soft, mono, vivid }
 
     struct Point: Hashable {
         var x: Double
@@ -63,6 +66,7 @@ struct ChartModel: Hashable {
     var stacked = false
     /// A pie with a hole in the middle (`type: doughnut`).
     var donut = false
+    var style: Style = .soft
     /// Share of the column (`width: 80%`) or points (`width: 400px`).
     var widthFraction: Double?
     var width: Double?
@@ -112,6 +116,7 @@ struct ChartModel: Hashable {
             m.problems.append("Indium draws line, bar, scatter and pie charts, not \(type) charts. Obsidian’s Charts plugin still can.")
             return m
         }
+        m.style = yaml["style"]?.text.flatMap { Style(rawValue: $0.lowercased()) } ?? .soft
         m.title = yaml["title"]?.text
         m.xTitle = yaml["xTitle"]?.text
         m.yTitle = yaml["yTitle"]?.text

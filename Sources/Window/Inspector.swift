@@ -646,6 +646,7 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
     // Chart
     private let chartGrid = NSGridView()
     private let type = NSPopUpButton()
+    private let style = NSPopUpButton()
     private let titleField = InspectorField()
     private let xTitle = InspectorField()
     private let yTitle = InspectorField()
@@ -684,6 +685,13 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
         type.target = self
         type.action = #selector(typeChanged)
         type.setAccessibilityLabel("Chart Type")
+        style.addItems(withTitles: ChartModel.Style.allCases.map { $0.rawValue.capitalized })
+        style.controlSize = .small
+        style.font = InspectorStyle.font
+        style.target = self
+        style.action = #selector(styleChanged)
+        style.setAccessibilityLabel("Chart Colors")
+        style.toolTip = "Soft is Indium’s own muted colors, Mono shades of the text color for printing, Vivid bright ones far apart"
         pointsName.placeholderString = "Name, like Trial 1"
         pointsName.toolTip = "What the points are, for the legend"
         for (field, key, label) in [(titleField, "title", "Title"), (xTitle, "xTitle", "X Axis Title"), (yTitle, "yTitle", "Y Axis Title"),
@@ -714,6 +722,7 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
         editSource.toolTip = "Show this chart’s Markdown in the note"
 
         chartGrid.addRow(with: [InspectorStyle.label("Type"), type])
+        chartGrid.addRow(with: [InspectorStyle.label("Colors"), style])
         chartGrid.addRow(with: [InspectorStyle.label("Title"), titleField])
         chartGrid.addRow(with: [InspectorStyle.label("X axis"), xTitle])
         chartGrid.addRow(with: [InspectorStyle.label("Y axis"), yTitle])
@@ -828,7 +837,7 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
             set(top, s["top"], placeholder: "7")
             gridLines.state = s["grid"]?.lowercased() == "false" ? .off : .on
             gridLines.isEnabled = editable
-            equations.show(lines: ChartBlockEditing.graphLines(body), rows: model.rows, dark: dark, editable: editable)
+            equations.show(lines: ChartBlockEditing.graphLines(body), rows: model.rows, style: model.style, dark: dark, editable: editable)
             equationsHeader.addButton.isEnabled = editable
             unplaced = model.problems.filter { p in !ChartBlockEditing.graphLines(body).contains { p.hasPrefix($0.expression + ":") } }
             source.stringValue = "Type equations like y = x^2 or y = 2x + 1, or LaTeX as in Desmos. Variables from the note’s properties work by name."
@@ -844,8 +853,10 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
             type.selectItem(at: known.firstIndex(of: kind) ?? 0)
             type.isEnabled = editable && known.contains(kind)
             // A pie has no axes.
-            chartGrid.row(at: 2).isHidden = pie
             chartGrid.row(at: 3).isHidden = pie
+            chartGrid.row(at: 4).isHidden = pie
+            style.selectItem(at: ChartModel.Style.allCases.firstIndex(of: model.style) ?? 0)
+            style.isEnabled = editable
             set(titleField, s["title"], placeholder: "Chart title")
             set(xTitle, s["xTitle"], placeholder: model.xTitle ?? "Across, like Time (s)")
             set(yTitle, s["yTitle"], placeholder: model.yTitle ?? "Up, like Distance (m)")
@@ -855,7 +866,7 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
             for b in [bestFit, zero, legend] { b.isEnabled = editable }
             showSeries(columns: columns, selected: MiniYAML.parse(body)["select"]?.list, editable: editable)
             let plots = ChartBlockEditing.plots(body)
-            curves.show(lines: plots.map { ChartBlockEditing.GraphLine(expression: $0) }, rows: model.rows, dark: dark, editable: editable)
+            curves.show(lines: plots.map { ChartBlockEditing.GraphLine(expression: $0) }, rows: model.rows, style: model.style, dark: dark, editable: editable)
             // An empty field to type the first one in, so there's no + to find first.
             if plots.isEmpty, editable { curves.addRow(focus: false) }
             curves.isHidden = plots.isEmpty && !curves.hasDraft
@@ -946,6 +957,12 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
         setting("Chart Type", "type", Self.types[max(0, type.indexOfSelectedItem)].key)
     }
 
+    /// Soft, the default, is written as no `style:` line at all.
+    @objc private func styleChanged() {
+        let picked = ChartModel.Style.allCases[max(0, style.indexOfSelectedItem)]
+        setting("Chart Colors", "style", picked == .soft ? nil : picked.rawValue)
+    }
+
     @objc private func checkboxChanged(_ sender: NSButton) {
         let on = sender.state == .on
         switch sender {
@@ -982,7 +999,7 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
     #if DEBUG
     func debugDump() -> String {
         graph ? "graph left=\(left.stringValue) right=\(right.stringValue) bottom=\(bottom.stringValue) top=\(top.stringValue) grid=\(gridLines.state == .on)\n" + equations.debugDump()
-              : "chart type=\(type.titleOfSelectedItem ?? "") title=\(titleField.stringValue) x=\(xTitle.stringValue)|\(xTitle.placeholderString ?? "") y=\(yTitle.stringValue)|\(yTitle.placeholderString ?? "") fit=\(bestFit.state == .on) columns=\(columns) selected=\(selected)\n" + curves.debugDump()
+              : "chart type=\(type.titleOfSelectedItem ?? "") style=\(style.titleOfSelectedItem ?? "") title=\(titleField.stringValue) x=\(xTitle.stringValue)|\(xTitle.placeholderString ?? "") y=\(yTitle.stringValue)|\(yTitle.placeholderString ?? "") fit=\(bestFit.state == .on) columns=\(columns) selected=\(selected)\n" + curves.debugDump()
                 + "\npoints \(pointsName.stringValue):\n" + points.debugDump() + (values.isHidden ? "" : "\nvalues:\n" + values.debugDump())
     }
 
@@ -994,6 +1011,7 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
         let kv = parts.count == 2 ? parts[1].split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init) : []
         switch parts[0] {
         case "type": type.selectItem(withTitle: parts[1]); typeChanged()
+        case "style": style.selectItem(withTitle: parts[1]); styleChanged()
         case "fit": bestFit.performClick(nil)
         case "field":
             guard kv.count == 2, let field = fieldKeys.first(where: { $0.value == kv[0] }).flatMap({ key in
@@ -1050,7 +1068,7 @@ private final class EquationList: NSView {
 
     private var rows: [EquationRow] { stack.arrangedSubviews.compactMap { $0 as? EquationRow } }
 
-    func show(lines: [ChartBlockEditing.GraphLine], rows info: [ChartModel.Row], dark: Bool, editable: Bool) {
+    func show(lines: [ChartBlockEditing.GraphLine], rows info: [ChartModel.Row], style: ChartModel.Style, dark: Bool, editable: Bool) {
         // Typing that isn't in the note yet stays put.
         if rows.contains(where: { $0 !== draft && $0.hasUncommittedTyping }) { return }
         if lines != self.lines || rows.filter({ $0 !== draft }).count != lines.count {
@@ -1066,7 +1084,7 @@ private final class EquationList: NSView {
         }
         for (i, row) in rows.enumerated() where row !== draft {
             let r = i < info.count ? info[i] : ChartModel.Row()
-            row.update(color: r.color.map { ChartPalette.nsColor($0, dark: dark) }, problem: r.problem, editable: editable)
+            row.update(color: r.color.map { ChartPalette.nsColor($0, style: style, dark: dark) }, problem: r.problem, editable: editable)
         }
     }
 

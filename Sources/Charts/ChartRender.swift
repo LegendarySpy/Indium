@@ -19,6 +19,8 @@ final class ChartRender {
         let model: ChartModel
         let width: CGFloat
         let height: CGFloat
+        /// Its words are in the note's font.
+        let font: FontChoice
     }
     private static var cache: [Key: ChartRender] = [:]
     private static var order: [Key] = []
@@ -26,7 +28,7 @@ final class ChartRender {
     /// The render of `model` at a size for a column `column` points wide.
     static func make(_ model: ChartModel, column: CGFloat, maxHeight: CGFloat = .greatestFiniteMagnitude) -> ChartRender {
         let size = layoutSize(model, column: column, maxHeight: maxHeight)
-        let key = Key(model: model, width: size.width, height: size.height)
+        let key = Key(model: model, width: size.width, height: size.height, font: AppSettings.shared.font)
         if let hit = cache[key] { return hit }
         let render = ChartRender(model: model, size: size)
         cache[key] = render
@@ -57,15 +59,19 @@ final class ChartRender {
     /// Room for the title, legend and problems above and below the plot.
     private static func chromeHeight(_ m: ChartModel, width: CGFloat) -> CGFloat {
         var h: CGFloat = 0
-        if m.title != nil { h += 24 }
-        if m.showsLegend { h += CGFloat(m.legendRows(width: width).count) * legendRowHeight + 4 }
-        if m.xTitle != nil { h += 20 }
+        if m.title != nil { h += 30 }
+        if m.showsLegend { h += CGFloat(m.legendRows(width: width).count) * legendRowHeight + 8 }
+        if m.xTitle != nil { h += 22 }
         h += CGFloat(min(m.problems.count, 4)) * 16
         return h
     }
 
     static let legendRowHeight: CGFloat = 20
-    static let legendFont = NSFont.systemFont(ofSize: 12)
+    /// The title, legend and axis titles are set in the note's own font.
+    static func font(_ size: CGFloat, weight: NSFont.Weight = .regular) -> NSFont {
+        Typography.baseFont(AppSettings.shared.font, size: size, weight: weight)
+    }
+    static var legendFont: NSFont { font(12) }
 
     func draw(in rect: NSRect) {
         let dark = NSAppearance.currentDrawing().bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
@@ -102,7 +108,7 @@ extension ChartModel {
     /// A legend for two or more things drawn; one series is named by its axis title.
     var showsLegend: Bool { legend && legendItems.count >= 2 }
 
-    /// What the legend lists: series as a dot (scatter) or a line, then curves. A pie's
+    /// What the legend lists: series as a dot (scatter, and a bar's block) or a line, then curves. A pie's
     /// slices, each with its share.
     var legendItems: [(name: String, color: ChartColor, dash: Dash, dot: Bool)] {
         if kind == .pie, let labels = categories, let slices = series.first?.segments.first {
@@ -110,10 +116,10 @@ extension ChartModel {
             return slices.enumerated().map { i, p in
                 let share = total > 0 ? p.y / total * 100 : 0
                 let percent = share < 10 && share.rounded() != share ? String(format: "%.1f", share) : String(format: "%.0f", share)
-                return ("\(i < labels.count ? labels[i] : "") \(percent)%", .palette(i), .solid, true)
+                return ("\(i < labels.count ? labels[i] : "")  \(percent)%", .palette(i), .solid, true)
             }
         }
-        return series.map { ($0.name.isEmpty ? "Untitled" : $0.name, .palette($0.color), .solid, kind == .scatter) }
+        return series.map { ($0.name.isEmpty ? "Untitled" : $0.name, .palette($0.color), .solid, kind == .scatter || kind == .bar) }
             + curves.map { ($0.name, $0.color, $0.dash, false) }
     }
 
@@ -135,26 +141,44 @@ extension ChartModel {
 
 // MARK: - Drawing
 
-/// The categorical palette, light and dark (validated for color-vision deficiency and
-/// against Indium's paper in both modes; see the dataviz reference palette).
+/// A chart's colors, light and dark, for each style.
 enum ChartPalette {
-    static let light: [UInt32] = [0x2A78D6, 0xEB6834, 0x1BAF7A, 0xEDA100, 0xE87BA4, 0x008300, 0x6250D6, 0xE34948]
-    static let dark: [UInt32] = [0x3987E5, 0xD95926, 0x199E70, 0xC98500, 0xD55181, 0x008300, 0x9085E9, 0xE66767]
+    /// Soft: inks from the app's own colors (its link blue, its warning amber and error
+    /// terracotta) and quiet greens and plums beside them, lightened for dark mode.
+    static let softLight: [UInt32] = [0x3F6E9A, 0xC2694A, 0x6E9A6B, 0xC9A13E, 0x8C5E8C, 0x4E9196, 0xC98584, 0x6F7782]
+    static let softDark: [UInt32] = [0x8FB3D6, 0xE0937A, 0x9CC197, 0xE2C06A, 0xC195C0, 0x86C1C4, 0xE6A9A6, 0xA5ADB8]
+    /// Vivid: far apart and bright (validated for color-vision deficiency against Indium's
+    /// paper in both modes; see the dataviz reference palette).
+    static let vividLight: [UInt32] = [0x2A78D6, 0xEB6834, 0x1BAF7A, 0xEDA100, 0xE87BA4, 0x008300, 0x6250D6, 0xE34948]
+    static let vividDark: [UInt32] = [0x3987E5, 0xD95926, 0x199E70, 0xC98500, 0xD55181, 0x008300, 0x9085E9, 0xE66767]
+    /// Mono: the text color mixed into the paper, darkest first.
+    private static let monoShares: [Double] = [0.78, 0.5, 0.32, 0.2, 0.64, 0.42, 0.26, 0.14]
 
-    static func nsColor(_ c: ChartColor, dark: Bool) -> NSColor {
-        let v: UInt32
-        switch c {
-        case let .palette(i): let p = dark ? Self.dark : light; v = p[i % p.count]
-        case let .hex(h): v = h
+    static func hex(_ c: ChartColor, style: ChartModel.Style, dark: Bool) -> UInt32 {
+        guard case let .palette(i) = c else { if case let .hex(h) = c { return h }; return 0 }
+        switch style {
+        case .soft: let p = dark ? softDark : softLight; return p[i % p.count]
+        case .vivid: let p = dark ? vividDark : vividLight; return p[i % p.count]
+        case .mono: return mix(dark ? 0xE7E3DC : 0x2A2826, into: dark ? 0x1F1E1C : 0xFAF8F4, monoShares[i % monoShares.count])
         }
+    }
+
+    /// `ink` laid over `paper` at `share`, as one solid color.
+    private static func mix(_ ink: UInt32, into paper: UInt32, _ share: Double) -> UInt32 {
+        func channel(_ shift: UInt32) -> UInt32 {
+            let a = Double((ink >> shift) & 0xFF), b = Double((paper >> shift) & 0xFF)
+            return UInt32((a * share + b * (1 - share)).rounded()) << shift
+        }
+        return channel(16) | channel(8) | channel(0)
+    }
+
+    static func nsColor(_ c: ChartColor, style: ChartModel.Style = .soft, dark: Bool) -> NSColor {
+        let v = hex(c, style: style, dark: dark)
         return NSColor(srgbRed: CGFloat((v >> 16) & 0xFF) / 255, green: CGFloat((v >> 8) & 0xFF) / 255, blue: CGFloat(v & 0xFF) / 255, alpha: 1)
     }
 
-    static func color(_ c: ChartColor, dark: Bool) -> Color {
-        switch c {
-        case let .palette(i): let p = dark ? Self.dark : light; return Color(hex: p[i % p.count])
-        case let .hex(v): return Color(hex: v)
-        }
+    static func color(_ c: ChartColor, style: ChartModel.Style = .soft, dark: Bool) -> Color {
+        Color(hex: hex(c, style: style, dark: dark))
     }
 }
 
@@ -169,19 +193,22 @@ private struct ChartView: View {
     let dark: Bool
     let width: CGFloat
 
+    // The note's ink and its shades, as Palette has them.
     private var ink: Color { dark ? Color(hex: 0xE7E3DC) : Color(hex: 0x2A2826) }
-    /// Axis titles and the legend: a step down from the text, still easy to read.
-    private var labelInk: Color { ink.opacity(dark ? 0.86 : 0.82) }
-    /// Numbers along the axes.
-    private var secondary: Color { ink.opacity(dark ? 0.72 : 0.68) }
-    private var gridColor: Color { ink.opacity(dark ? 0.13 : 0.09) }
-    private var axisColor: Color { ink.opacity(dark ? 0.4 : 0.35) }
+    /// Axis titles and the legend, as quoted text is.
+    private var labelInk: Color { ink.opacity(0.78) }
+    /// Numbers along the axes, in the app's secondary text color.
+    private var secondary: Color { ink.opacity(0.56) }
+    private var gridColor: Color { ink.opacity(dark ? 0.08 : 0.07) }
+    private var axisColor: Color { ink.opacity(dark ? 0.26 : 0.22) }
+
+    private func paint(_ c: ChartColor) -> Color { ChartPalette.color(c, style: model.style, dark: dark) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             if let title = model.title {
-                Text(title).font(.system(size: 14, weight: .semibold)).foregroundStyle(ink).lineLimit(1)
-                    .frame(height: 18)
+                Text(title).font(Font(ChartRender.font(15, weight: .semibold))).foregroundStyle(ink).lineLimit(1)
+                    .frame(height: 22)
             }
             if model.showsLegend { legend }
             titled(plot)
@@ -194,10 +221,10 @@ private struct ChartView: View {
 
     /// The axis titles around the plot: y turned up the left side, x centered below.
     private func titled(_ plot: some View) -> some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 8) {
             HStack(spacing: 6) {
                 if let y = model.yTitle {
-                    Text(y).font(.system(size: 12, weight: .medium)).foregroundStyle(labelInk).lineLimit(1)
+                    Text(y).font(Font(ChartRender.font(12))).foregroundStyle(labelInk).lineLimit(1)
                         .fixedSize()
                         .rotationEffect(.degrees(-90))
                         .frame(width: 15)
@@ -206,7 +233,7 @@ private struct ChartView: View {
                 plot.padding(.top, 8).padding(.trailing, 14)
             }
             if let x = model.xTitle {
-                Text(x).font(.system(size: 12, weight: .medium)).foregroundStyle(labelInk).lineLimit(1)
+                Text(x).font(Font(ChartRender.font(12))).foregroundStyle(labelInk).lineLimit(1)
                     .padding(.leading, model.yTitle == nil ? 0 : 21)
             }
         }
@@ -221,14 +248,16 @@ private struct ChartView: View {
                     ForEach(row, id: \.self) { i in
                         let item = items[i]
                         HStack(spacing: 5) {
-                            if item.dot {
-                                Circle().fill(ChartPalette.color(item.color, dark: dark)).frame(width: 9, height: 9).frame(width: 18, height: 10)
+                            if item.dot, model.kind == .bar {
+                                RoundedRectangle(cornerRadius: 2.5, style: .continuous).fill(paint(item.color)).frame(width: 10, height: 10).frame(width: 18, height: 10)
+                            } else if item.dot {
+                                Circle().fill(paint(item.color)).frame(width: 9, height: 9).frame(width: 18, height: 10)
                             } else {
                                 Path { p in
                                     p.move(to: CGPoint(x: 1, y: 5))
                                     p.addLine(to: CGPoint(x: 17, y: 5))
                                 }
-                                .stroke(ChartPalette.color(item.color, dark: dark),
+                                .stroke(paint(item.color),
                                         style: StrokeStyle(lineWidth: 2.5, lineCap: .round, dash: dash(item.dash, width: 2)))
                                 .frame(width: 18, height: 10)
                             }
@@ -270,7 +299,7 @@ private struct ChartView: View {
         return Chart {
             ForEach(Array(slices.enumerated()), id: \.offset) { i, p in
                 SectorMark(angle: .value("Value", p.y), innerRadius: .ratio(model.donut ? 0.58 : 0), angularInset: 1.5)
-                    .foregroundStyle(ChartPalette.color(.palette(i), dark: dark))
+                    .foregroundStyle(paint(.palette(i)))
                     .cornerRadius(3)
             }
         }
@@ -282,7 +311,7 @@ private struct ChartView: View {
     private func categoryChart(_ categories: [String]) -> some View {
         Chart {
             ForEach(Array(model.series.enumerated()), id: \.offset) { i, s in
-                let color = ChartPalette.color(.palette(s.color), dark: dark)
+                let color = paint(.palette(s.color))
                 ForEach(Array(s.segments.joined().enumerated()), id: \.offset) { _, p in
                     let label = categories.indices.contains(Int(p.x)) ? categories[Int(p.x)] : ""
                     if model.kind == .bar {
@@ -290,10 +319,11 @@ private struct ChartView: View {
                             BarMark(x: .value("Label", label), y: .value("Value", p.y))
                                 .foregroundStyle(color)
                         } else {
+                            // Rounded at the top, square where it stands.
                             BarMark(x: .value("Label", label), y: .value("Value", p.y))
                                 .foregroundStyle(color)
                                 .position(by: .value("Series", "\(i)"))
-                                .cornerRadius(3)
+                                .clipShape(UnevenRoundedRectangle(topLeadingRadius: 5, topTrailingRadius: 5, style: .continuous))
                         }
                     } else {
                         LineMark(x: .value("Label", label), y: .value("Value", p.y), series: .value("Series", "s\(i)"))
@@ -308,19 +338,19 @@ private struct ChartView: View {
             ForEach(Array(model.curves.enumerated()), id: \.offset) { i, c in
                 if let x = c.vertical.map({ Int($0) }), categories.indices.contains(x) {
                     RuleMark(x: .value("Label", categories[x]))
-                        .foregroundStyle(ChartPalette.color(c.color, dark: dark))
+                        .foregroundStyle(paint(c.color))
                         .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, dash: dash(c.dash, width: 2)))
                 }
                 if let y = flatY(c) {
                     RuleMark(y: .value("Value", y))
-                        .foregroundStyle(ChartPalette.color(c.color, dark: dark))
+                        .foregroundStyle(paint(c.color))
                         .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, dash: dash(c.dash, width: 2)))
                 } else {
                     ForEach(Array(c.segments.enumerated()), id: \.offset) { j, segment in
                         ForEach(Array(segment.enumerated()), id: \.offset) { _, p in
                             let label = categories.indices.contains(Int(p.x.rounded())) ? categories[Int(p.x.rounded())] : ""
                             LineMark(x: .value("Label", label), y: .value("Value", p.y), series: .value("Series", "c\(i)-\(j)"))
-                                .foregroundStyle(ChartPalette.color(c.color, dark: dark))
+                                .foregroundStyle(paint(c.color))
                                 .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, dash: dash(c.dash, width: 2)))
                         }
                     }
@@ -329,7 +359,7 @@ private struct ChartView: View {
             ForEach(Array(model.markers.enumerated()), id: \.offset) { _, m in
                 if categories.indices.contains(Int(m.point.x)) {
                     PointMark(x: .value("Label", categories[Int(m.point.x)]), y: .value("Value", m.point.y))
-                        .foregroundStyle(ChartPalette.color(m.color, dark: dark))
+                        .foregroundStyle(paint(m.color))
                         .symbol(symbol(m.shape))
                         .symbolSize(64)
                 }
@@ -358,7 +388,7 @@ private struct ChartView: View {
                 if y.contains(0) { RuleMark(y: .value("y", 0)).foregroundStyle(axisColor).lineStyle(StrokeStyle(lineWidth: 1)) }
             }
             ForEach(Array(model.series.enumerated()), id: \.offset) { i, s in
-                let color = ChartPalette.color(.palette(s.color), dark: dark)
+                let color = paint(.palette(s.color))
                 ForEach(Array(s.segments.enumerated()), id: \.offset) { j, segment in
                     ForEach(Array(segment.enumerated()), id: \.offset) { _, p in
                         if model.kind != .scatter {
@@ -373,7 +403,7 @@ private struct ChartView: View {
                 }
             }
             ForEach(Array(model.curves.enumerated()), id: \.offset) { i, c in
-                let color = ChartPalette.color(c.color, dark: dark)
+                let color = paint(c.color)
                 if let x = c.vertical {
                     RuleMark(x: .value("x", x))
                         .foregroundStyle(color)
@@ -394,13 +424,13 @@ private struct ChartView: View {
                 }
             }
             ForEach(Array(model.markers.enumerated()), id: \.offset) { _, m in
-                let color = ChartPalette.color(m.color, dark: dark)
+                let color = paint(m.color)
                 PointMark(x: .value("x", m.point.x), y: .value("y", m.point.y))
                     .foregroundStyle(color)
                     .symbol(symbol(m.shape))
                     .symbolSize(64)
                     .annotation(position: .trailing, alignment: .leading, spacing: 4) {
-                        if let label = m.label { Text(label).font(.system(size: 11)).foregroundStyle(ink) }
+                        if let label = m.label { Text(label).font(Font(ChartRender.font(12))).foregroundStyle(labelInk) }
                     }
             }
         }
@@ -435,10 +465,11 @@ private struct ChartView: View {
 
     /// Numbers (or labels) along an axis, y's to the left. Labels along x have no ticks;
     /// they sit under their bars and points.
+    /// Only faint lines across, for reading values off; ticks only on a graph, as on graph paper.
     private func axis(grid: Bool, leading: Bool = false, ticks: Bool = true) -> some AxisContent {
         AxisMarks(position: leading ? .leading : .bottom) { value in
             if grid { AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(gridColor) }
-            if ticks { AxisTick(length: 4, stroke: StrokeStyle(lineWidth: 0.75)).foregroundStyle(axisColor) }
+            if ticks && model.kind == .graph { AxisTick(length: 4, stroke: StrokeStyle(lineWidth: 0.75)).foregroundStyle(axisColor) }
             if leading {
                 AxisValueLabel(horizontalSpacing: 6) {
                     if let v = value.as(Double.self) { Text(Self.number(v)).font(.system(size: 11).monospacedDigit()).foregroundStyle(secondary) }
@@ -457,8 +488,11 @@ private struct ChartView: View {
     /// keeps their room below the plot.
     private var xAxis: some AxisContent {
         AxisMarks(position: .bottom, values: xTicks) { _ in
-            if model.grid { AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(gridColor) }
-            AxisTick(length: 4, stroke: StrokeStyle(lineWidth: 0.75)).foregroundStyle(axisColor)
+            // Upright grid lines on a graph only; data reads across.
+            if model.grid && model.kind == .graph {
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(gridColor)
+                AxisTick(length: 4, stroke: StrokeStyle(lineWidth: 0.75)).foregroundStyle(axisColor)
+            }
             AxisValueLabel { Text("0").font(.system(size: 11)).hidden() }
         }
     }

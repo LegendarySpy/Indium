@@ -54,8 +54,8 @@ model	type: doughnut↵labels: [A, B, C]↵series:↵  - title: Share↵    data
 model	type: pie↵id: mix	| Part | Mass (g) | Moles |↵| - | - | - |↵| Water | 50 | 2.8 |↵| Salt | 30 | 0.5 |	pie labels Water,Salt | series  (0, 50) (1, 30) | problem A pie shows one set of values; this one shows Mass (g).
 model	type: pie↵points: (1, 5), (2, 5)↵plot: y = 3		pie labels 1,2 | series  (0, 5) (1, 5) | problem A pie has no axes to draw lines on.
 model	type: radar↵labels: [A, B]		line | problem Indium draws line, bar, scatter and pie charts, not radar charts. Obsidian’s Charts plugin still can.
-legend	type: pie↵labels: [Water, Salt, Sugar]↵series:↵  - title: Mass↵    data: [50, 30, 20]		Water 50% | Salt 30% | Sugar 20%
-legend	type: pie↵labels: [A, B, C]↵series:↵  - title: Mass↵    data: [1, 1, 1]		A 33% | B 33% | C 33%
+legend	type: pie↵labels: [Water, Salt, Sugar]↵series:↵  - title: Mass↵    data: [50, 30, 20]		Water  50% | Salt  30% | Sugar  20%
+legend	type: pie↵labels: [A, B, C]↵series:↵  - title: Mass↵    data: [1, 1, 1]		A  33% | B  33% | C  33%
 # Points get a name of their own
 model	type: scatter↵points: (1, 2), (2, 4)↵pointsTitle: Trial 1↵plot: y = 2x		scatter x 1..2 | series Trial 1 (1, 2) (2, 4) | curve y = 2x (1, 2)..(2, 4)
 legend	type: scatter↵points: (1, 2), (2, 4)↵pointsTitle: Trial 1↵plot: y = 2x		Trial 1 | y = 2x
@@ -68,3 +68,7 @@ setdata	type: bar↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]	A
 setdata	type: bar↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]↵bestFit: true	A, B|	type: bar↵labels: [A, B]↵series:↵  - title: ""↵    data: []↵bestFit: true
 setdata	type: pie	Water, "Salt, fine"|Mass: total=50, 30	type: pie↵labels: [Water, "Salt, fine"]↵series:↵  - title: "Mass: total"↵    data: [50, 30]
 setdata	type: bar↵labels: [A]↵series:↵  - title: X↵    data: [1]		type: bar
+# Styles: soft unless the block names another; one it doesn't know is soft too
+model	type: bar↵style: mono↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]		bar labels A,B | series X (0, 1) (1, 2) | style mono
+model	type: bar↵style: Vivid↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]		bar labels A,B | series X (0, 1) (1, 2) | style vivid
+model	type: bar↵style: neon↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]		bar labels A,B | series X (0, 1) (1, 2)

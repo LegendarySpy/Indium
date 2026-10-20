@@ -83,6 +83,7 @@ enum ChartSelfTest {
         }
         for k in m.markers { parts.append("point " + pt(k.point)) }
         for p in m.problems { parts.append("problem " + p) }
+        if m.style != .soft { parts.append("style \(m.style.rawValue)") }
         return parts.joined(separator: " | ")
     }
 }
