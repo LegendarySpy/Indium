@@ -57,6 +57,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// Math shortcuts, blanks to Tab through and the preview, for the note's text.
     lazy var math = MathEditor(host: self)
     private var relayout: NSRange?
+    /// Text typed or pasted since the last change notice, drawn afresh once it's done.
+    private var edited: NSRange?
     private var captionPopover: NSPopover?
     private var observers: [Any] = []
     private var cancellables = Set<AnyCancellable>()
@@ -695,6 +697,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         math.shiftStops(editedRange: editedRange, delta: delta)
         guard !isLoading else { return }
         if let fm = frontmatterRange, editedRange.location <= NSMaxRange(fm) { frontmatterEdited = true }
+        edited = edited.map { NSUnionRange($0, editedRange) } ?? editedRange
         let caret = NSRange(location: NSMaxRange(editedRange), length: 0)
         if let restyled = styler.didEdit(textStorage, editedRange: editedRange, delta: delta, selection: [caret]) {
             relayout = relayout.map { NSUnionRange($0, restyled) } ?? restyled
@@ -710,6 +713,24 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard clamped.length > 0 else { return }
         layoutManager.invalidateLayout(forCharacterRange: clamped, actualCharacterRange: nil)
         layoutManager.invalidateDisplay(forCharacterRange: clamped)
+    }
+
+    /// The edited paragraph, with its glyphs made again and repainted edge to edge. Text
+    /// that takes the place of a rendered equation (deleted, then something pasted where
+    /// it was) could otherwise keep the equation's hidden glyphs and show as a blank line.
+    private func redrawEdited() {
+        guard let range = edited else { return }
+        edited = nil
+        let ns = storage.string as NSString
+        let clamped = NSIntersectionRange(range, NSRange(location: 0, length: ns.length))
+        guard ns.length > 0, let container = textView.textContainer else { return }
+        let paragraph = ns.paragraphRange(for: NSRange(location: min(clamped.location, ns.length - 1), length: clamped.length))
+        layoutManager.invalidateGlyphs(forCharacterRange: paragraph, changeInLength: 0, actualCharacterRange: nil)
+        layoutManager.invalidateLayout(forCharacterRange: paragraph, actualCharacterRange: nil)
+        let glyphs = layoutManager.glyphRange(forCharacterRange: paragraph, actualCharacterRange: nil)
+        let box = layoutManager.boundingRect(forGlyphRange: glyphs, in: container)
+        textView.setNeedsDisplay(NSRect(x: 0, y: box.minY + textView.textContainerOrigin.y - 6,
+                                        width: textView.bounds.width, height: box.height + 12))
     }
 
     // MARK: NSTextViewDelegate
@@ -746,6 +767,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             }
         }
         relayoutRestyled()
+        redrawEdited()
         guard !isLoading else { return }
         hasUnsavedEdits = true
         selectionBar.dismiss()
