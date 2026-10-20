@@ -116,7 +116,9 @@ extension EditorTextView {
                                  animationParameters: NSWritingToolsCoordinator.AnimationParameters?,
                                  completion: @escaping (NSAttributedString?) -> Void) {
         let selector = #selector(writingToolsCoordinator(_:replaceRange:in:proposedText:reason:animationParameters:completion:))
-        guard let editor, let edit = editor.writingToolsEdit(range: range, context: context, proposed: proposedText),
+        // Should a later AppKit stop implementing it, refuse the change rather than crash.
+        guard NSTextView.instancesRespond(to: selector),
+              let editor, let edit = editor.writingToolsEdit(range: range, context: context, proposed: proposedText),
               let imp = class_getMethodImplementation(NSTextView.self, selector) else {
             NSSound.beep()
             completion(nil)
