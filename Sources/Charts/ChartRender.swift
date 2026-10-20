@@ -110,17 +110,24 @@ extension ChartModel {
 
     /// What the legend lists: series as a dot (scatter, and a bar's block) or a line, then curves. A pie's
     /// slices, each with its share.
-    var legendItems: [(name: String, color: ChartColor, dash: Dash, dot: Bool)] {
+    var legendItems: [(name: String, color: ChartColor, dash: Dash, dot: Bool, index: Int)] {
         if kind == .pie, let labels = categories, let slices = series.first?.segments.first {
             let total = slices.map(\.y).reduce(0, +)
             return slices.enumerated().map { i, p in
                 let share = total > 0 ? p.y / total * 100 : 0
                 let percent = share < 10 && share.rounded() != share ? String(format: "%.1f", share) : String(format: "%.0f", share)
-                return ("\(i < labels.count ? labels[i] : "")  \(percent)%", .palette(i), .solid, true)
+                return ("\(i < labels.count ? labels[i] : "")  \(percent)%", .palette(i), .solid, true, i)
             }
         }
-        return series.map { ($0.name.isEmpty ? "Untitled" : $0.name, .palette($0.color), .solid, kind == .scatter || kind == .bar) }
-            + curves.map { ($0.name, $0.color, $0.dash, false) }
+        return series.map { ($0.name.isEmpty ? "Untitled" : $0.name, .palette($0.color), seriesDash($0.color), kind == .scatter || kind == .bar, $0.color) }
+            + curves.map { ($0.name, $0.color, $0.dash, false, -1) }
+    }
+
+    /// Lines told apart without color, in the styles meant to print in grey: solid, then
+    /// dashed, then dotted.
+    func seriesDash(_ index: Int) -> Dash {
+        guard style == .mono || style == .hatched else { return .solid }
+        return [Dash.solid, .dashed, .dotted][index % 3]
     }
 
     /// The legend's items, a row at a time, wrapped to `width` as words wrap.
@@ -157,7 +164,7 @@ enum ChartPalette {
     static func hex(_ c: ChartColor, style: ChartModel.Style, dark: Bool) -> UInt32 {
         guard case let .palette(i) = c else { if case let .hex(h) = c { return h }; return 0 }
         switch style {
-        case .soft: let p = dark ? softDark : softLight; return p[i % p.count]
+        case .soft, .hatched, .gradient, .dotted: let p = dark ? softDark : softLight; return p[i % p.count]
         case .vivid: let p = dark ? vividDark : vividLight; return p[i % p.count]
         case .mono: return mix(dark ? 0xE7E3DC : 0x2A2826, into: dark ? 0x1F1E1C : 0xFAF8F4, monoShares[i % monoShares.count])
         }
@@ -179,6 +186,119 @@ enum ChartPalette {
 
     static func color(_ c: ChartColor, style: ChartModel.Style = .soft, dark: Bool) -> Color {
         Color(hex: hex(c, style: style, dark: dark))
+    }
+}
+
+/// Small tiles that repeat across a bar or slice: lines at an angle (a different one for
+/// each set of values, as a textbook figure tells them apart) or a stipple of dots, in
+/// the mark's color over a pale wash of it.
+enum ChartPattern: Hashable {
+    case hatch(Int)
+    case dots
+    /// The color from one strength to another, top to bottom, over `height` points.
+    case fade(from: Double, to: Double, height: Int)
+
+    private static var cache: [String: NSImage] = [:]
+
+    static func paint(_ pattern: ChartPattern, color: NSColor, dark: Bool) -> ImagePaint {
+        ImagePaint(image: Image(nsImage: image(pattern, color: color, dark: dark)), scale: 1 / 3)
+    }
+
+    /// The tile, at three times its size.
+    static func image(_ pattern: ChartPattern, color: NSColor, dark: Bool) -> NSImage {
+        let key = "\(pattern)-\(color.hexKey)-\(dark)"
+        if let hit = cache[key] { return hit }
+        let made = tile(pattern, color: color, dark: dark)
+        cache[key] = made
+        return made
+    }
+
+    /// Three little bars in a style, for the inspector's menu of them.
+    static func preview(_ style: ChartModel.Style, dark: Bool) -> NSImage {
+        NSImage(size: NSSize(width: 22, height: 14), flipped: true) { _ in
+            for (i, height) in [8.0, 13.0, 10.0].enumerated() {
+                let bar = NSRect(x: CGFloat(i) * 8, y: 14 - height, width: 6, height: height)
+                let shape = NSBezierPath(roundedRect: bar, xRadius: 1.5, yRadius: 1.5)
+                let color = ChartPalette.nsColor(.palette(i), style: style, dark: dark)
+                NSGraphicsContext.saveGraphicsState()
+                shape.addClip()
+                switch style {
+                case .hatched, .dotted:
+                    // The tile at its real size, lined up with the bar.
+                    let tile = image(style == .hatched ? .hatch(i) : .dots, color: color, dark: dark)
+                    let small = NSImage(size: NSSize(width: tile.size.width / 3, height: tile.size.height / 3), flipped: false) { r in
+                        tile.draw(in: r)
+                        return true
+                    }
+                    NSColor(patternImage: small).setFill()
+                    bar.fill()
+                case .gradient:
+                    NSGradient(starting: color, ending: color.withAlphaComponent(0.36))?.draw(in: bar, angle: 90)
+                default:
+                    color.setFill()
+                    bar.fill()
+                }
+                NSGraphicsContext.restoreGraphicsState()
+            }
+            return true
+        }
+    }
+
+    /// Drawn at three times its size, so the lines stay sharp.
+    private static func tile(_ pattern: ChartPattern, color: NSColor, dark: Bool) -> NSImage {
+        let scale: CGFloat = 3
+        if case let .fade(from, to, height) = pattern {
+            let size = NSSize(width: 2 * scale, height: CGFloat(height) * scale)
+            let image = NSImage(size: size, flipped: true) { rect in
+                NSGradient(starting: color.withAlphaComponent(from), ending: color.withAlphaComponent(to))?.draw(in: rect, angle: 90)
+                return true
+            }
+            return image
+        }
+        let side: CGFloat = pattern == .dots ? 6 : 7
+        let px = Int(side * scale)
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px, bitsPerSample: 8, samplesPerPixel: 4,
+                                         hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let context = NSGraphicsContext(bitmapImageRep: rep) else { return NSImage() }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        let s = CGFloat(px)
+        color.withAlphaComponent(dark ? 0.2 : 0.16).setFill()
+        NSRect(x: 0, y: 0, width: s, height: s).fill()
+        color.setFill()
+        color.setStroke()
+        switch pattern {
+        case .dots:
+            for c in [CGPoint(x: s * 0.25, y: s * 0.25), CGPoint(x: s * 0.75, y: s * 0.75)] {
+                NSBezierPath(ovalIn: NSRect(x: c.x - scale * 1.05, y: c.y - scale * 1.05, width: scale * 2.1, height: scale * 2.1)).fill()
+            }
+        case .fade:
+            break
+        case let .hatch(index):
+            let path = NSBezierPath()
+            path.lineWidth = scale * 1.25
+            // Rising, falling, upright, flat, then crossed: each set its own way.
+            let kind = index % 5
+            for k in -1...1 {
+                let o = CGFloat(k) * s
+                if kind == 0 || kind == 4 { path.move(to: NSPoint(x: o, y: 0)); path.line(to: NSPoint(x: o + s, y: s)) }
+                if kind == 1 || kind == 4 { path.move(to: NSPoint(x: o, y: s)); path.line(to: NSPoint(x: o + s, y: 0)) }
+            }
+            if kind == 2 { path.move(to: NSPoint(x: s / 2, y: 0)); path.line(to: NSPoint(x: s / 2, y: s)) }
+            if kind == 3 { path.move(to: NSPoint(x: 0, y: s / 2)); path.line(to: NSPoint(x: s, y: s / 2)) }
+            path.stroke()
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        let image = NSImage(size: NSSize(width: px, height: px))
+        image.addRepresentation(rep)
+        return image
+    }
+}
+
+private extension NSColor {
+    var hexKey: String {
+        guard let c = usingColorSpace(.sRGB) else { return description }
+        return String(format: "%02X%02X%02X", Int(c.redComponent * 255), Int(c.greenComponent * 255), Int(c.blueComponent * 255))
     }
 }
 
@@ -248,10 +368,12 @@ private struct ChartView: View {
                     ForEach(row, id: \.self) { i in
                         let item = items[i]
                         HStack(spacing: 5) {
-                            if item.dot, model.kind == .bar {
-                                RoundedRectangle(cornerRadius: 2.5, style: .continuous).fill(paint(item.color)).frame(width: 10, height: 10).frame(width: 18, height: 10)
+                            if item.dot, model.kind == .bar || model.kind == .pie {
+                                RoundedRectangle(cornerRadius: 2.5, style: .continuous).fill(fill(item.color, item.index))
+                                    .frame(width: 11, height: 11).frame(width: 18, height: 11)
                             } else if item.dot {
-                                Circle().fill(paint(item.color)).frame(width: 9, height: 9).frame(width: 18, height: 10)
+                                marker(item.index).frame(width: 9, height: 9).frame(width: 18, height: 10)
+                                    .foregroundStyle(paint(item.color))
                             } else {
                                 Path { p in
                                     p.move(to: CGPoint(x: 1, y: 5))
@@ -299,7 +421,7 @@ private struct ChartView: View {
         return Chart {
             ForEach(Array(slices.enumerated()), id: \.offset) { i, p in
                 SectorMark(angle: .value("Value", p.y), innerRadius: .ratio(model.donut ? 0.58 : 0), angularInset: 1.5)
-                    .foregroundStyle(paint(.palette(i)))
+                    .foregroundStyle(fill(.palette(i), i))
                     .cornerRadius(3)
             }
         }
@@ -317,20 +439,21 @@ private struct ChartView: View {
                     if model.kind == .bar {
                         if model.stacked {
                             BarMark(x: .value("Label", label), y: .value("Value", p.y))
-                                .foregroundStyle(color)
+                                .foregroundStyle(fill(.palette(s.color), s.color))
                         } else {
                             // Rounded at the top, square where it stands.
                             BarMark(x: .value("Label", label), y: .value("Value", p.y))
-                                .foregroundStyle(color)
+                                .foregroundStyle(fill(.palette(s.color), s.color))
                                 .position(by: .value("Series", "\(i)"))
                                 .clipShape(UnevenRoundedRectangle(topLeadingRadius: 5, topTrailingRadius: 5, style: .continuous))
                         }
                     } else {
                         LineMark(x: .value("Label", label), y: .value("Value", p.y), series: .value("Series", "s\(i)"))
                             .foregroundStyle(color)
-                            .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                            .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round, dash: dash(model.seriesDash(s.color), width: 2)))
                         PointMark(x: .value("Label", label), y: .value("Value", p.y))
                             .foregroundStyle(color)
+                            .symbol(symbol(series: s.color))
                             .symbolSize(36)
                     }
                 }
@@ -391,13 +514,20 @@ private struct ChartView: View {
                 let color = paint(.palette(s.color))
                 ForEach(Array(s.segments.enumerated()), id: \.offset) { j, segment in
                     ForEach(Array(segment.enumerated()), id: \.offset) { _, p in
+                        if model.kind != .scatter, model.style == .gradient, let floor = areaFloor {
+                            // A wash under the line, fading to nothing at the bottom.
+                            AreaMark(x: .value("x", p.x), yStart: .value("y", floor), yEnd: .value("y", p.y), series: .value("Area", "a\(i)-\(j)"))
+                                .foregroundStyle(ChartPattern.paint(.fade(from: 0.28, to: 0, height: fadeHeight),
+                                                                    color: ChartPalette.nsColor(.palette(s.color), style: model.style, dark: dark), dark: dark))
+                        }
                         if model.kind != .scatter {
                             LineMark(x: .value("x", p.x), y: .value("y", p.y), series: .value("Series", "s\(i)-\(j)"))
                                 .foregroundStyle(color)
-                                .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                                .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round, dash: dash(model.seriesDash(s.color), width: 2)))
                         }
                         PointMark(x: .value("x", p.x), y: .value("y", p.y))
                             .foregroundStyle(color)
+                            .symbol(symbol(series: s.color))
                             .symbolSize(model.kind == .scatter ? 48 : 36)
                     }
                 }
@@ -442,6 +572,57 @@ private struct ChartView: View {
         // A range set by hand cuts off what's past it; one fitted to the data leaves a point
         // on the edge whole.
         .chartPlotStyle { $0.clipShape(Rectangle().inset(by: model.kind == .graph || model.yDomain != nil ? 0 : -8)) }
+    }
+
+    // MARK: Styles
+
+    /// How bars and slices are filled: flat, lined, faded or stippled.
+    private func fill(_ c: ChartColor, _ index: Int) -> AnyShapeStyle {
+        let color = paint(c)
+        switch model.style {
+        case .hatched: return AnyShapeStyle(ChartPattern.paint(.hatch(index), color: ChartPalette.nsColor(c, style: model.style, dark: dark), dark: dark))
+        case .dotted: return AnyShapeStyle(ChartPattern.paint(.dots, color: ChartPalette.nsColor(c, style: model.style, dark: dark), dark: dark))
+        // A gradient drawn as a picture: the PDF the chart renders into keeps only a gradient's first color.
+        case .gradient: return AnyShapeStyle(ChartPattern.paint(.fade(from: 1, to: dark ? 0.3 : 0.36, height: fadeHeight),
+                                                                color: ChartPalette.nsColor(c, style: model.style, dark: dark), dark: dark))
+        default: return AnyShapeStyle(color)
+        }
+    }
+
+    /// A series' markers: a shape of its own where color alone won't tell them apart in
+    /// print, open rings in the dotted style, dots otherwise.
+    private func symbol(series index: Int) -> AnyChartSymbolShape {
+        switch model.style {
+        case .mono, .hatched:
+            let shapes: [BasicChartSymbolShape] = [.circle, .square, .triangle, .diamond, .pentagon]
+            return AnyChartSymbolShape(shapes[index % shapes.count])
+        case .dotted: return AnyChartSymbolShape(BasicChartSymbolShape.circle.strokeBorder(lineWidth: 1.6))
+        default: return AnyChartSymbolShape(BasicChartSymbolShape.circle)
+        }
+    }
+
+    /// The same marker for the legend.
+    @ViewBuilder private func marker(_ index: Int) -> some View {
+        switch model.style {
+        case .mono, .hatched:
+            let shapes: [BasicChartSymbolShape] = [.circle, .square, .triangle, .diamond, .pentagon]
+            shapes[index % shapes.count].path(in: CGRect(x: 0, y: 0, width: 9, height: 9)).fill()
+        case .dotted: Circle().strokeBorder(lineWidth: 1.6)
+        default: Circle()
+        }
+    }
+
+    /// How far a fade runs: about the plot's height.
+    private var fadeHeight: Int { Int(min(max(width * 0.5, 200), 400)) }
+
+    /// Where a line's wash starts: the bottom of the plot, zero when the values sit well
+    /// above it, as the axis then starts there too.
+    private var areaFloor: Double? {
+        if model.beginAtZero { return 0 }
+        if let d = model.yDomain { return d.lowerBound }
+        let ys = model.series.flatMap { $0.segments.flatMap { $0.map(\.y) } }
+        guard let lo = ys.min(), let hi = ys.max() else { return nil }
+        return lo > 0 && lo < hi * 0.5 ? 0 : lo
     }
 
     private func symbol(_ shape: ChartModel.Shape) -> AnyChartSymbolShape {

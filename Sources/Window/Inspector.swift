@@ -686,12 +686,15 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
         type.action = #selector(typeChanged)
         type.setAccessibilityLabel("Chart Type")
         style.addItems(withTitles: ChartModel.Style.allCases.map { $0.rawValue.capitalized })
+        // Each with a picture of three bars drawn its way.
+        let darkMenu = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        for (item, kind) in zip(style.itemArray, ChartModel.Style.allCases) { item.image = ChartPattern.preview(kind, dark: darkMenu) }
         style.controlSize = .small
         style.font = InspectorStyle.font
         style.target = self
         style.action = #selector(styleChanged)
-        style.setAccessibilityLabel("Chart Colors")
-        style.toolTip = "Soft is Indium’s own muted colors, Mono shades of the text color for printing, Vivid bright ones far apart"
+        style.setAccessibilityLabel("Chart Style")
+        style.toolTip = "Soft is Indium’s own muted colors, Mono shades of the text color for printing, Vivid bright ones; Hatched, Gradient and Dotted fill bars and slices with lines, a fade or dots"
         pointsName.placeholderString = "Name, like Trial 1"
         pointsName.toolTip = "What the points are, for the legend"
         for (field, key, label) in [(titleField, "title", "Title"), (xTitle, "xTitle", "X Axis Title"), (yTitle, "yTitle", "Y Axis Title"),
@@ -722,7 +725,7 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
         editSource.toolTip = "Show this chart’s Markdown in the note"
 
         chartGrid.addRow(with: [InspectorStyle.label("Type"), type])
-        chartGrid.addRow(with: [InspectorStyle.label("Colors"), style])
+        chartGrid.addRow(with: [InspectorStyle.label("Style"), style])
         chartGrid.addRow(with: [InspectorStyle.label("Title"), titleField])
         chartGrid.addRow(with: [InspectorStyle.label("X axis"), xTitle])
         chartGrid.addRow(with: [InspectorStyle.label("Y axis"), yTitle])
@@ -960,7 +963,7 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
     /// Soft, the default, is written as no `style:` line at all.
     @objc private func styleChanged() {
         let picked = ChartModel.Style.allCases[max(0, style.indexOfSelectedItem)]
-        setting("Chart Colors", "style", picked == .soft ? nil : picked.rawValue)
+        setting("Chart Style", "style", picked == .soft ? nil : picked.rawValue)
     }
 
     @objc private func checkboxChanged(_ sender: NSButton) {
