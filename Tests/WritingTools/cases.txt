@@ -1,0 +1,196 @@
+Writing Tools (and Siri through them) changing a selection: `-IndiumWritingToolsCases Tests/WritingTools/cases.txt`.
+Run: Indium -showInspector NO -IndiumTemp YES -IndiumHidden YES -IndiumSnapshot /tmp/x.png -IndiumWritingToolsCases Tests/WritingTools/cases.txt
+Format in DebugSnapshot.runWritingToolsCases. `«…»` is the selection, `⇥` a tab.
+
+### A rewrite of the whole note sent for a selection is refused
+<<< note
+# Groceries
+
+This first paragraph stays as it is.
+
+«i went to the store and buyed milk eggs and bread.»
+
+The last paragraph keeps **bold** and $x^2$ math.
+<<< propose whole
+# Shopping Trip
+
+I visited the store yesterday.
+
+I went to the store and bought milk, eggs and bread.
+
+The final paragraph has bold text and some math.
+>>> note
+# Groceries
+
+This first paragraph stays as it is.
+
+i went to the store and buyed milk eggs and bread.
+
+The last paragraph keeps **bold** and $x^2$ math.
+
+### The note sent back with only the selection changed puts in just that change
+<<< note
+# Groceries
+
+This first paragraph stays as it is.
+
+«i went to the store and buyed milk eggs and bread.»
+
+The last paragraph keeps **bold** and $x^2$ math.
+<<< propose whole
+# Groceries
+
+This first paragraph stays as it is.
+
+I went to the store and bought milk, eggs and bread.
+
+The last paragraph keeps **bold** and $x^2$ math.
+>>> note
+# Groceries
+
+This first paragraph stays as it is.
+
+I went to the store and bought milk, eggs and bread.
+
+The last paragraph keeps **bold** and $x^2$ math.
+>>> undone
+# Groceries
+
+This first paragraph stays as it is.
+
+i went to the store and buyed milk eggs and bread.
+
+The last paragraph keeps **bold** and $x^2$ math.
+
+### Proofreading the selection replaces it, and Undo brings it back
+<<< note
+Intro line.
+
+«i went to the store and buyed milk eggs and bread.»
+
+Outro line.
+<<< propose selection
+I went to the store and bought milk, eggs and bread.
+>>> note
+Intro line.
+
+I went to the store and bought milk, eggs and bread.
+
+Outro line.
+>>> undone
+Intro line.
+
+i went to the store and buyed milk eggs and bread.
+
+Outro line.
+
+### Part of a paragraph: the rest of the paragraph is kept
+<<< note
+Keep this start, «fix this bit pls», and keep this end.
+<<< scope selection
+<<< propose whole
+Keep this start, fix this bit, please, and keep this end.
+>>> note
+Keep this start, fix this bit, please, and keep this end.
+
+### Part of a paragraph rewritten whole is refused
+<<< note
+Keep this start, «fix this bit pls», and keep this end.
+<<< scope selection
+<<< propose whole
+A completely different sentence about something else.
+>>> note
+Keep this start, fix this bit pls, and keep this end.
+
+### Everything around the selection, and math and code in it, is marked to keep
+<<< note
+Intro.
+
+«Use $x^2$ and `ls` here.»
+
+End.
+>>> preserved
+Intro.↵↵
+$x^2$
+`ls`
+↵↵End.
+
+### Frontmatter and a code block are marked to keep when nothing is selected
+<<< note
+---
+title: A
+---
+Some text.
+
+```
+code here
+```
+More text.‸
+>>> preserved
+---↵title: A↵---↵
+```↵code here↵```↵
+
+### Make List comes back as a Markdown list
+<<< note
+Intro.
+
+«milk, eggs, bread»
+
+End.
+<<< list
+Milk
+Eggs
+Bread
+>>> note
+Intro.
+
+- Milk
+- Eggs
+- Bread
+
+End.
+
+### A numbered, nested list
+<<< note
+«steps»
+<<< list
+1. Mix
+⇥1. Flour
+⇥2. Water
+2. Bake
+>>> note
+1. Mix
+	1. Flour
+	2. Water
+2. Bake
+
+### Make Table comes back as a Markdown table
+<<< note
+Intro.
+
+«milk 1, eggs 12»
+
+End.
+<<< table
+Item⇥Qty
+Milk⇥1
+Eggs⇥12
+>>> note
+Intro.
+
+| Item | Qty |
+| --- | --- |
+| Milk | 1 |
+| Eggs | 12 |
+
+End.
+
+### Bullet characters in plain text become Markdown items
+<<< note
+«milk eggs»
+<<< propose selection
+• Milk
+• Eggs
+>>> note
+- Milk
+- Eggs
