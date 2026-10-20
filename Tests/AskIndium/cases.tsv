@@ -1,0 +1,11 @@
+# Ask Indium against the real on-device model: `note with «selection»<TAB>request`. Output varies; read it.
+# Run: Indium -IndiumTemp YES -IndiumHidden YES -showInspector NO -IndiumSnapshot /tmp/x.png -IndiumAskCases Tests/AskIndium/cases.tsv
+Lab notes↵↵«Br1, Co2, H2O, Fe1»↵↵Done.	format these as chemical formulas
+Intro↵↵«i went to the store and buyed milk eggs and bread»↵↵The end.	fix the grammar
+«apples 3, pears 5, plums 2»	make this a table with fruit and count
+«eggs, milk, bread, butter»	make a bulleted list
+The «derivative of x^2 is 2x» here.	write this as math
+«The mitochondria is the powerhouse of the cell.»	what does this mean?
+Notes↵↵«We met on Tuesday and decided to ship the beta next week, pending QA.»	make this shorter
+Physics↵↵«theta times nu over two»↵↵End.	write this as LaTeX math
+«one half plus one third»	write this as a fraction in math

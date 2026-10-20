@@ -185,6 +185,7 @@ final class EditorTextView: NSTextView {
            let editor {
             return editor.validateFind(item)
         }
+        if item.action == #selector(askIndium(_:)) { return isEditable && editor?.askRange() != nil }
         // A plain-text view disables Paste when the pasteboard only holds an image.
         if item.action == #selector(paste(_:)), isEditable, editor?.pasteboardHasImages(.general) == true { return true }
         return super.validateUserInterfaceItem(item)
@@ -344,6 +345,23 @@ final class EditorTextView: NSTextView {
         return super.readSelection(from: pboard, type: type)
     }
     #endif
+
+    // MARK: Ask Indium
+
+    @objc func askIndium(_ sender: Any?) { editor?.showAsk() }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event)
+        // First in the menu, where a request about the selection is easiest to reach.
+        if let menu, isEditable, selectedRange().length > 0 {
+            let item = NSMenuItem(title: "Ask Indium…", action: #selector(askIndium(_:)), keyEquivalent: "")
+            item.target = self
+            item.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
+            menu.insertItem(item, at: 0)
+            menu.insertItem(.separator(), at: 1)
+        }
+        return menu
+    }
 
     override func insertText(_ string: Any, replacementRange: NSRange) {
         // Typing with a chart selected writes on the line after it.

@@ -98,6 +98,8 @@ enum MainMenu {
         add(m, "Delete", #selector(NSText.delete(_:)))
         add(m, "Select All", #selector(NSText.selectAll(_:)), "a")
         m.addItem(.separator())
+        add(m, "Ask Indium…", #selector(EditorTextView.askIndium(_:)), "a", [.command, .shift])
+        m.addItem(.separator())
 
         let find = NSMenu(title: "Find")
         add(find, "Find…", #selector(NSTextView.performFindPanelAction(_:)), "f").tag = Int(NSFindPanelAction.showFindPanel.rawValue)

@@ -1680,6 +1680,57 @@ enum DebugSnapshot {
                     print("NOTE:\n" + target.editor.text)
                 }
             }
+            // `-IndiumAskShot /tmp/a.png -IndiumAskRequest "…"`: opens Ask Indium on the selection
+            // (-IndiumSelect), asks, and saves the window with its popover once it's answered.
+            if let out = d.string(forKey: "IndiumAskShot") {
+                target.editor.showAsk()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    let panel = AskPanel.current
+                    if let request = d.string(forKey: "IndiumAskRequest") { panel?.debugAsk(request) }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + (d.string(forKey: "IndiumAskRequest") == nil ? 0.3 : 12)) {
+                        let pop = AskPanel.current?.view.window
+                        for (w, suffix) in [(window, ""), (pop, "-panel")] {
+                            guard let w, let view = w.contentView?.superview ?? w.contentView,
+                                  let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }
+                            view.cacheDisplay(in: view.bounds, to: rep)
+                            let url = URL(fileURLWithPath: out.replacingOccurrences(of: ".png", with: suffix + ".png"))
+                            try? rep.representation(using: .png, properties: [:])?.write(to: url)
+                        }
+                        print("NOTE AFTER:", target.editor.text.debugDescription)
+                        exit(0)
+                    }
+                }
+                return
+            }
+            // `-IndiumAskCases file`: `note with «selection»<TAB>request` per line, asked of the real
+            // model; prints what it did and the note after, and checks the text around the selection kept.
+            if let path = d.string(forKey: "IndiumAskCases"), let cases = try? String(contentsOfFile: path, encoding: .utf8) {
+                let lines = cases.components(separatedBy: "\n").filter { !$0.isEmpty && !$0.hasPrefix("#") }.map { $0.components(separatedBy: "\t") }
+                Task { @MainActor in
+                    var kept = 0
+                    for parts in lines where parts.count == 2 {
+                        let (note, sel) = unmark(parts[0].replacingOccurrences(of: "↵", with: "\n"))
+                        target.editor.replace(NSRange(location: 0, length: target.editor.storage.length), with: note)
+                        let original = (note as NSString).substring(with: sel)
+                        let around = target.editor.askContext(around: sel)
+                        do {
+                            let reply = try await AskModel.ask(parts[1], selection: original, before: around.before, after: around.after)
+                            print("ASK", parts[1].debugDescription, "→", reply.kind == .edit ? "edit" : "answer")
+                            if reply.kind == .edit { _ = target.editor.applyAsk(reply.text, at: sel, original: original) } else { print("  answer:", reply.text.debugDescription) }
+                            let after = target.editor.text as NSString
+                            let head = (note as NSString).substring(to: sel.location), tail = (note as NSString).substring(from: NSMaxRange(sel))
+                            let ok = (head.isEmpty || after.hasPrefix(head)) && (tail.isEmpty || after.hasSuffix(tail))
+                            if ok { kept += 1 }
+                            print("  note:", (after as String).replacingOccurrences(of: "\n", with: "↵").debugDescription, ok ? "" : "  (TEXT AROUND CHANGED)")
+                        } catch {
+                            print("ASK", parts[1].debugDescription, "→ error:", AskModel.describe(error))
+                        }
+                    }
+                    print("ASK CASES: surroundings kept in \(kept)/\(lines.count)")
+                    exit(0)
+                }
+                return
+            }
             if let path = d.string(forKey: "IndiumTypingCases"), let cases = try? String(contentsOfFile: path, encoding: .utf8) {
                 runTypingCases(cases, editor: target.editor, window: window)
                 return
