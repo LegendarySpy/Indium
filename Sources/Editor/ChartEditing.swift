@@ -101,6 +101,39 @@ extension EditorController {
         onChartInserted?()
     }
 
+    // MARK: Moving a chart
+
+    /// Drawn charts on screen (text view coordinates), by where their blocks start.
+    func visibleCharts() -> [(location: Int, content: NSRect)] {
+        visibleBlocks().compactMap { block in
+            guard case .chart = block.decoration.content, block.decoration.placement == .replace else { return nil }
+            return (block.range.location, block.content)
+        }
+    }
+
+    /// A press on a drawn chart selects it; dragging it a few points lifts it and moves
+    /// it the way a table moves by its grip, with the same drop lines. True when it was a drag.
+    func pressChart(at location: Int, from event: NSEvent) -> Bool {
+        guard textView.isEditable, let window = textView.window else { return false }
+        let start = event.locationInWindow
+        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            if next.type == .leftMouseUp { return false }
+            if hypot(next.locationInWindow.x - start.x, next.locationInWindow.y - start.y) > 4 {
+                dragChart(at: location, from: event)
+                return true
+            }
+        }
+        return false
+    }
+
+    /// The chart's whole block moves, its Markdown as written (a table it charts stays put,
+    /// named by the same `^id`).
+    func dragChart(at location: Int, from event: NSEvent) {
+        guard let source = layoutModel.group(containing: location),
+              let lifted = visibleCharts().first(where: { $0.location == location })?.content else { return }
+        dragBlock(source, lifted: lifted, from: event)
+    }
+
     // MARK: Selecting a chart
 
     /// The chart block holding `location` (its first line's start through its last character).

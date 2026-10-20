@@ -193,6 +193,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             if !self.inspectorVisible { self.setInspectorVisible(true, animated: true) }
             self.inspector?.focusChart()
         }
+        editor.onChartOpen = editor.onChartInserted
         editor.onOpenNote = { [weak self] url in self?.open(url) }
         editor.onImageNeedsAccess = { [weak self] in
             // Styling is under way; show the offer once it's done.

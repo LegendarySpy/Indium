@@ -987,15 +987,22 @@ enum DebugSnapshot {
     /// screenshotting the drop indicator mid-drag; `escape:n,prefix,where` drags and presses Escape;
     /// `text`, `undo`, `redo`, `shot:path`. `zone:n,kind[,shot]` drags table n to the middle of the
     /// first drop zone of a kind: `end`, `endleft`, `endright`, `column`, `below`, `gap`, `side`.
+    /// `chartdrag:n,prefix,where[,shot]` presses chart n itself and drags it the same way;
+    /// `chartclick:n,clicks` clicks it once or twice, then prints the inspector's title.
     /// Each mutating step is its own undo group.
     static func runDragSteps(_ steps: [String], editor: EditorController, window: NSWindow) {
         let tv = editor.textView
         let undo = tv.undoManager
         if let undo, undo.groupingLevel > 0 { undo.endUndoGrouping() }
         undo?.groupsByEvent = false
-        func mouse(_ type: NSEvent.EventType, _ p: NSPoint) -> NSEvent {
+        func mouse(_ type: NSEvent.EventType, _ p: NSPoint, clicks: Int = 1) -> NSEvent {
             NSEvent.mouseEvent(with: type, location: tv.convert(p, to: nil), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                               windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: clicks, pressure: 1)!
+        }
+        func chart(_ n: Int) -> NSRect? {
+            let charts = editor.visibleCharts().sorted { $0.location < $1.location }
+            guard n < charts.count else { print("  no chart \(n)"); return nil }
+            return charts[n].content
         }
         func hover(_ n: Int) -> BlockHandleView? {
             let tables = editor.visibleTables().sorted { $0.location < $1.location }
@@ -1051,6 +1058,34 @@ enum DebugSnapshot {
                 undo?.endUndoGrouping()
                 EditorController.onDragStep = nil
                 print("  undo name:", undo?.undoActionName ?? "-", "grip left:", editor.tableGrip == nil)
+            case "chartdrag":
+                guard args.count >= 3, let rect = chart(Int(args[0]) ?? 0),
+                      let target = editor.visibleGroupFrames().first(where: { $0.group.text.hasPrefix(args[1]) }) else { print("  CHARTDRAG: nothing \(args)"); break }
+                let r = target.rect
+                let p = args[2] == "before" ? NSPoint(x: r.midX, y: r.minY + min(6, r.height / 4)) : NSPoint(x: r.midX, y: r.maxY - min(6, r.height / 4))
+                if args.count > 3 { EditorController.onDragStep = { debugShot(window: window, path: args[3]) } }
+                let start = NSPoint(x: rect.midX, y: rect.midY)
+                NSApp.postEvent(mouse(.leftMouseDragged, NSPoint(x: start.x + 2, y: start.y + 1)), atStart: false)
+                NSApp.postEvent(mouse(.leftMouseDragged, NSPoint(x: (start.x + p.x) / 2, y: (start.y + p.y) / 2)), atStart: false)
+                NSApp.postEvent(mouse(.leftMouseDragged, p), atStart: false)
+                NSApp.postEvent(mouse(.leftMouseUp, p), atStart: false)
+                undo?.beginUndoGrouping()
+                tv.mouseDown(with: mouse(.leftMouseDown, start))
+                undo?.endUndoGrouping()
+                EditorController.onDragStep = nil
+                print("  CHART DRAGGED to \(args[1]) \(args[2]); undo name:", undo?.undoActionName ?? "-", "selected chart:", editor.styler.selectedChart.map(String.init) ?? "none")
+            case "chartclick":
+                guard let rect = chart(Int(args.first ?? "0") ?? 0) else { break }
+                let clicks = Int(args.count > 1 ? args[1] : "1") ?? 1
+                let p = NSPoint(x: rect.midX, y: rect.midY)
+                for c in 1...clicks {
+                    NSApp.postEvent(mouse(.leftMouseUp, p, clicks: c), atStart: false)
+                    tv.mouseDown(with: mouse(.leftMouseDown, p, clicks: c))
+                }
+                RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+                let controller = window.windowController as? DocumentWindowController
+                print("  CLICKED chart \(clicks)x: selected", editor.styler.selectedChart.map(String.init) ?? "none",
+                      "inspector", controller?.debugInspector.map { $0.isHiddenOrHasHiddenAncestor ? "hidden" : ($0.debugDump().components(separatedBy: "\n").first ?? "") } ?? "closed")
             case "undo": undo?.undo()
             case "redo": undo?.redo()
             case "text": print("NOTE TEXT:\n" + editor.text + "\nEND NOTE TEXT")

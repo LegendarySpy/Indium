@@ -112,7 +112,7 @@ final class EditorTextView: NSTextView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        if let editor, editor.handleClick(at: point, clickCount: event.clickCount) { return }
+        if let editor, editor.handleClick(at: point, clickCount: event.clickCount, event: event) { return }
         var event = event
         if event.clickCount == 1 {
             clickAnchor = anchor(at: point)

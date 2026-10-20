@@ -40,6 +40,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var onChartSelected: (() -> Void)?
     /// A chart or graph was just put in the note: the inspector takes the keys.
     var onChartInserted: (() -> Void)?
+    /// A chart was double-clicked: the inspector opens on it.
+    var onChartOpen: (() -> Void)?
     private var resolvingConflict = false
     private let imageControls = ImageControlsView()
     let selectionBar = SelectionBarView(frame: .zero)
@@ -1231,7 +1233,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return layoutManager.floatBlocks(origin: origin) + layoutManager.blockRects(in: chars, origin: origin)
     }
 
-    func handleClick(at point: NSPoint, clickCount: Int) -> Bool {
+    func handleClick(at point: NSPoint, clickCount: Int, event: NSEvent? = nil) -> Bool {
         if let editor = tableEditor, editor.hitTest(point) == nil { endTableEditing() }
         if let hit = caption(at: point) {
             if hit.onAction { recalculateFormulas(at: hit.formulas) } else { showFormulaList(formulasAt: hit.formulas, from: hit.rect) }
@@ -1274,9 +1276,17 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                     return true
                 }
             case .chart:
-                // Selected as an object; the inspector is where it's changed.
+                // Selected as an object, dragged to move it, and double-clicked to open it in
+                // the inspector, where it's changed.
                 if block.decoration.placement == .replace {
-                    selectChart(at: lineRange(at: block.range.location).content.location)
+                    let location = lineRange(at: block.range.location).content.location
+                    if clickCount == 2 {
+                        selectChart(at: location)
+                        onChartOpen?()
+                        return true
+                    }
+                    selectChart(at: location)
+                    if let event { _ = pressChart(at: location, from: event) }
                     return true
                 }
             }
