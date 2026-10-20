@@ -614,8 +614,11 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
     private let bestFit = NSButton(checkboxWithTitle: "Line of best fit", target: nil, action: nil)
     private let zero = NSButton(checkboxWithTitle: "Start y at zero", target: nil, action: nil)
     private let legend = NSButton(checkboxWithTitle: "Legend", target: nil, action: nil)
-    private let curvesHeader = SectionHeader(title: "Curves")
-    private let curves = EquationList(styled: false, placeholder: "y = 0.35x + 94")
+    private let pointsHeader = SectionHeader(title: "Points")
+    private let points = PointList()
+    private let curvesHeader = SectionHeader(title: "Lines and Curves")
+    private let curves = EquationList(styled: false, placeholder: "y = 2x + 1, or y = 3")
+    private let curvesHint = NSTextField(wrappingLabelWithString: "y = 3 is a flat line at 3, x = 3 an upright one, and y = 2x + 1 rises 2 for every 1 across.")
     // Both
     private let source = NSTextField(wrappingLabelWithString: "")
     private let problems = NSTextField(wrappingLabelWithString: "")
@@ -649,7 +652,8 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
             b.controlSize = .small
             b.font = InspectorStyle.font
         }
-        for label in [source, problems] {
+        bestFit.toolTip = "A straight line through the middle of the first column’s values, or of your points"
+        for label in [source, problems, curvesHint] {
             label.font = NSFont.systemFont(ofSize: 11)
             label.textColor = .secondaryLabelColor
             label.isSelectable = false
@@ -696,8 +700,12 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
         equationsHeader.addButton.setAccessibilityLabel("Add Equation")
         curvesHeader.addButton.target = self
         curvesHeader.addButton.action = #selector(addCurve)
-        curvesHeader.addButton.toolTip = "Add Curve"
-        curvesHeader.addButton.setAccessibilityLabel("Add Curve")
+        curvesHeader.addButton.toolTip = "Add Line or Curve"
+        curvesHeader.addButton.setAccessibilityLabel("Add Line or Curve")
+        pointsHeader.addButton.target = self
+        pointsHeader.addButton.action = #selector(addPoint)
+        pointsHeader.addButton.toolTip = "Add Points"
+        pointsHeader.addButton.setAccessibilityLabel("Add Points")
         for header in [rangeHeader, seriesHeader, optionsHeader] { header.addButton.isHidden = true }
 
         equations.onCommit = { [weak self] lines, name in
@@ -706,16 +714,20 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
         curves.onCommit = { [weak self] lines, name in
             self?.onEdit?(name) { ChartBlockEditing.settingPlots(lines.map(\.expression), in: $0) }
         }
+        points.onCommit = { [weak self] entries, name in
+            self?.onEdit?(name) { ChartBlockEditing.settingPoints(entries, in: $0) }
+        }
 
         column.orientation = .vertical
         column.alignment = .leading
         column.spacing = 8
         column.translatesAutoresizingMaskIntoConstraints = false
         let views: [NSView] = [equationsHeader, equations, rangeHeader, rangeGrid, gridLines,
-                               chartGrid, seriesHeader, series, optionsHeader, options, curvesHeader, curves,
-                               problems, source, editSource]
+                               chartGrid, seriesHeader, series, pointsHeader, points, curvesHeader, curves, curvesHint,
+                               optionsHeader, options, problems, source, editSource]
         for v in views { column.addArrangedSubview(v) }
-        for v in [equations, rangeGrid, chartGrid, curves] { column.setCustomSpacing(16, after: v) }
+        for v in [equations, rangeGrid, chartGrid, points, curvesHint] { column.setCustomSpacing(16, after: v) }
+        column.setCustomSpacing(6, after: curves)
         column.setCustomSpacing(16, after: gridLines)
         column.setCustomSpacing(16, after: series)
         column.setCustomSpacing(16, after: options)
@@ -726,7 +738,8 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
             column.topAnchor.constraint(equalTo: topAnchor),
             column.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
-        for v in [equationsHeader, equations, rangeHeader, chartGrid, seriesHeader, optionsHeader, curvesHeader, curves, problems, source] as [NSView] {
+        for v in [equationsHeader, equations, rangeHeader, chartGrid, seriesHeader, optionsHeader, pointsHeader, points, curvesHeader, curves,
+                  curvesHint, problems, source] as [NSView] {
             v.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
         }
         // Its fields end where the equations' fields do, before their menu buttons.
@@ -738,7 +751,7 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
     func show(graph: Bool, body: String, model: ChartModel, columns: [String], editable: Bool) {
         self.graph = graph
         for v in [equationsHeader, equations, rangeHeader, rangeGrid, gridLines] as [NSView] { v.isHidden = !graph }
-        for v in [chartGrid, optionsHeader, bestFit.superview!, curvesHeader] as [NSView] { v.isHidden = graph }
+        for v in [chartGrid, optionsHeader, bestFit.superview!, curvesHeader, curvesHint, pointsHeader, points] as [NSView] { v.isHidden = graph }
         func set(_ field: InspectorField, _ value: String?, placeholder: String) {
             field.isEditable = editable
             field.placeholderString = placeholder
@@ -759,7 +772,7 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
             equations.show(lines: ChartBlockEditing.graphLines(body), rows: model.rows, dark: dark, editable: editable)
             equationsHeader.addButton.isEnabled = editable
             unplaced = model.problems.filter { p in !ChartBlockEditing.graphLines(body).contains { p.hasPrefix($0.expression + ":") } }
-            source.stringValue = "Equations use LaTeX, as in Desmos. Note variables work by name."
+            source.stringValue = "Type equations like y = x^2 or y = 2x + 1, or LaTeX as in Desmos. Variables from the note’s properties work by name."
             seriesHeader.isHidden = true
             series.isHidden = true
             curves.isHidden = true
@@ -769,9 +782,9 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
             let known = ["line", "bar", "scatter"]
             type.selectItem(at: known.firstIndex(of: kind) ?? 0)
             type.isEnabled = editable && known.contains(kind)
-            set(titleField, s["title"], placeholder: "None")
-            set(xTitle, s["xTitle"], placeholder: model.xTitle ?? "None")
-            set(yTitle, s["yTitle"], placeholder: model.yTitle ?? "None")
+            set(titleField, s["title"], placeholder: "Chart title")
+            set(xTitle, s["xTitle"], placeholder: model.xTitle ?? "Across, like Time (s)")
+            set(yTitle, s["yTitle"], placeholder: model.yTitle ?? "Up, like Distance (m)")
             bestFit.state = s["bestFit"]?.lowercased() == "true" ? .on : .off
             zero.state = s["beginAtZero"]?.lowercased() == "true" ? .on : .off
             legend.state = s["legend"]?.lowercased() == "false" ? .off : .on
@@ -779,11 +792,18 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
             showSeries(columns: columns, selected: MiniYAML.parse(body)["select"]?.list, editable: editable)
             let plots = ChartBlockEditing.plots(body)
             curves.show(lines: plots.map { ChartBlockEditing.GraphLine(expression: $0) }, rows: model.rows, dark: dark, editable: editable)
+            // An empty field to type the first one in, so there's no + to find first.
+            if plots.isEmpty, editable { curves.addRow(focus: false) }
             curves.isHidden = plots.isEmpty && !curves.hasDraft
             curvesHeader.addButton.isEnabled = editable
+            points.show(ChartBlockEditing.points(body), editable: editable)
+            pointsHeader.addButton.isEnabled = editable
             unplaced = model.problems.filter { p in !plots.contains { p.hasPrefix($0 + ":") } }
-            source.stringValue = s["id"].map { "Data from the table marked ^\($0)." } ?? "Data written in the chart’s Markdown."
+            let inline = !(MiniYAML.parse(body)["series"]?.items ?? []).isEmpty
+            source.stringValue = s["id"].map { "Values from the table marked ^\($0). Change them in the table." }
+                ?? (inline ? "Some values are written in the chart’s Markdown. Edit Markdown to change them." : "")
         }
+        source.isHidden = source.stringValue.isEmpty
         problems.stringValue = unplaced.joined(separator: "\n")
         problems.isHidden = unplaced.isEmpty
         editSource.isEnabled = editable
@@ -830,6 +850,7 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
         curves.isHidden = false
         curves.addRow()
     }
+    @objc private func addPoint() { points.focusEntry() }
     @objc private func editSourceClicked() { onEditSource?() }
 
     /// Puts the keys in the first equation, or a new one when there are none.
@@ -883,10 +904,12 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
     func debugDump() -> String {
         graph ? "graph left=\(left.stringValue) right=\(right.stringValue) bottom=\(bottom.stringValue) top=\(top.stringValue) grid=\(gridLines.state == .on)\n" + equations.debugDump()
               : "chart type=\(type.titleOfSelectedItem ?? "") title=\(titleField.stringValue) x=\(xTitle.stringValue)|\(xTitle.placeholderString ?? "") y=\(yTitle.stringValue)|\(yTitle.placeholderString ?? "") fit=\(bestFit.state == .on) columns=\(columns) selected=\(selected)\n" + curves.debugDump()
+                + "\npoints:\n" + points.debugDump()
     }
 
     /// `type:Bar`, `fit`, `field:key=value`, `eq:add=y=2x`, `eq:set=0=y=3x`, `eq:remove=0`,
-    /// `eq:color=0=red`, `eq:dash=0=dashed`, `curve:add=y=x`, `column:Volume`.
+    /// `eq:color=0=red`, `eq:dash=0=dashed`, `curve:add=y=x`, `column:Volume`,
+    /// `point:add=(1, 2), (2, 4)`, `point:x=0=5`, `point:y=0=7`, `point:remove=0`.
     func debugStep(_ step: String) {
         let parts = step.split(separator: ":", maxSplits: 1).map(String.init)
         let kv = parts.count == 2 ? parts[1].split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init) : []
@@ -900,6 +923,7 @@ private final class ChartSection: NSView, NSTextFieldDelegate {
             controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification, object: field))
         case "eq": equations.debugStep(kv)
         case "curve": curves.debugStep(kv)
+        case "point": points.debugStep(kv)
         case "column":
             if let box = series.arrangedSubviews.compactMap({ $0 as? NSButton }).first(where: { $0.identifier?.rawValue == parts[1] }) {
                 box.performClick(nil)
@@ -971,14 +995,17 @@ private final class EquationList: NSView {
     }
 
     /// A blank row at the end, in the note once something's typed in it.
-    func addRow() {
-        if let draft { draft.focus(); return }
+    func addRow(focus: Bool = true) {
+        if let draft {
+            if focus { draft.focus() }
+            return
+        }
         let row = EquationRow(list: self, line: ChartBlockEditing.GraphLine(expression: ""))
         row.update(color: nil, problem: nil, editable: true)
         stack.addArrangedSubview(row)
         row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         draft = row
-        row.focus()
+        if focus { row.focus() }
     }
 
     fileprivate func commit(_ row: EquationRow, addNext: Bool) {
@@ -989,7 +1016,7 @@ private final class EquationList: NSView {
             guard !text.isEmpty else { return }
             var line = row.line
             line.expression = text
-            onCommit?(lines + [line], styled ? "Add Equation" : "Add Curve")
+            onCommit?(lines + [line], styled ? "Add Equation" : "Add Line")
             if addNext { RunLoop.main.perform { [weak self] in MainActor.assumeIsolated { self?.addRow() } } }
             return
         }
@@ -1001,7 +1028,7 @@ private final class EquationList: NSView {
         if text != lines[i].expression {
             var new = lines
             new[i].expression = text
-            onCommit?(new, styled ? "Change Equation" : "Change Curve")
+            onCommit?(new, styled ? "Change Equation" : "Change Line")
         }
         if addNext, i == lines.count - 1 { RunLoop.main.perform { [weak self] in MainActor.assumeIsolated { self?.addRow() } } }
     }
@@ -1022,7 +1049,7 @@ private final class EquationList: NSView {
         guard let i = rows.firstIndex(where: { $0 === row }), i < lines.count else { return }
         var new = lines
         new.remove(at: i)
-        onCommit?(new, styled ? "Delete Equation" : "Delete Curve")
+        onCommit?(new, styled ? "Delete Equation" : "Delete Line")
     }
 
     #if DEBUG
@@ -1064,7 +1091,7 @@ private final class EquationRow: NSView, NSTextFieldDelegate {
     init(list: EquationList, line: ChartBlockEditing.GraphLine) {
         self.list = list
         self.line = line
-        more = HoverButton(symbol: list.styled ? "ellipsis.circle" : "minus.circle", label: list.styled ? "Equation Options" : "Delete Curve",
+        more = HoverButton(symbol: list.styled ? "ellipsis.circle" : "minus.circle", label: list.styled ? "Equation Options" : "Delete Line",
                            pointSize: 12, target: nil, action: nil)
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -1073,19 +1100,19 @@ private final class EquationRow: NSView, NSTextFieldDelegate {
         field.placeholderString = list.placeholder
         field.font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize(for: .small), weight: .regular)
         field.delegate = self
-        field.setAccessibilityLabel(list.styled ? "Equation" : "Curve")
+        field.setAccessibilityLabel(list.styled ? "Equation" : "Line or Curve")
 
         swatch.isBordered = false
         swatch.imagePosition = .imageOnly
         swatch.target = self
-        swatch.action = #selector(swatchClicked)
+        // A chart's curves take the next color; the swatch says which, to find it by.
+        swatch.action = list.styled ? #selector(swatchClicked) : nil
         swatch.setAccessibilityLabel("Color")
-        swatch.toolTip = "Color"
-        swatch.isHidden = !list.styled
+        swatch.toolTip = list.styled ? "Color" : "Its color in the chart"
 
         more.target = self
         more.action = #selector(moreClicked)
-        more.toolTip = list.styled ? "Line style, hide or delete" : "Delete Curve"
+        more.toolTip = list.styled ? "Line style, hide or delete" : "Delete Line"
 
         problem.font = NSFont.systemFont(ofSize: 10)
         problem.textColor = .systemRed
@@ -1096,8 +1123,7 @@ private final class EquationRow: NSView, NSTextFieldDelegate {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
-        let fieldLeading = list.styled ? field.leadingAnchor.constraint(equalTo: swatch.trailingAnchor, constant: 6)
-                                       : field.leadingAnchor.constraint(equalTo: leadingAnchor)
+        let fieldLeading = field.leadingAnchor.constraint(equalTo: swatch.trailingAnchor, constant: 6)
         NSLayoutConstraint.activate([
             swatch.leadingAnchor.constraint(equalTo: leadingAnchor),
             swatch.centerYAnchor.constraint(equalTo: field.centerYAnchor),
@@ -1190,6 +1216,243 @@ private final class EquationRow: NSView, NSTextFieldDelegate {
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         if selector == #selector(NSResponder.cancelOperation(_:)) {
             field.stringValue = line.expression
+            window?.makeFirstResponder(nil)
+            return true
+        }
+        return false
+    }
+}
+
+// MARK: - Points
+
+/// Points typed straight into a chart, no table needed: a row for each with its x and y,
+/// and a field under them that takes a point the way it's written on paper, `(3, 4)`,
+/// or several at once, `(1, 2), (2, 4)`. Saved in the block as `points:`.
+private final class PointList: NSView, NSTextFieldDelegate {
+    /// (all the points, undo name)
+    var onCommit: (([ChartPoints.Entry], String) -> Void)?
+
+    private let stack = NSStackView()
+    private let entry = InspectorField()
+    private let message = NSTextField(wrappingLabelWithString: "")
+    private var points: [ChartPoints.Entry] = []
+    private static let hint = "x is across, y is up. Add several at once: (1, 2), (2, 4)."
+
+    init() {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        entry.placeholderString = "Add a point, like (3, 4)"
+        entry.font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize(for: .small), weight: .regular)
+        entry.delegate = self
+        entry.setAccessibilityLabel("New Points")
+        entry.toolTip = Self.hint
+        message.font = NSFont.systemFont(ofSize: 11)
+        message.textColor = .secondaryLabelColor
+        message.isSelectable = false
+        message.stringValue = Self.hint
+        for v in [stack, entry, message] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(v)
+        }
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            // Lined up with the rows' fields, before their delete buttons.
+            entry.leadingAnchor.constraint(equalTo: leadingAnchor),
+            entry.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            entry.topAnchor.constraint(equalTo: stack.bottomAnchor, constant: 4),
+            message.leadingAnchor.constraint(equalTo: leadingAnchor),
+            message.trailingAnchor.constraint(equalTo: trailingAnchor),
+            message.topAnchor.constraint(equalTo: entry.bottomAnchor, constant: 4),
+            message.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private var rows: [PointRow] { stack.arrangedSubviews.compactMap { $0 as? PointRow } }
+
+    func show(_ points: [ChartPoints.Entry], editable: Bool) {
+        entry.isEditable = editable
+        // Typing that isn't in the note yet stays put.
+        if rows.contains(where: { $0.hasUncommittedTyping }) { return }
+        if points != self.points || rows.count != points.count {
+            rows.forEach { $0.removeFromSuperview() }
+            for (i, p) in points.enumerated() {
+                let row = PointRow(list: self, point: p, index: i)
+                stack.addArrangedSubview(row)
+                row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+            }
+            self.points = points
+        }
+        rows.forEach { $0.isEditable = editable }
+    }
+
+    func focusEntry() { window?.makeFirstResponder(entry) }
+
+    private func say(_ problem: String?) {
+        message.stringValue = problem ?? Self.hint
+        message.textColor = problem == nil ? .secondaryLabelColor : .systemRed
+    }
+
+    /// What's typed in the field below the rows, added after them. Return keeps the
+    /// keys there for the next one.
+    private func commitEntry() {
+        let text = entry.stringValue.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { say(nil); return }
+        let parsed = ChartPoints.parse(text)
+        guard parsed.problem == nil, !parsed.entries.isEmpty else {
+            say(parsed.problem ?? Self.hint)
+            NSSound.beep()
+            return
+        }
+        say(nil)
+        entry.stringValue = ""
+        onCommit?(points + parsed.entries, parsed.entries.count == 1 ? "Add Point" : "Add Points")
+    }
+
+    fileprivate func change(_ row: PointRow, x: String, y: String) {
+        guard let i = rows.firstIndex(where: { $0 === row }), i < points.count else { return }
+        let (x, y) = (x.trimmingCharacters(in: .whitespaces), y.trimmingCharacters(in: .whitespaces))
+        if x.isEmpty, y.isEmpty { remove(row); return }
+        guard ChartPoints.number(x) != nil, ChartPoints.number(y) != nil else {
+            say("x and y each need a number, like 3 or 2.5.")
+            NSSound.beep()
+            row.revert()
+            return
+        }
+        say(nil)
+        var new = points
+        new[i] = ChartPoints.Entry(x: x, y: y)
+        if new != points { onCommit?(new, "Change Point") }
+    }
+
+    fileprivate func remove(_ row: PointRow) {
+        guard let i = rows.firstIndex(where: { $0 === row }), i < points.count else { return }
+        var new = points
+        new.remove(at: i)
+        onCommit?(new, "Delete Point")
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard obj.object as? NSTextField === entry else { return }
+        commitEntry()
+        if obj.userInfo?["NSTextMovement"] as? Int == NSTextMovement.return.rawValue {
+            RunLoop.main.perform { [weak self] in MainActor.assumeIsolated { self?.focusEntry() } }
+        }
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if selector == #selector(NSResponder.cancelOperation(_:)), control === entry {
+            entry.stringValue = ""
+            say(nil)
+            window?.makeFirstResponder(nil)
+            return true
+        }
+        return false
+    }
+
+    #if DEBUG
+    func debugDump() -> String {
+        rows.map { "  x=\($0.x) y=\($0.y)" }.joined(separator: "\n") + "\n  entry: \(message.stringValue)"
+    }
+
+    func debugStep(_ kv: [String]) {
+        guard kv.count == 2 else { return }
+        let rest = kv[1].split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+        switch kv[0] {
+        case "add": entry.stringValue = kv[1]; commitEntry()
+        case "x": if let i = Int(rest[0]), i < rows.count, rest.count == 2 { change(rows[i], x: rest[1], y: rows[i].y) }
+        case "y": if let i = Int(rest[0]), i < rows.count, rest.count == 2 { change(rows[i], x: rows[i].x, y: rest[1]) }
+        case "remove": if let i = Int(kv[1]), i < rows.count { remove(rows[i]) }
+        default: break
+        }
+    }
+    #endif
+}
+
+/// One point: `x [3]  y [4]` and a delete button.
+private final class PointRow: NSView, NSTextFieldDelegate {
+    private weak var list: PointList?
+    private let point: ChartPoints.Entry
+    private let xField = InspectorField()
+    private let yField = InspectorField()
+    private let delete = HoverButton(symbol: "minus.circle", label: "Delete Point", pointSize: 12, target: nil, action: nil)
+
+    var x: String { xField.stringValue }
+    var y: String { yField.stringValue }
+    var isEditable = true {
+        didSet {
+            xField.isEditable = isEditable
+            yField.isEditable = isEditable
+            delete.isEnabled = isEditable
+        }
+    }
+    var hasUncommittedTyping: Bool {
+        (xField.currentEditor() != nil || yField.currentEditor() != nil) && (x != point.x || y != point.y)
+    }
+
+    init(list: PointList, point: ChartPoints.Entry, index: Int) {
+        self.list = list
+        self.point = point
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        let xLabel = InspectorStyle.label("x"), yLabel = InspectorStyle.label("y")
+        xLabel.toolTip = "Across"
+        yLabel.toolTip = "Up"
+        for (field, value, name) in [(xField, point.x, "x"), (yField, point.y, "y")] {
+            field.stringValue = value
+            field.placeholderString = "0"
+            field.alignment = .right
+            field.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize(for: .small), weight: .regular)
+            field.delegate = self
+            field.setAccessibilityLabel("Point \(index + 1) \(name)")
+        }
+        delete.target = self
+        delete.action = #selector(deleteClicked)
+        delete.toolTip = "Delete Point"
+        for v in [xLabel, xField, yLabel, yField, delete] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(v)
+        }
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 24),
+            xLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
+            xLabel.firstBaselineAnchor.constraint(equalTo: xField.firstBaselineAnchor),
+            xField.leadingAnchor.constraint(equalTo: xLabel.trailingAnchor, constant: 6),
+            xField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            yLabel.leadingAnchor.constraint(equalTo: xField.trailingAnchor, constant: 12),
+            yLabel.firstBaselineAnchor.constraint(equalTo: yField.firstBaselineAnchor),
+            yField.leadingAnchor.constraint(equalTo: yLabel.trailingAnchor, constant: 6),
+            yField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            yField.widthAnchor.constraint(equalTo: xField.widthAnchor),
+            delete.leadingAnchor.constraint(equalTo: yField.trailingAnchor, constant: 4),
+            delete.trailingAnchor.constraint(equalTo: trailingAnchor, constant: 4),
+            delete.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func revert() {
+        xField.stringValue = point.x
+        yField.stringValue = point.y
+    }
+
+    @objc private func deleteClicked() { list?.remove(self) }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        list?.change(self, x: x, y: y)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if selector == #selector(NSResponder.cancelOperation(_:)) {
+            revert()
             window?.makeFirstResponder(nil)
             return true
         }

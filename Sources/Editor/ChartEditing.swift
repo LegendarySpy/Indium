@@ -4,7 +4,8 @@ import AppKit
 /// table names it the way Obsidian's Charts plugin does, with a `^id` line under the
 /// table and `id:` in the chart, so the same chart draws in Obsidian with the plugin.
 extension EditorController {
-    static let chartTemplate = "```chart\ntype: bar\nlabels: [A, B, C]\nseries:\n  - title: Values\n    data: [3, 5, 2]\n```\n"
+    /// Points, not the plugin's `series:`, so every value can be changed in the inspector.
+    static let chartTemplate = "```chart\ntype: bar\npoints: (1, 3), (2, 5), (3, 2)\n```\n"
     static let graphTemplate = "```desmos-graph\nleft=-10; right=10; bottom=-10; top=10\n---\ny=x^2\n```\n"
 
     /// The table a chart typed at `location` would be about: the nearest block above,

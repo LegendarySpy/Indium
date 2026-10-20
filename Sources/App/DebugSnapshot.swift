@@ -1244,6 +1244,11 @@ enum DebugSnapshot {
             let failed = FormulaSelfTest.run(paths: paths.split(separator: ",").map(String.init), verbose: d.bool(forKey: "IndiumEvalVerbose"))
             exit(failed == 0 ? 0 : 1)
         }
+        // `-IndiumChartCases Tests/Charts/cases.tsv`: what chart blocks draw, and points and
+        // curves written back into them (see ChartSelfTest).
+        if let paths = d.string(forKey: "IndiumChartCases") {
+            exit(ChartSelfTest.run(paths: paths.split(separator: ",").map(String.init)) == 0 ? 0 : 1)
+        }
         if d.bool(forKey: "IndiumMathTest") {
             let cases: [(String, Bool)] = [("1 + 2 =", false), ("1 + 2 = ", false), ("Mass is 2 + 3 =", false), ("x =", false),
                 ("35.134\\text{ g} - 34.794\\text{ g} =", true), ("\\frac{0.147\\text{ g Zn}}{65.38\\text{ g/mol}} =", true),

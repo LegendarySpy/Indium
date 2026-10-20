@@ -35,8 +35,8 @@ So Indium shows one note at a time. There are no tabs or split views, just the n
 - **Tables you can click.** Edit cells directly, add rows and columns, drag to resize.
 - **Math in tables.** Write `$…$` in a cell with the same shortcuts as everywhere else.
 - **Table formulas.** Type `=B2-B3` or `=SUM(B2:B5)` in a cell, as in a spreadsheet, and fill it across a row or down a column. They're saved as Advanced Tables formulas so Obsidian can read them, and they can use units, significant figures, and numbers from the note's frontmatter.
-- **Charts and graphs.** Make Chart on a table, or type `/chart` or `/graph`. Charts read your table and can add a line of best fit; graphs plot equations like Desmos. They use the formats of Obsidian's Charts and Desmos plugins, so they draw there too.
-- **An inspector.** Press ⌥⌘I for a panel that edits the note's variables. Click a chart or graph and build it there: equations, colors, ranges, columns and curves, no Markdown needed.
+- **Charts and graphs.** Make Chart on a table, or type `/chart` or `/graph`. Charts read your table or points you type like (3, 4), draw lines like y = 3 or y = 2x + 1 over them, and can add a line of best fit; graphs plot equations like Desmos. They use the formats of Obsidian's Charts and Desmos plugins, so they draw there too.
+- **An inspector.** Press ⌥⌘I for a panel that edits the note's variables. Click a chart or graph and build it there: equations, colors, ranges, columns, points and curves, no Markdown needed.
 - **Text beside tables and images.** Let writing wrap around a table, or put two blocks side by side.
 - **Obsidian's extras.** Callouts, embedded notes (`![[Note]]`), `#tags`, `%% comments %%` and footnotes, drawn the way Obsidian draws them.
 - **Slash commands.** Type `/` for tables, headings, equations, and more.

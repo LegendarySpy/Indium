@@ -35,29 +35,35 @@ enum GraphMath {
             self.degrees = degrees
         }
 
+        /// What to type, for a line Indium can't make sense of.
+        static let example = "Type a curve like y = 2x + 1, or a flat line like y = 3"
+
         /// Reads one line, remembering what it defines.
         mutating func line(_ latex: String) -> Line {
             var tokens: [Token]
-            do { tokens = try tokenize(GraphMath.plain(latex)) } catch { return .problem("Indium can’t read this") }
-            guard !tokens.isEmpty else { return .problem("Nothing to draw") }
-            if tokens.contains(where: { $0.isComparison }) { return .problem("Inequalities aren’t drawn") }
-            if tokens.contains(.prime) { return .problem("Derivatives aren’t drawn") }
+            do { tokens = try tokenize(GraphMath.plain(latex)) } catch { return .problem(Self.example) }
+            guard !tokens.isEmpty else { return .problem(Self.example) }
+            if tokens.contains(where: { $0.isComparison }) { return .problem("Inequalities like y > 2 can’t be drawn yet. Use = instead") }
+            if tokens.contains(.prime) { return .problem("Derivatives like f’(x) can’t be drawn yet") }
 
             let sides = split(tokens, at: .equals)
             switch sides.count {
             case 1:
                 if let point = point(tokens) { return point }
-                if tokens.contains(.name("y")) { return .problem("Write it as y = …") }
+                if tokens.contains(.name("y")) { return .problem("Start it with y =, like y = 2x + 1") }
                 return curve(tokens)
             case 2:
                 let (lhs, rhs) = (sides[0], sides[1])
                 if lhs == [.name("y")] {
-                    if rhs.contains(.name("y")) { return .problem("Curves like x²+y²=1 aren’t drawn yet; write y = …") }
+                    if rhs.contains(.name("y")) { return .problem("Keep y on its own on the left, like y = 2x + 1") }
                     return curve(rhs)
                 }
                 if lhs == [.name("x")] {
-                    guard !rhs.contains(.name("x")), !rhs.contains(.name("y")) else { return .problem("Curves like this aren’t drawn yet; write y = …") }
-                    guard let v = value(of: rhs) else { return .problem("Indium can’t work out x here") }
+                    guard !rhs.contains(.name("x")), !rhs.contains(.name("y")) else {
+                        return .problem("Write it as y = …, or x = a number for an upright line, like x = 3")
+                    }
+                    if let unknown = unknownName(in: rhs, allowing: []) { return .problem(Self.unknown(unknown)) }
+                    guard let v = value(of: rhs) else { return .problem("x = needs a number, like x = 3") }
                     return .vertical(v)
                 }
                 // f(a)=…: a function; drawn too when its parameter is x, as Desmos does.
@@ -68,14 +74,14 @@ enum GraphMath {
                 // k=2: a constant.
                 if lhs.count == 1, case let .name(k) = lhs[0], k != "y" {
                     guard !rhs.contains(.name("x")), !rhs.contains(.name("y")), let v = value(of: rhs) else {
-                        return .problem("Curves like this aren’t drawn yet; write y = …")
+                        return .problem("Start it with y =, like y = 2x + 1")
                     }
                     constants[k] = v
                     return .definition
                 }
-                return .problem("Curves like this aren’t drawn yet; write y = …")
+                return .problem("Curves like x² + y² = 1 can’t be drawn yet. Start it with y =, like y = 2x + 1")
             default:
-                return .problem("One = per line")
+                return .problem("Use one = sign, like y = 2x + 1")
             }
         }
 
@@ -112,9 +118,13 @@ enum GraphMath {
         var environment: [String: Double] { variables.merging(constants) { $1 } }
 
         private func curve(_ tokens: [Token]) -> Line {
-            if let unknown = unknownName(in: tokens, allowing: ["x"]) { return .problem("Unknown name “\(unknown)”") }
-            guard let e = compile(tokens) else { return .problem("Indium can’t read this") }
+            if let unknown = unknownName(in: tokens, allowing: ["x"]) { return .problem(Self.unknown(unknown)) }
+            guard let e = compile(tokens) else { return .problem(Self.example) }
             return .curve(e)
+        }
+
+        private static func unknown(_ name: String) -> String {
+            "Indium doesn’t know “\(name)”. Use x, numbers, or a variable from the note’s properties"
         }
 
         private func point(_ tokens: [Token]) -> Line? {
@@ -125,7 +135,7 @@ enum GraphMath {
                 if t == .open { depth += 1 } else if t == .close { depth -= 1 }
                 else if t == .comma, depth == 0 {
                     guard let x = value(of: Array(inner[..<i])), let y = value(of: Array(inner[(i + 1)...])) else {
-                        return .problem("Indium can’t work out this point")
+                        return .problem("Write a point as two numbers, like (3, 4)")
                     }
                     return .point(x, y)
                 }
@@ -229,7 +239,9 @@ enum GraphMath {
                 if c.isLetter {
                     var j = i
                     while j < chars.count, chars[j].isLetter { j += 1 }
-                    let run = String(chars[i..<j])
+                    var run = String(chars[i..<j])
+                    // `Y = 3`, as dictation and phones write it.
+                    if run == "X" || run == "Y", !names.contains(run) { run = run.lowercased() }
                     var parts = names.contains(run) ? [run] : GraphMath.splitRun(run, names: names)
                     // A subscript joins the name before it: k_1, m_{water}.
                     if j < chars.count, chars[j] == "_" {

@@ -6,8 +6,8 @@ import Foundation
 ///
 /// - ```` ```chart ````: the Charts plugin's YAML (phibr0/obsidian-charts). Data inline
 ///   (`labels`, `series`) or from a table named by a `^id` line under it (`id`, `layout`,
-///   `select`). Line and bar charts as the plugin draws them, plus `type: scatter` and
-///   `plot:` curves, which only Indium reads.
+///   `select`). Line and bar charts as the plugin draws them, plus `type: scatter`,
+///   `plot:` curves and `points: (1, 2), (2, 4)`, which only Indium reads.
 /// - ```` ```desmos-graph ````: the Desmos plugin's equations (Nigecat/obsidian-desmos),
 ///   one LaTeX equation per line, with `key=value` settings before a `---` line.
 ///
@@ -34,6 +34,9 @@ struct ChartModel: Hashable {
         var color: ChartColor
         var dash: Dash
         var segments: [[Point]]
+        /// `x = 3` in a chart: an upright line at this x, top to bottom of the plot, in
+        /// place of segments.
+        var vertical: Double? = nil
     }
     struct Marker: Hashable {
         var point: Point
@@ -116,7 +119,7 @@ struct ChartModel: Hashable {
         }
         if let h = yaml["height"]?.text.flatMap({ Double($0.replacingOccurrences(of: "px", with: "")) }) { m.height = h }
 
-        // The data: a table by id, or written inline.
+        // The data: a table by id or written inline, points typed in, or any of them together.
         var labels: [String] = []
         var columns: [(name: String, cells: [String])] = []
         var xUnit: String?
@@ -143,14 +146,24 @@ struct ChartModel: Hashable {
         if let select = yaml["select"]?.list, !select.isEmpty {
             columns = columns.filter { select.contains($0.name) }
         }
-        guard !columns.isEmpty else {
-            m.problems.append("Nothing to plot. Give the chart an id: matching a ^id under a table, or labels: and series:.")
+        let typed = ChartPoints.parse(ChartPoints.written(yaml["points"]))
+        if let why = typed.problem { m.problems.append(why) }
+        let points = typed.entries.compactMap(\.point)
+        let plots = yaml["plot"]?.list ?? yaml["plot"]?.text.map { [$0] } ?? []
+        guard !columns.isEmpty || !points.isEmpty || !plots.isEmpty else {
+            m.problems.append("Nothing to draw yet. Add points like (3, 4) or a line like y = 3, or make the chart from a table.")
             return m
         }
+        // Bars stand on labels: points in a bar chart without a table make their own.
+        if m.kind == .bar, columns.isEmpty, labels.isEmpty {
+            labels = Set(points.map(\.x)).sorted().map(ChartPoints.format)
+        }
+        // Values with no labels, as the plugin allows: numbered from 1.
+        if labels.isEmpty, let longest = columns.map(\.cells.count).max(), longest > 0 { labels = (1...longest).map(String.init) }
 
         // Numbers along x when every label is one (and it isn't a bar chart): spaced by value.
         let xs = labels.map { Quantity.parse($0) }
-        let numericX = m.kind != .bar && !labels.isEmpty && xs.allSatisfy { $0 != nil }
+        let numericX = labels.isEmpty || m.kind != .bar && xs.allSatisfy { $0 != nil }
         if numericX {
             xUnit = xs.compactMap { $0?.unit?.text }.first
         } else {
@@ -158,6 +171,18 @@ struct ChartModel: Hashable {
             if m.kind == .scatter { m.kind = .line }
         }
         if let xUnit, let t = m.xTitle, !t.contains(xUnit) { m.xTitle = "\(t) (\(xUnit))" }
+        // With labels along x, x is the label's number when they're all numbers, and
+        // otherwise its place, counting from 1 (A is 1, B is 2), for points and curves.
+        let labelNumbers = xs.allSatisfy { $0 != nil } ? xs.map { $0!.value } : nil
+        func place(_ x: Double) -> Int? {
+            if let labelNumbers { return labelNumbers.firstIndex(of: x) }
+            guard let k = Int(exactly: x), k >= 1, k <= labels.count else { return nil }
+            return k - 1
+        }
+        func xAt(_ j: Int) -> Double { labelNumbers?[j] ?? Double(j + 1) }
+        let offChart = labelNumbers == nil && labels.count >= 2
+            ? "Here x counts the labels along the bottom: \(labels[0]) is 1, \(labels[1]) is 2."
+            : "Here x has to be one of the labels along the bottom."
 
         var yUnits: [String] = []
         for (i, column) in columns.enumerated() {
@@ -178,16 +203,39 @@ struct ChartModel: Hashable {
         if m.yTitle == nil, columns.count == 1 { m.yTitle = columns[0].name.isEmpty ? nil : columns[0].name }
         if let unit = Set(yUnits).count == 1 ? yUnits.first : nil, let t = m.yTitle, !t.contains(unit) { m.yTitle = "\(t) (\(unit))" }
 
+        // Points typed in (Indium only): one more series, in order along x so its line
+        // runs left to right.
+        if !points.isEmpty {
+            var drawn: [Point] = [], outside: [ChartPoints.Entry] = []
+            for entry in typed.entries {
+                guard let p = entry.point else { continue }
+                if numericX { drawn.append(p) } else if let k = place(p.x) { drawn.append(Point(x: Double(k), y: p.y)) } else { outside.append(entry) }
+            }
+            if !outside.isEmpty {
+                m.problems.append("\(ChartPoints.text(outside)) " + (outside.count == 1 ? "is" : "are") + " off this chart. \(offChart)")
+            }
+            m.series.append(Series(name: m.kind == .bar ? "Values" : "Points", color: columns.count, segments: drawn.isEmpty ? [] : [drawn.sorted { $0.x < $1.x }]))
+        }
+
+        // Curves read now, so the x range takes in upright lines and points among them.
+        var functions = GraphMath.Functions(variables: context.variables)
+        let parsed = plots.map { functions.line($0) }
+
         // Axis limits, as the plugin names them.
         let xMin = yaml["xMin"]?.number, xMax = yaml["xMax"]?.number
         let yMin = yaml["yMin"]?.number, yMax = yaml["yMax"]?.number
         if numericX {
-            let all = m.series.flatMap { $0.segments.flatMap { $0.map(\.x) } }
-            if let lo = xMin ?? all.min(), let hi = xMax ?? all.max(), hi > lo { m.xDomain = lo...hi }
-        }
-        if yMin != nil || yMax != nil {
-            let all = m.series.flatMap { $0.segments.flatMap { $0.map(\.y) } }
-            if let lo = yMin ?? all.min(), let hi = yMax ?? all.max(), hi > lo { m.yDomain = lo...hi }
+            var data = m.series.flatMap { $0.segments.flatMap { $0.map(\.x) } }, uprights: [Double] = []
+            for line in parsed {
+                if case let .vertical(x) = line { uprights.append(x) }
+                if case let .point(x, _) = line { data.append(x) }
+            }
+            // Only curves: 0 to 10, wider for an upright line past it. One x: a little either side.
+            let all = data + uprights
+            var lo = xMin ?? (data.isEmpty ? min(0, all.min() ?? 0) : all.min()!)
+            var hi = xMax ?? (data.isEmpty ? max(lo + 10, (all.max() ?? 0) + 1) : all.max()!)
+            if hi <= lo { (lo, hi) = (lo - 1, lo + 1) }
+            m.xDomain = lo...hi
         }
 
         // A line of best fit through one series.
@@ -197,38 +245,82 @@ struct ChartModel: Hashable {
                 let xs = m.series[n].segments.flatMap { $0.map(\.x) }
                 let name = (yaml["bestFitTitle"]?.text ?? "Line of Best Fit") + (numericX ? ": " + fit.description : "")
                 let lo = m.xDomain?.lowerBound ?? xs.min() ?? 0, hi = m.xDomain?.upperBound ?? xs.max() ?? 1
-                m.curves.append(Curve(name: name, color: .palette(n), dash: .dashed,
+                m.curves.append(Curve(name: name, color: .palette(m.series[n].color), dash: .dashed,
                                       segments: [[Point(x: lo, y: fit.y(lo)), Point(x: hi, y: fit.y(hi))]]))
             } else {
-                m.problems.append("A line of best fit needs at least two points.")
+                m.problems.append("A line of best fit needs at least two points with different x values.")
             }
         }
 
-        // Curves over the data (Indium only): `plot: y = k x` or a list of them.
-        let plots = yaml["plot"]?.list ?? yaml["plot"]?.text.map { [$0] } ?? []
-        if !plots.isEmpty {
-            guard numericX, let domain = m.xDomain else {
-                m.problems.append("Curves need numbers along the x axis.")
-                m.rows = plots.map { _ in Row(problem: "Curves need numbers along the x axis") }
-                return m
+        // Curves over the data (Indium only): `plot: y = k x` or a list of them, flat
+        // lines (`y = 3`), upright ones (`x = 3`) and points.
+        for (i, plot) in plots.enumerated() {
+            let color = ChartColor.palette(m.series.count + i)
+            func off() {
+                m.problems.append("\(plot): off this chart. \(offChart)")
+                m.rows.append(Row(problem: "Off this chart. " + offChart))
             }
-            var functions = GraphMath.Functions(variables: context.variables)
-            for (i, plot) in plots.enumerated() {
-                switch functions.line(plot) {
-                case let .curve(expression):
-                    m.curves.append(Curve(name: plot, color: .palette(columns.count + i), dash: .solid,
-                                          segments: GraphMath.sample(expression, functions: functions, x: domain, y: nil)))
-                    m.rows.append(Row(color: .palette(columns.count + i)))
-                case let .problem(why):
-                    m.problems.append("\(plot): \(why)")
-                    m.rows.append(Row(problem: why))
-                default:
-                    m.problems.append("\(plot): write it as y = …")
-                    m.rows.append(Row(problem: "Write it as y = …"))
+            switch parsed[i] {
+            case let .curve(expression):
+                var segments: [[Point]] = []
+                if let domain = m.xDomain {
+                    segments = GraphMath.sample(expression, functions: functions, x: domain, y: nil)
+                } else {
+                    // Across labels: a value at each one, a gap where there's none.
+                    var env = functions.environment, current: [Point] = []
+                    for j in labels.indices {
+                        env["x"] = xAt(j)
+                        if let y = GraphMath.evaluate(expression.node, env) { current.append(Point(x: Double(j), y: y)) }
+                        else if !current.isEmpty { segments.append(current); current = [] }
+                    }
+                    if !current.isEmpty { segments.append(current) }
                 }
+                m.curves.append(Curve(name: Self.readable(plot), color: color, dash: .solid, segments: segments))
+                m.rows.append(Row(color: color))
+            case let .vertical(x):
+                guard let at = numericX ? x : place(x).map(Double.init) else { off(); continue }
+                m.curves.append(Curve(name: Self.readable(plot), color: color, dash: .solid, segments: [], vertical: at))
+                m.rows.append(Row(color: color))
+            case let .point(x, y):
+                guard let at = numericX ? x : place(x).map(Double.init) else { off(); continue }
+                m.markers.append(Marker(point: Point(x: at, y: y), label: nil, color: color, shape: .point))
+                m.rows.append(Row(color: color))
+            case .definition:
+                m.rows.append(Row())
+            case let .problem(why):
+                m.problems.append("\(plot): \(why)")
+                m.rows.append(Row(problem: why))
+            }
+        }
+
+        if yMin != nil || yMax != nil {
+            let all = m.series.flatMap { $0.segments.flatMap { $0.map(\.y) } }
+            if let lo = yMin ?? all.min(), let hi = yMax ?? all.max(), hi > lo { m.yDomain = lo...hi }
+        } else {
+            // Nothing high or low to fit (one flat line, one point): room either side of
+            // it down to zero, so it doesn't sit on an edge.
+            let all = m.series.flatMap { $0.segments.flatMap { $0.map(\.y) } } + m.curves.flatMap { $0.segments.flatMap { $0.map(\.y) } }
+                + m.markers.map(\.point.y)
+            if all.isEmpty {
+                m.yDomain = 0...10
+            } else if let v = all.first, all.allSatisfy({ $0 == v }) {
+                m.yDomain = v > 0 ? 0...(v * 2) : v < 0 ? (v * 2)...0 : -1...1
             }
         }
         return m
+    }
+
+    /// A curve as the legend names it: `y = k x^2` as y = k x², `2*x` as 2·x.
+    static func readable(_ equation: String) -> String {
+        let superscripts: [Character: Character] = ["0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷",
+                                                    "8": "⁸", "9": "⁹", "-": "⁻"]
+        var t = equation.replacingOccurrences(of: "\\cdot", with: "·").replacingOccurrences(of: "*", with: "·")
+        let power = try! NSRegularExpression(pattern: #"\^\s*(?:\{(-?\d+)\}|\((-?\d+)\)|(-?\d+))"#)
+        for m in power.matches(in: t, range: NSRange(t.startIndex..., in: t)).reversed() {
+            let digits = (1...3).compactMap { Range(m.range(at: $0), in: t).map { String(t[$0]) } }.first ?? ""
+            t.replaceSubrange(Range(m.range, in: t)!, with: String(digits.compactMap { superscripts[$0] }))
+        }
+        return t.split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
     }
 
     // MARK: - Desmos plugin
@@ -351,7 +443,7 @@ struct LinearFit {
 
     /// `y = 0.342x + 94.4, R² = 0.998`
     var description: String {
-        let b = intercept < 0 ? " − \(Self.short(-intercept))" : " + \(Self.short(intercept))"
+        let b = Self.short(intercept) == "0" ? "" : intercept < 0 ? " − \(Self.short(-intercept))" : " + \(Self.short(intercept))"
         return "y = \(Self.short(slope))x\(b), R² = \(String(format: "%.3f", r2))"
     }
 
@@ -362,6 +454,95 @@ struct LinearFit {
         var s = String(format: "%.\(min(digits, 8))f", v)
         if s.contains(".") { while s.hasSuffix("0") { s.removeLast() }; if s.hasSuffix(".") { s.removeLast() } }
         return s
+    }
+}
+
+/// Points written into a chart the way they're written on paper, x first:
+/// `points: (1, 2), (2, 4), (3, 5)`. A plain YAML string, so the Charts plugin passes over it.
+enum ChartPoints {
+    /// One point as written, so `2.50` stays `2.50`.
+    struct Entry: Hashable {
+        var x: String
+        var y: String
+
+        var point: ChartModel.Point? {
+            guard let x = ChartPoints.number(x), let y = ChartPoints.number(y) else { return nil }
+            return ChartModel.Point(x: x, y: y)
+        }
+    }
+
+    /// The points in `text`, and what's wrong with any that aren't. Takes `(3, 4)` and lists
+    /// of them, and for one point also `3, 4` and `x = 3, y = 4`.
+    static func parse(_ text: String) -> (entries: [Entry], problem: String?) {
+        let t = text.replacingOccurrences(of: "−", with: "-").trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty else { return ([], nil) }
+        let groups = try! NSRegularExpression(pattern: #"\(([^()]*)\)"#)
+        let ns = t as NSString
+        let matches = groups.matches(in: t, range: NSRange(location: 0, length: ns.length))
+        let example = "Write points as (x, y), like (3, 4), and separate them with commas: (1, 2), (2, 4)."
+        if matches.isEmpty {
+            // Named first: `4y` alone would read as a number of years.
+            if let one = named(t) ?? pair(t) { return ([one], nil) }
+            return ([], example)
+        }
+        var entries: [Entry] = [], bad: [String] = []
+        for m in matches {
+            if let e = pair(ns.substring(with: m.range(at: 1))) { entries.append(e) } else { bad.append(ns.substring(with: m.range)) }
+        }
+        let rest = groups.stringByReplacingMatches(in: t, range: NSRange(location: 0, length: ns.length), withTemplate: "")
+            .trimmingCharacters(in: CharacterSet(charactersIn: ",; ").union(.whitespaces))
+        if !bad.isEmpty { return (entries, "\(bad.joined(separator: ", ")) " + (bad.count == 1 ? "isn’t a point. " : "aren’t points. ") + example) }
+        if !rest.isEmpty { return (entries, "Indium can’t read “\(rest)”. " + example) }
+        return (entries, nil)
+    }
+
+    /// `3, 4` or `3 4`: two numbers.
+    private static func pair(_ s: String) -> Entry? {
+        var parts = s.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        if parts.count != 2 { parts = s.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) } }
+        if parts.count != 2 { parts = s.split(separator: " ").map(String.init) }
+        guard parts.count == 2, number(parts[0]) != nil, number(parts[1]) != nil else { return nil }
+        return Entry(x: parts[0], y: parts[1])
+    }
+
+    /// `x = 3, y = 4` or `3x, 4y`, in either order.
+    private static func named(_ s: String) -> Entry? {
+        var x: String?, y: String?
+        for part in s.split(separator: ",") {
+            var kv = part.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            if kv.count == 1, let last = kv[0].last, "xyXY".contains(last) {
+                kv = [String(last), String(kv[0].dropLast()).trimmingCharacters(in: .whitespaces)]
+            }
+            guard kv.count == 2, number(kv[1]) != nil else { return nil }
+            switch kv[0].lowercased() {
+            case "x": x = kv[1]
+            case "y": y = kv[1]
+            default: return nil
+            }
+        }
+        guard let x, let y else { return nil }
+        return Entry(x: x, y: y)
+    }
+
+    /// `(1, 2), (2, 4)`
+    static func text(_ entries: [Entry]) -> String {
+        entries.map { "(\($0.x), \($0.y))" }.joined(separator: ", ")
+    }
+
+    /// A number as typed (`2.5`, `-3`, `1,200`, `4 s`), or nil.
+    static func number(_ s: String) -> Double? {
+        let t = s.replacingOccurrences(of: "−", with: "-").trimmingCharacters(in: .whitespaces)
+        if let v = Double(t) { return v.isFinite ? v : nil }
+        return Quantity.parse(t).map(\.value).flatMap { $0.isFinite ? $0 : nil }
+    }
+
+    /// A value as a label: `3`, `2.5`.
+    static func format(_ v: Double) -> String { String(format: "%.10g", v) }
+
+    /// The `points:` value as one line, whether written on it or as a `- (1, 2)` list.
+    static func written(_ value: MiniYAML.Value?) -> String {
+        // A `[…]` list was split at its commas; joined back, the points are whole again.
+        value?.list?.joined(separator: ", ") ?? ""
     }
 }
 
