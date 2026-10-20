@@ -197,7 +197,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func attachFindBar(_ host: FindBarHost) {
         host.textView = textView
-        finder.client = (textView as NSObject) as? NSTextFinderClient
+        finder.client = textView
         finder.findBarContainer = host
         finder.isIncrementalSearchingEnabled = true
         finder.incrementalSearchingShouldDimContentView = false
@@ -210,7 +210,12 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func validateFind(_ item: NSValidatedUserInterfaceItem) -> Bool {
         guard let action = NSTextFinder.Action(rawValue: item.tag) else { return false }
-        return finder.validateAction(action)
+        // The finder answers no for showing its own bar, though showing it works.
+        switch action {
+        case .showFindInterface: return true
+        case .showReplaceInterface: return textView.isEditable
+        default: return finder.validateAction(action)
+        }
     }
 
     func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {

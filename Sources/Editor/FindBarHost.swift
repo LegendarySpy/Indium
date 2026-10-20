@@ -43,19 +43,25 @@ final class FindBarHost: NSView, NSTextFinderBarContainer {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    // The finder takes a bar that's in a window as already showing, so it only goes in
+    // while visible.
     var findBarView: NSView? {
         didSet {
             oldValue?.removeFromSuperview()
-            guard let bar = findBarView else { return }
-            bar.autoresizingMask = [.width, .minYMargin]
-            content.addSubview(bar)
-            layoutBar()
+            findBarView?.autoresizingMask = [.width, .minYMargin]
+            if isFindBarVisible { installBar() }
         }
+    }
+
+    private func installBar() {
+        guard let bar = findBarView, bar.superview !== content else { return }
+        content.addSubview(bar)
     }
 
     var isFindBarVisible = false {
         didSet {
             guard oldValue != isFindBarVisible else { return }
+            if isFindBarVisible { installBar() }
             layoutBar()
             if isFindBarVisible {
                 isHidden = false
@@ -66,6 +72,7 @@ final class FindBarHost: NSView, NSTextFinderBarContainer {
                                                      completionHandler: { [weak self] in
                     guard let self, !self.isFindBarVisible else { return }
                     self.isHidden = true
+                    self.findBarView?.removeFromSuperview()
                     if let tv = self.textView { tv.window?.makeFirstResponder(tv) }
                 })
             }
@@ -98,3 +105,7 @@ final class FindBarHost: NSView, NSTextFinderBarContainer {
         if let bar = findBarView { placeBar(bar) }
     }
 }
+
+/// NSTextView implements the finder's client methods but doesn't declare it to Swift;
+/// without this the finder gets no client and Find does nothing.
+extension EditorTextView: NSTextFinderClient {}

@@ -180,6 +180,15 @@ final class EditorTextView: NSTextView {
         if let editor { editor.performFind(sender) } else { super.performTextFinderAction(sender) }
     }
 
+    // Menu items are validated here, not in validateUserInterfaceItem.
+    override func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(performFindPanelAction(_:)) || item.action == #selector(performTextFinderAction(_:)),
+           let editor {
+            return editor.validateFind(item)
+        }
+        return super.validateMenuItem(item)
+    }
+
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         if item.action == #selector(performFindPanelAction(_:)) || item.action == #selector(performTextFinderAction(_:)),
            let editor {
