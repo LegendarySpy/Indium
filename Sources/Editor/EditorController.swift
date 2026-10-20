@@ -789,6 +789,14 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 $0.location == NSNotFound ? $1 : NSUnionRange($0, $1)
             }
             layoutManager.invalidateDisplay(forCharacterRange: union)
+            // The band's edges reach a little past the lines; repaint those too, or a
+            // sliver of the old selection stays on screen.
+            if let container = textView.textContainer {
+                let glyphs = layoutManager.glyphRange(forCharacterRange: union, actualCharacterRange: nil)
+                let box = layoutManager.boundingRect(forGlyphRange: glyphs, in: container)
+                textView.setNeedsDisplay(NSRect(x: 0, y: box.minY + textView.textContainerOrigin.y - 6,
+                                                width: textView.bounds.width, height: box.height + 12))
+            }
         }
         if openTableEditorIfCaretEntered(new) { lastSelection = new; return }
         styler.selectionChanged(storage, from: lastSelection, to: new)

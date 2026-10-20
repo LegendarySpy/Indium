@@ -194,6 +194,8 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
                 return NSRect(x: minX, y: r.minY, width: max(maxX - minX, 0), height: r.height)
             }
         }
+        // Whole pixels: a soft half-pixel edge outside the line is left behind when it redraws.
+        if let view = firstTextView { kept = kept.map { view.backingAlignedRect($0, options: .alignAllEdgesNearest) } }
         guard !kept.isEmpty else { return }
         kept.withUnsafeBufferPointer {
             super.fillBackgroundRectArray($0.baseAddress!, count: kept.count, forCharacterRange: charRange, color: color)
