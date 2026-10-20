@@ -431,12 +431,21 @@ final class SidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate,
         if item.isFolder { toggle(item) } else { onOpen?(item.url) }
     }
 
-    /// New items go in the folder the menu was opened on, or for the buttons, the
-    /// selected folder (or the selected note's folder); else the top of the folder.
+    /// New items go in the folder the menu was opened on (the top of the folder for
+    /// blank space, never the open note's), or for the buttons, the selected folder
+    /// (or the selected note's folder); else the top of the folder.
     private func targetFolder(_ sender: Any?) -> URL? {
-        guard let item = sender is NSMenuItem ? clickedItem : selectedItem else { return nil }
+        if sender is NSMenuItem {
+            guard let item = menuItemTarget else { return workspace?.root }
+            return item.isFolder ? item.url : item.url.deletingLastPathComponent()
+        }
+        guard let item = selectedItem else { return nil }
         return item.isFolder ? item.url : item.url.deletingLastPathComponent()
     }
+
+    /// The row the context menu was opened on, nil for blank space. Kept from when the
+    /// menu opened, since by the time an item is chosen the click may have been reset.
+    private var menuItemTarget: SidebarItem?
 
     @objc private func showFolders() {
         let menu = NSMenu()
@@ -540,6 +549,7 @@ final class SidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate,
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         let item = outline.clickedRow >= 0 ? outline.item(atRow: outline.clickedRow) as? SidebarItem : nil
+        menuItemTarget = item
         menu.addItem(withTitle: "New Note", action: #selector(newNoteClicked), keyEquivalent: "").target = self
         menu.addItem(withTitle: "New Folder", action: #selector(newFolderClicked), keyEquivalent: "").target = self
         guard let item else { return }
@@ -761,6 +771,13 @@ extension SidebarView {
             if let item = sidebarItem(for: url) { toggle(item) }
         case "newNote": newNoteClicked(nil)
         case "newFolder": newFolderClicked(nil)
+        // `menu:Chem` opens the context menu on a row (`menu:` on blank space), then
+        // `menuNewNote`/`menuNewFolder` choose its items.
+        case "menu":
+            menuItemTarget = arg.isEmpty ? nil : url.flatMap { sidebarItem(for: $0) }
+            if !arg.isEmpty, menuItemTarget == nil { print("no row for", arg) }
+        case "menuNewNote": newNoteClicked(NSMenuItem())
+        case "menuNewFolder": newFolderClicked(NSMenuItem())
         case "rename": if let url { beginRename(url) }
         case "type": editor?.insertText(arg, replacementRange: editor?.selectedRange() ?? NSRange())
         case "return": editor?.insertNewline(nil)
