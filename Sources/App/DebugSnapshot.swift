@@ -930,6 +930,11 @@ enum DebugSnapshot {
                         }
                     }
                 case ">page": check("page", TableClipboard.pageTable(from: pb), joined)
+                case ">file":
+                    // The plain text given as a .csv or .tsv file's contents, read into cells.
+                    let text = pb.string(forType: .string) ?? ""
+                    let json = (try? JSONEncoder().encode(TableClipboard.fileGrid(text))).flatMap { String(data: $0, encoding: .utf8) }
+                    check("file", json, joined)
                 case ">cell": check("cell into the page", TableClipboard.singleCell(from: pb), joined)
                 case ">string": check("string", pb.string(forType: .string), joined)
                 case ">tsv": check("tsv", pb.string(forType: TableClipboard.tabularType), joined)
@@ -1864,6 +1869,11 @@ enum DebugSnapshot {
                         switch step {
                         case "undo": undo.undo()
                         case "redo": undo.redo()
+                        case let s where s.hasPrefix("import:"):
+                            // A .csv or .tsv file as a table at the caret, as Table from CSV File does.
+                            undo.beginUndoGrouping()
+                            target.editor.insertTable(fromFile: URL(fileURLWithPath: String(s.dropFirst(7))))
+                            undo.endUndoGrouping()
                         case let s where s.hasPrefix("caret:"):
                             target.editor.textView.setSelectedRange(NSRange(location: Int(s.dropFirst(6)) ?? 0, length: 0))
                         case let s where s.hasPrefix("type:"):

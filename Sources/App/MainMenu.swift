@@ -158,6 +158,7 @@ enum MainMenu {
         m.addItem(.separator())
         add(m, "Link", #selector(W.insertLink(_:)), "k")
         add(m, "Image…", #selector(W.insertImage(_:)), "i", [.command, .shift])
+        add(m, "Table from CSV File…", #selector(W.importTable(_:)))
         add(m, "Inline Equation", #selector(W.insertInlineMath(_:)), "m", [.command, .control])
         add(m, "Display Equation", #selector(W.insertDisplayMath(_:)), "m", [.command, .control, .shift])
         add(m, "Math Shortcuts", #selector(MathSnippetConfig.showMathShortcuts(_:))).target = MathSnippetConfig.shared

@@ -1116,6 +1116,24 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// formulas) arrive as a Markdown table on lines of their own.
     func pasteTable(from pb: NSPasteboard) -> Bool {
         guard textView.isEditable, let table = TableClipboard.pageTable(from: pb) else { return false }
+        return insertTable(table, actionName: "Paste Table")
+    }
+
+    /// The cells of a .csv or .tsv file (an instrument's export, a spreadsheet saved as
+    /// CSV) as a Markdown table at the caret, ready to chart. False when it isn't one.
+    @discardableResult
+    func insertTable(fromFile url: URL) -> Bool {
+        guard textView.isEditable, let data = try? Data(contentsOf: url) else { return false }
+        let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
+        let rows = TableClipboard.fileGrid(text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text)
+        guard let header = rows.first, header.count >= 2 || rows.count >= 2 else { return false }
+        let table = TableSpec.markdown(header: header.map(TableSpec.escapeCell), body: rows.dropFirst().map { $0.map(TableSpec.escapeCell) },
+                                       alignments: [], dashes: nil)
+        return insertTable(table, actionName: "Import Table")
+    }
+
+    /// A table's Markdown on lines of its own at the caret, one undo step. Not inside code.
+    private func insertTable(_ table: String, actionName: String) -> Bool {
         let sel = textView.selectedRange()
         if let i = styler.blockIndex(containing: sel.location), case .code = styler.blocks[i].kind { return false }
         let start = lineRange(at: sel.location), end = lineRange(at: NSMaxRange(sel))
@@ -1127,7 +1145,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let lineBelowIsBlank = !atEnd && lineRange(at: NSMaxRange(end.full)).content.length == 0
         let after = NSMaxRange(sel) < NSMaxRange(end.content) ? "\n\n" : atEnd ? "\n" : (lineBelowIsBlank ? "" : "\n")
         let insert = before + table + after
-        replace(sel, with: insert, select: NSRange(location: sel.location + (insert as NSString).length, length: 0), actionName: "Paste Table")
+        replace(sel, with: insert, select: NSRange(location: sel.location + (insert as NSString).length, length: 0), actionName: actionName)
         return true
     }
 

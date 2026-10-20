@@ -245,3 +245,58 @@ x⇥site
 <table><tr><td>Name</td><td>Link</td></tr><tr><td><b>x</b></td><td><a href="https://site.org">site</a></td></tr></table>
 >>> grid
 [["Name","Link"],["**x**","[site](https://site.org)"]]
+
+### CSV text pasted into the page: data becomes a table
+<<< string
+Time (s),Distance (m)
+0,0
+1,2.1
+2,7.9
+>>> page
+| Time (s) | Distance (m) |
+| --- | --- |
+| 0        | 0            |
+| 1        | 2.1          |
+| 2        | 7.9          |
+
+### CSV with quotes and units
+<<< string
+Sample,"Mass, dry",Volume
+A,2.008 g,1.2 mL
+B,1.950 g,1.1 mL
+>>> page
+| Sample | Mass, dry | Volume |
+| --- | --- | --- |
+| A      | 2.008 g   | 1.2 mL |
+| B      | 1.950 g   | 1.1 mL |
+
+### Prose with commas stays text
+<<< string
+First, mix the salt and water.
+Then, heat it slowly, stirring.
+>>> page
+nil
+
+### Words in every cell stay text
+<<< string
+Name,City
+Ana,Lisbon
+Ben,Oslo
+>>> page
+nil
+
+### A .csv file with semicolons, a blank last line and spaces
+<<< string
+t;v
+0; 1,5
+1; 2,5
+
+>>> file
+[["t","v"],["0","1,5"],["1","2,5"]]
+
+### A .tsv file
+<<< string
+a⇥b
+1⇥2
+>>> file
+[["a","b"],["1","2"]]

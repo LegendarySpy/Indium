@@ -187,7 +187,7 @@ enum TableClipboard {
         if let text, markdownTable(text) != nil { return text.trimmingCharacters(in: .newlines) }
         if let tsv = pb.string(forType: tabularType), !tsv.isEmpty, let t = spreadsheet(tsv) { return t }
         if let html = pb.string(forType: .html), let rows = htmlTable(html) { return table(rows) }
-        return text.flatMap(spreadsheet)
+        return text.flatMap(spreadsheet) ?? text.flatMap(csvData).flatMap(table)
         // Tab-indented text (code, outlines) isn't a table; cells are two by two at least.
         func spreadsheet(_ text: String) -> String? {
             guard text.contains("\t"), !text.components(separatedBy: .newlines).contains(where: { $0.hasPrefix("\t") }) else { return nil }
@@ -215,10 +215,42 @@ enum TableClipboard {
         return rows.map { $0 + Array(repeating: "", count: max(0, width - $0.count)) }
     }
 
+    /// Comma-separated text pasted as plain text (an instrument's export, a CSV opened in
+    /// a text editor) that's clearly data: two rows and two columns at least, every row as
+    /// wide as the first, and most cells below the header numbers. Prose with commas in it
+    /// never passes, so it pastes as text.
+    static func csvData(_ text: String) -> [[String]]? {
+        let lines = text.trimmingCharacters(in: .newlines).components(separatedBy: .newlines)
+        guard lines.count >= 2, lines.count <= 10_000, let first = lines.first, first.contains(",") || first.contains(";") else { return nil }
+        let rows = parseDelimited(text, separator: delimiter(first))
+        guard let width = rows.first?.count, width >= 2, rows.allSatisfy({ $0.count == width }) else { return nil }
+        let cells = rows.dropFirst().flatMap { $0 }.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let numbers = cells.filter { Quantity.parse($0) != nil }.count
+        guard !cells.isEmpty, numbers * 2 >= cells.count else { return nil }
+        return rows.map { $0.map { $0.trimmingCharacters(in: .whitespaces) } }
+    }
+
+    /// The cells of a .csv or .tsv file, whichever of tab, semicolon (Europe's CSV) or
+    /// comma its first line uses most. Blank lines at the end are dropped.
+    static func fileGrid(_ text: String) -> [[String]] {
+        let first = text.components(separatedBy: .newlines).first ?? ""
+        var rows = parseDelimited(text, separator: delimiter(first))
+        while let last = rows.last, last.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty }), rows.count > 1 { rows.removeLast() }
+        return rows.map { $0.map { $0.trimmingCharacters(in: .whitespaces) } }
+    }
+
+    private static func delimiter(_ line: String) -> Character {
+        let counts: [(Character, Int)] = ["\t", ";", ","].map { c in (c, line.filter { $0 == c }.count) }
+        return counts.max { $0.1 < $1.1 }.flatMap { $0.1 > 0 ? $0.0 : nil } ?? ","
+    }
+
+    static func parseTSV(_ text: String) -> [[String]] { parseDelimited(text, separator: "\t") }
+
     /// Tab-separated text as Excel, Numbers, Sheets and browsers copy it (RFC 4180 with
-    /// tabs): a quoted cell may hold tabs, line breaks, doubled quotes and spaces at its
-    /// ends, all kept. Rows are padded to one width.
-    static func parseTSV(_ text: String) -> [[String]] {
+    /// tabs), or comma-separated text as a CSV file holds it: a quoted cell may hold the
+    /// separator, line breaks, doubled quotes and spaces at its ends, all kept. Rows are
+    /// padded to one width.
+    static func parseDelimited(_ text: String, separator: Character) -> [[String]] {
         var rows: [[String]] = [], row: [String] = [], cell = ""
         var quoted = false, atCellStart = true
         var chars = Array(text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")), i = 0
@@ -231,7 +263,7 @@ enum TableClipboard {
                 else { cell.append(c) }
             } else if c == "\"", atCellStart {
                 quoted = true
-            } else if c == "\t" {
+            } else if c == separator {
                 row.append(cell); cell = ""; atCellStart = true; i += 1; continue
             } else if c == "\n" {
                 row.append(cell); rows.append(row); row = []; cell = ""; atCellStart = true; i += 1; continue
