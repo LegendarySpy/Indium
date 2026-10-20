@@ -153,6 +153,7 @@ extension EditorController {
         guard textView.isEditable, let range = askRange(), let container = textView.textContainer else { NSSound.beep(); return }
         textView.setSelectedRange(range)
         // One thing over the selection at a time.
+        selectionBarWork?.cancel()
         selectionBar.dismiss()
         let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
         var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: container)

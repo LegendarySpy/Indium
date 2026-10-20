@@ -19,14 +19,39 @@ extension EditorController {
         return layoutModel.groups.map(\.group).filter { NSIntersectionRange($0.range, sel).length > 0 }
     }
 
+    /// Shows the layout bar over a block-sized selection once the selection has settled.
+    /// Selecting in quick steps (Shift-arrows, small drags) passes through whole blocks on
+    /// the way; showing the bar at each would make it blink in and out.
     func updateSelectionBar() {
-        let sel = textView.selectedRange()
-        let groups = selectedGroups()
-        guard textView.isEditable, sel.length > 0, !textView.isTrackingMouse,
-              let first = groups.first, let container = textView.textContainer, selectionIsBlockSized(sel, groups: groups) else {
+        selectionBarWork?.cancel()
+        guard eligibleForSelectionBar() else {
             selectionBar.dismiss()
             return
         }
+        if !selectionBar.isHidden, selectionBar.alphaValue > 0 {
+            presentSelectionBar()
+            return
+        }
+        let sel = textView.selectedRange()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.textView.selectedRange() == sel, self.eligibleForSelectionBar() else { return }
+            self.presentSelectionBar()
+        }
+        selectionBarWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+    }
+
+    private func eligibleForSelectionBar() -> Bool {
+        let sel = textView.selectedRange()
+        let groups = selectedGroups()
+        return textView.isEditable && sel.length > 0 && !textView.isTrackingMouse && !groups.isEmpty
+            && textView.textContainer != nil && selectionIsBlockSized(sel, groups: groups)
+    }
+
+    private func presentSelectionBar() {
+        let sel = textView.selectedRange()
+        let groups = selectedGroups()
+        guard let first = groups.first, let container = textView.textContainer else { return }
         let inColumns = caretIsInColumns || layoutModel.itemIndex(of: first).map { i -> Bool in
             if case .region = layoutModel.items[i] { return true }
             return false

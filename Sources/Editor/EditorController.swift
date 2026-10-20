@@ -43,6 +43,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private var resolvingConflict = false
     private let imageControls = ImageControlsView()
     let selectionBar = SelectionBarView(frame: .zero)
+    /// The layout bar waiting for the selection to settle (see updateSelectionBar).
+    var selectionBarWork: DispatchWorkItem?
     var textVersion = 0
     var cachedLayout: (version: Int, model: LayoutModel)?
     var slash: SlashState?
@@ -349,6 +351,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         math.clearStops()
         math.hidePreview()
         // The selection it was for belongs to the note being left.
+        selectionBarWork?.cancel()
         selectionBar.dismiss()
         note = newNote
         writingToolsSpan = nil
