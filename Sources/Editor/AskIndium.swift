@@ -197,8 +197,8 @@ extension EditorController {
     }
 }
 
-/// The Ask Indium popover: what it's about, a field for the request with a few common
-/// ones to click, then the answer or what went wrong.
+/// The Ask Indium popover: one row to type the request in, a few common ones to click,
+/// then the answer or what went wrong.
 final class AskPanel: NSViewController, NSTextFieldDelegate {
     weak var popover: NSPopover?
     private weak var editor: EditorController?
@@ -207,25 +207,23 @@ final class AskPanel: NSViewController, NSTextFieldDelegate {
     private var answer = ""
     private var task: Task<Void, Never>?
 
-    private static let width: CGFloat = 372
+    private static let width: CGFloat = 360
+    private static let inset: CGFloat = 14
     /// Common requests, offered before anything's typed. General on purpose: anything else
     /// can be typed.
-    private static let suggestions: [(title: String, symbol: String, request: String)] = [
-        ("Fix Grammar", "checkmark.circle", "Fix the spelling and grammar"),
-        ("List", "list.bullet", "Make this a bulleted list"),
-        ("Table", "tablecells", "Make this a table"),
-        ("Shorter", "text.append", "Make this shorter"),
+    private static let suggestions: [(title: String, request: String)] = [
+        ("Fix Grammar", "Fix the spelling and grammar"),
+        ("List", "Make this a bulleted list"),
+        ("Table", "Make this a table"),
+        ("Shorter", "Make this shorter"),
     ]
 
     private let field = NSTextField()
-    private let fieldBox = NSView()
     private let send = NSButton()
     private let spinner = IconSpinner()
-    private let quote = NSTextField(labelWithString: "")
+    private let divider = NSBox()
     private let chips = NSStackView()
     private let status = NSTextField(wrappingLabelWithString: "")
-    private let thinking = NSStackView()
-    private let answerCard = NSView()
     private let answerLabel = NSTextField(wrappingLabelWithString: "")
     private let buttons = NSStackView()
 
@@ -241,39 +239,14 @@ final class AskPanel: NSViewController, NSTextFieldDelegate {
     deinit { task?.cancel() }
 
     override func loadView() {
-        let inner = Self.width - 32
+        let inner = Self.width - Self.inset * 2
 
-        // Title, with what it's about underneath as a quote.
+        // The row: sparkle, the request, and send, as in Spotlight.
         let sparkle = NSImageView(image: NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)!
-            .withSymbolConfiguration(.init(pointSize: 13, weight: .semibold)) ?? NSImage())
+            .withSymbolConfiguration(.init(pointSize: 14, weight: .medium)) ?? NSImage())
         sparkle.contentTintColor = .controlAccentColor
-        let title = NSTextField(labelWithString: "Ask Indium")
-        title.font = .systemFont(ofSize: 13, weight: .semibold)
-        let header = NSStackView(views: [sparkle, title])
-        header.spacing = 6
-
-        let flat = original.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
-        quote.stringValue = flat
-        quote.font = .systemFont(ofSize: 12)
-        quote.textColor = .secondaryLabelColor
-        quote.lineBreakMode = .byTruncatingTail
-        quote.maximumNumberOfLines = 2
-        quote.cell?.wraps = true
-        quote.preferredMaxLayoutWidth = inner - 12
-        let bar = NSView()
-        bar.wantsLayer = true
-        bar.layer?.backgroundColor = Palette.quoteBar.cgColor
-        bar.layer?.cornerRadius = 1
-        let quoteRow = NSStackView(views: [bar, quote])
-        quoteRow.spacing = 9
-        quoteRow.alignment = .top
-        bar.translatesAutoresizingMaskIntoConstraints = false
-        bar.widthAnchor.constraint(equalToConstant: 2).isActive = true
-        bar.heightAnchor.constraint(equalTo: quote.heightAnchor).isActive = true
-
-        // The field: a rounded well with the send button inside, as in Spotlight.
-        field.placeholderString = "Ask, or say how to change it"
-        field.font = .systemFont(ofSize: 14)
+        field.placeholderString = "Ask Indium…"
+        field.font = .systemFont(ofSize: 15)
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
@@ -282,116 +255,95 @@ final class AskPanel: NSViewController, NSTextFieldDelegate {
         field.delegate = self
         field.setAccessibilityLabel("Ask Indium")
         send.image = NSImage(systemSymbolName: "arrow.up.circle.fill", accessibilityDescription: "Ask")?
-            .withSymbolConfiguration(.init(pointSize: 18, weight: .regular))
+            .withSymbolConfiguration(.init(pointSize: 17, weight: .regular))
         send.isBordered = false
-        send.contentTintColor = .controlAccentColor
         send.target = self
         send.action = #selector(sendClicked)
         send.toolTip = "Ask (Return)"
         spinner.setAccessibilityLabel("Thinking")
-        fieldBox.wantsLayer = true
-        fieldBox.layer?.cornerRadius = 10
-        fieldBox.layer?.borderWidth = 1
-        for v in [field, send, spinner] as [NSView] {
+        let row = NSView()
+        for v in [sparkle, field, send, spinner] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
-            fieldBox.addSubview(v)
+            row.addSubview(v)
         }
-        fieldBox.translatesAutoresizingMaskIntoConstraints = false
+        row.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            fieldBox.widthAnchor.constraint(equalToConstant: inner),
-            fieldBox.heightAnchor.constraint(equalToConstant: 36),
-            field.leadingAnchor.constraint(equalTo: fieldBox.leadingAnchor, constant: 11),
-            field.centerYAnchor.constraint(equalTo: fieldBox.centerYAnchor),
-            send.leadingAnchor.constraint(equalTo: field.trailingAnchor, constant: 6),
-            send.trailingAnchor.constraint(equalTo: fieldBox.trailingAnchor, constant: -8),
-            send.centerYAnchor.constraint(equalTo: fieldBox.centerYAnchor),
+            row.widthAnchor.constraint(equalToConstant: inner),
+            row.heightAnchor.constraint(equalToConstant: 24),
+            sparkle.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            sparkle.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            field.leadingAnchor.constraint(equalTo: sparkle.trailingAnchor, constant: 8),
+            field.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            send.leadingAnchor.constraint(equalTo: field.trailingAnchor, constant: 8),
+            send.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            send.centerYAnchor.constraint(equalTo: row.centerYAnchor),
             spinner.centerXAnchor.constraint(equalTo: send.centerXAnchor),
             spinner.centerYAnchor.constraint(equalTo: send.centerYAnchor),
         ])
+        send.setContentHuggingPriority(.required, for: .horizontal)
 
-        // A few common requests, until something's typed or asked.
-        for (title, symbol, request) in Self.suggestions {
-            let chip = NSButton(title: title, image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil)!, target: self, action: #selector(chipClicked(_:)))
-            chip.bezelStyle = .glass
-            chip.controlSize = .small
-            chip.imagePosition = .imageLeading
-            chip.font = .systemFont(ofSize: 11.5)
-            chip.identifier = NSUserInterfaceItemIdentifier(request)
-            chips.addArrangedSubview(chip)
+        divider.boxType = .separator
+        divider.translatesAutoresizingMaskIntoConstraints = false
+        divider.widthAnchor.constraint(equalToConstant: inner).isActive = true
+
+        // A few common requests, as plain words, until something's typed or asked.
+        for (title, request) in Self.suggestions {
+            chips.addArrangedSubview(Self.textButton(title, color: .secondaryLabelColor, target: self, action: #selector(chipClicked(_:)), id: request))
         }
-        chips.spacing = 6
-
-        let thinkingLabel = NSTextField(labelWithString: "Thinking…")
-        thinkingLabel.font = .systemFont(ofSize: 12)
-        thinkingLabel.textColor = .secondaryLabelColor
-        thinking.addArrangedSubview(thinkingLabel)
-        thinking.isHidden = true
+        chips.spacing = 16
 
         status.font = .systemFont(ofSize: 12)
         status.textColor = .secondaryLabelColor
         status.preferredMaxLayoutWidth = inner
         status.isHidden = true
 
-        // The answer, set apart on a soft card so it reads as Indium's reply.
         answerLabel.font = .systemFont(ofSize: 13)
         answerLabel.isSelectable = true
-        answerLabel.preferredMaxLayoutWidth = inner - 24
-        answerLabel.translatesAutoresizingMaskIntoConstraints = false
-        answerCard.wantsLayer = true
-        answerCard.layer?.cornerRadius = 10
-        answerCard.addSubview(answerLabel)
-        answerCard.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            answerCard.widthAnchor.constraint(equalToConstant: inner),
-            answerLabel.leadingAnchor.constraint(equalTo: answerCard.leadingAnchor, constant: 12),
-            answerLabel.trailingAnchor.constraint(equalTo: answerCard.trailingAnchor, constant: -12),
-            answerLabel.topAnchor.constraint(equalTo: answerCard.topAnchor, constant: 10),
-            answerLabel.bottomAnchor.constraint(equalTo: answerCard.bottomAnchor, constant: -10),
-        ])
-        answerCard.isHidden = true
-        for (title, symbol, action) in [("Insert Below", "text.insert", #selector(insertAnswer)), ("Copy", "doc.on.doc", #selector(copyAnswer))] {
-            let b = NSButton(title: title, image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil)!, target: self, action: action)
-            b.bezelStyle = .glass
-            b.controlSize = .small
-            b.imagePosition = .imageLeading
-            buttons.addArrangedSubview(b)
+        answerLabel.preferredMaxLayoutWidth = inner
+        answerLabel.isHidden = true
+        for (title, action) in [("Insert Below", #selector(insertAnswer)), ("Copy", #selector(copyAnswer))] {
+            buttons.addArrangedSubview(Self.textButton(title, color: .controlAccentColor, target: self, action: action, id: nil))
         }
-        buttons.spacing = 6
+        buttons.spacing = 16
         buttons.isHidden = true
 
-        let stack = NSStackView(views: [header, quoteRow, fieldBox, chips, thinking, status, answerCard, buttons])
+        let stack = NSStackView(views: [row, divider, chips, status, answerLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 12
-        stack.setCustomSpacing(8, after: header)
-        stack.setCustomSpacing(14, after: quoteRow)
-        stack.setCustomSpacing(10, after: fieldBox)
-        stack.setCustomSpacing(8, after: answerCard)
-        stack.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 16, right: 16)
-        quoteRow.isHidden = flat.isEmpty
+        stack.spacing = 10
+        stack.setCustomSpacing(8, after: answerLabel)
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: Self.inset, bottom: 12, right: Self.inset)
+        stack.widthAnchor.constraint(equalToConstant: Self.width).isActive = true
         view = stack
-        updateColors()
+        updateSend()
         if let reason = AskModel.unavailableReason {
             field.isEnabled = false
             send.isEnabled = false
             chips.isHidden = true
             show(status: reason)
         }
+        refreshDivider()
         resize()
     }
 
-    /// Layer colors follow light and dark.
-    private func updateColors() {
-        view.effectiveAppearance.performAsCurrentDrawingAppearance {
-            fieldBox.layer?.backgroundColor = Palette.fill.cgColor
-            fieldBox.layer?.borderColor = Palette.separator.cgColor
-            answerCard.layer?.backgroundColor = Palette.fill.cgColor
-        }
+    /// A borderless word that acts as a button.
+    private static func textButton(_ title: String, color: NSColor, target: AnyObject, action: Selector, id: String?) -> NSButton {
+        let b = NSButton(title: title, target: target, action: action)
+        b.isBordered = false
+        b.attributedTitle = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: color])
+        if let id { b.identifier = NSUserInterfaceItemIdentifier(id) }
+        return b
     }
 
-    override func viewDidLayout() {
-        super.viewDidLayout()
-        updateColors()
+    /// Send is lit only when there's something to send.
+    private func updateSend() {
+        let ready = !field.stringValue.trimmingCharacters(in: .whitespaces).isEmpty
+        send.contentTintColor = ready ? .controlAccentColor : .tertiaryLabelColor
+    }
+
+    /// The hairline shows only when something sits under the row.
+    private func refreshDivider() {
+        divider.isHidden = chips.isHidden && status.isHidden && answerLabel.isHidden
     }
 
     override func viewDidAppear() {
@@ -403,8 +355,10 @@ final class AskPanel: NSViewController, NSTextFieldDelegate {
     }
 
     private func resize() {
+        refreshDivider()
         view.layoutSubtreeIfNeeded()
         preferredContentSize = view.fittingSize
+        popover?.contentSize = view.fittingSize
     }
 
     private func show(status text: String?) {
@@ -416,8 +370,9 @@ final class AskPanel: NSViewController, NSTextFieldDelegate {
 
     func controlTextDidChange(_ obj: Notification) {
         // Typing your own request: the suggestions step aside.
+        updateSend()
         let typing = !field.stringValue.isEmpty
-        if chips.isHidden != typing, answerCard.isHidden {
+        if chips.isHidden != typing, answerLabel.isHidden {
             chips.isHidden = typing
             resize()
         }
@@ -439,7 +394,6 @@ final class AskPanel: NSViewController, NSTextFieldDelegate {
         field.isEnabled = !working
         send.isHidden = working
         if working { spinner.start() } else { spinner.stop() }
-        thinking.isHidden = !working
         if working { chips.isHidden = true }
     }
 
@@ -447,7 +401,7 @@ final class AskPanel: NSViewController, NSTextFieldDelegate {
         let request = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !request.isEmpty, task == nil, let editor else { return }
         let around = editor.askContext(around: range)
-        answerCard.isHidden = true
+        answerLabel.isHidden = true
         buttons.isHidden = true
         show(status: nil)
         setWorking(true)
@@ -487,7 +441,7 @@ final class AskPanel: NSViewController, NSTextFieldDelegate {
         case let .success(reply):
             answer = reply.text
             answerLabel.stringValue = reply.text
-            answerCard.isHidden = false
+            answerLabel.isHidden = false
             buttons.isHidden = false
             show(status: nil)
         }
