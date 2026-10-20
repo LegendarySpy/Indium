@@ -348,6 +348,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         endTableEditing()
         math.clearStops()
         math.hidePreview()
+        // The selection it was for belongs to the note being left.
+        selectionBar.dismiss()
         note = newNote
         writingToolsSpan = nil
         setText(newNote?.savedText ?? "")
@@ -990,6 +992,9 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             let prefixLength = m.range.length
             guard sel.location >= line.location + prefixLength else { return false }
             let rest = text.substring(from: prefixLength).trimmingCharacters(in: .whitespaces)
+            // A bare "1." or "-" with no space after it isn't a list item yet: Return just
+            // ends the line, rather than taking it for an empty item and deleting it.
+            if rest.isEmpty, !(text.substring(to: prefixLength).last?.isWhitespace ?? false) { return false }
             if rest.isEmpty {
                 replace(line, with: "", select: NSRange(location: line.location, length: 0), actionName: "Typing")
                 return true
