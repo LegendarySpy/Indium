@@ -4,8 +4,17 @@ import AppKit
 /// table names it the way Obsidian's Charts plugin does, with a `^id` line under the
 /// table and `id:` in the chart, so the same chart draws in Obsidian with the plugin.
 extension EditorController {
-    /// Points, not the plugin's `series:`, so every value can be changed in the inspector.
-    static let chartTemplate = "```chart\ntype: bar\npoints: (1, 3), (2, 5), (3, 2)\n```\n"
+    /// A chart to fill in, for each type the slash commands offer: bars and pies of labelled
+    /// values as the Charts plugin writes them, lines and scatter plots of points. Every
+    /// value in them is changed in the inspector.
+    static func chartTemplate(_ type: String) -> String {
+        switch type {
+        case "line": "```chart\ntype: line\npoints: (0, 1), (1, 3), (2, 4), (3, 7)\n```\n"
+        case "scatter": "```chart\ntype: scatter\npoints: (1, 2.1), (2, 3.9), (3, 6.2), (4, 7.8)\nbestFit: true\n```\n"
+        case "pie": "```chart\ntype: pie\nlabels: [A, B, C]\nseries:\n  - title: Share\n    data: [50, 30, 20]\n```\n"
+        default: "```chart\ntype: bar\nlabels: [A, B, C]\nseries:\n  - title: Values\n    data: [3, 5, 2]\n```\n"
+        }
+    }
     static let graphTemplate = "```desmos-graph\nleft=-10; right=10; bottom=-10; top=10\n---\ny=x^2\n```\n"
 
     /// The table a chart typed at `location` would be about: the nearest block above,
@@ -30,13 +39,20 @@ extension EditorController {
         guard let location = styler.editingTableLocation else { return }
         endTableEditing()
         guard let i = styler.blockIndex(containing: location), case .table = styler.blocks[i].kind else { return }
-        insertChart(forTable: i, replacing: nil)
+        insertChart(forTable: i, type: nil, replacing: nil)
     }
 
     /// A chart of the table at block `index`: written over `replacing` (a typed `/chart`),
     /// or below the table. The table gets a `^id` line if it hasn't one. One undo step.
-    func insertChart(forTable index: Int, replacing: NSRange?) {
+    /// Without a `type`, bars for labels that are words and a line for numbers.
+    func insertChart(forTable index: Int, type: String?, replacing: NSRange?) {
         let blocks = styler.blocks
+        var words = false
+        if case let .table(spec) = blocks[index].kind {
+            let labels = spec.rows.dropFirst().map { TableSpec.unescapeCell($0.first?.text ?? "").trimmingCharacters(in: .whitespaces) }
+            words = labels.contains { !$0.isEmpty && Quantity.parse($0) == nil }
+        }
+        let type = type ?? (words ? "bar" : "line")
         // Past the table's formulas: where its ^id goes, or already is.
         var end = index
         if end + 1 < blocks.count, blocks[end + 1].kind == .tableFormulas { end += 1 }
@@ -58,7 +74,7 @@ extension EditorController {
             id = name
             idText = (needsBreak ? "\n" : "") + "\n^\(name)\n"
         }
-        let chart = "```chart\ntype: line\nid: \(id!)\n```\n"
+        let chart = "```chart\ntype: \(type)\nid: \(id!)\n```\n"
 
         guard let undo = textView.undoManager else { return }
         undo.beginUndoGrouping()
