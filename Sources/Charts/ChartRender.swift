@@ -634,7 +634,7 @@ private struct ChartView: View {
             if ticks && model.kind == .graph { AxisTick(length: 4, stroke: StrokeStyle(lineWidth: 0.75)).foregroundStyle(axisColor) }
             if leading {
                 AxisValueLabel(horizontalSpacing: 6) {
-                    if let v = value.as(Double.self) { Text(Self.number(v)).font(.system(size: 11).monospacedDigit()).foregroundStyle(secondary) }
+                    if let v = value.as(Double.self) { Text(Self.number(v, grouped: abs(v) >= 10_000)).font(.system(size: 11).monospacedDigit()).foregroundStyle(secondary) }
                 }
             } else {
                 AxisValueLabel().font(.system(size: 11)).foregroundStyle(secondary)
@@ -666,7 +666,7 @@ private struct ChartView: View {
                 let plot = geo[anchor]
                 ForEach(xTicks, id: \.self) { v in
                     if let x = proxy.position(forX: v) {
-                        Text(Self.number(v)).font(.system(size: 11).monospacedDigit()).foregroundStyle(secondary)
+                        Text(Self.number(v, grouped: false)).font(.system(size: 11).monospacedDigit()).foregroundStyle(secondary)
                             .fixedSize()
                             .position(x: plot.minX + x, y: plot.maxY + 13)
                     }
@@ -682,16 +682,23 @@ private struct ChartView: View {
         let span = d.upperBound - d.lowerBound
         let rough = span / max(2, Double(width) / 90)
         let power = pow(10, floor(log10(rough)))
-        let step = [1.0, 2, 5, 10].map { $0 * power }.first { $0 >= rough } ?? 10 * power
+        var step = [1.0, 2, 5, 10].map { $0 * power }.first { $0 >= rough } ?? 10 * power
+        // Whole numbers along x (years, trials, days) get whole-number steps: no 2019.5.
+        let xs = model.series.flatMap { $0.segments.flatMap { $0.map(\.x) } }
+        if !xs.isEmpty, xs.allSatisfy({ $0 == $0.rounded() }) { step = max(step, 1) }
         let first = (d.lowerBound / step).rounded(.up), last = (d.upperBound / step).rounded(.down)
         guard last >= first, last - first < 100 else { return [] }
         // As multiples of the step, so 0.1 · 3 comes out 0.3 and not 0.30000000000000004.
         return stride(from: first, through: last, by: 1).map { ($0 * step * 1e9).rounded() / 1e9 }
     }
 
-    /// An axis number with a real minus sign: −5.
-    private static func number(_ v: Double) -> String {
-        (v == 0 ? 0 : v).formatted().replacingOccurrences(of: "-", with: "−")
+    /// An axis number with a real minus sign: −5. Grouped (12,000) only when asked: along
+    /// x the numbers are often years or IDs (2019, not 2,019), and up the side only past
+    /// 10,000.
+    private static func number(_ v: Double, grouped: Bool) -> String {
+        let n = v == 0 ? 0 : v
+        let text = grouped ? n.formatted() : n.formatted(.number.grouping(.never))
+        return text.replacingOccurrences(of: "-", with: "−")
     }
 }
 

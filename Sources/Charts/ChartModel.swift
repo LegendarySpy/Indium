@@ -177,8 +177,10 @@ struct ChartModel: Hashable {
         if labels.isEmpty, let longest = columns.map(\.cells.count).max(), longest > 0 { labels = (1...longest).map(String.init) }
 
         // Numbers along x when every label is one (and it isn't a bar chart): spaced by value.
+        // Labels written in quotes (`["2019", "2020"]`) are names, evenly spaced, whatever they say.
         let xs = labels.map { Quantity.parse($0) }
-        let numericX = labels.isEmpty || m.kind != .bar && xs.allSatisfy { $0 != nil }
+        let quoted = yaml["id"] == nil && body.range(of: #"(?m)^\s*labels:\s*\[\s*["']"#, options: .regularExpression) != nil
+        let numericX = labels.isEmpty || m.kind != .bar && !quoted && xs.allSatisfy { $0 != nil }
         if numericX {
             xUnit = xs.compactMap { $0?.unit?.text }.first
         } else {
@@ -356,9 +358,14 @@ struct ChartModel: Hashable {
     /// A curve as the legend names it: `y = k x^2` as y = k x², `2*x` as 2·x.
     static func readable(_ equation: String) -> String {
         let superscripts: [Character: Character] = ["0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷",
-                                                    "8": "⁸", "9": "⁹", "-": "⁻"]
+                                                    "8": "⁸", "9": "⁹", "-": "⁻", "x": "ˣ", "n": "ⁿ"]
         var t = equation.replacingOccurrences(of: "\\cdot", with: "·").replacingOccurrences(of: "*", with: "·")
-        let power = try! NSRegularExpression(pattern: #"\^\s*(?:\{(-?\d+)\}|\((-?\d+)\)|(-?\d+))"#)
+        // LaTeX as Desmos takes it: \sin(x) as sin(x), \left( as (.
+        for (latex, plain) in [("\\left", ""), ("\\right", ""), ("\\pi", "π"), ("\\theta", "θ")] {
+            t = t.replacingOccurrences(of: latex, with: plain)
+        }
+        t = t.replacingOccurrences(of: #"\\(sin|cos|tan|ln|log|exp|sqrt)\b"#, with: "$1", options: .regularExpression)
+        let power = try! NSRegularExpression(pattern: #"\^\s*(?:\{(-?[\dxn]+)\}|\((-?[\dxn]+)\)|(-?[\dxn]+))"#)
         for m in power.matches(in: t, range: NSRange(t.startIndex..., in: t)).reversed() {
             let digits = (1...3).compactMap { Range(m.range(at: $0), in: t).map { String(t[$0]) } }.first ?? ""
             t.replaceSubrange(Range(m.range, in: t)!, with: String(digits.compactMap { superscripts[$0] }))
@@ -371,7 +378,8 @@ struct ChartModel: Hashable {
     private static func graph(_ body: String, context: Context) -> ChartModel {
         var m = ChartModel()
         m.kind = .graph
-        m.legend = false
+        // Named in a legend when there are two or more lines, so each can be told apart.
+        m.legend = true
         var lines = body.components(separatedBy: .newlines)
         var settings: [String: String] = [:]
         if let sep = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "---" }) {
@@ -423,13 +431,13 @@ struct ChartModel: Hashable {
             case let .curve(expression):
                 colorIndex += color == nil ? 1 : 0
                 m.rows.append(Row(color: resolved))
-                m.curves.append(Curve(name: equation, color: resolved, dash: dash,
+                m.curves.append(Curve(name: Self.readable(equation), color: resolved, dash: dash,
                                       segments: GraphMath.sample(expression, functions: functions, x: m.xDomain!, y: m.yDomain,
                                                                  restrictions: restrictions)))
             case let .vertical(x):
                 colorIndex += color == nil ? 1 : 0
                 m.rows.append(Row(color: resolved))
-                m.curves.append(Curve(name: equation, color: resolved, dash: dash,
+                m.curves.append(Curve(name: Self.readable(equation), color: resolved, dash: dash,
                                       segments: [[Point(x: x, y: bottom), Point(x: x, y: top)]]))
             case let .point(x, y):
                 colorIndex += color == nil ? 1 : 0

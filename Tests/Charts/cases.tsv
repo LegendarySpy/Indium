@@ -76,3 +76,9 @@ model	type: pie↵style: hatched↵labels: [A, B]↵series:↵  - title: X↵   
 model	type: line↵style: gradient↵points: (0, 1), (1, 2)		line x 0..1 | series Points (0, 1) (1, 2)
 model	type: bar↵style: hatched↵labels: [A, B]↵series:↵  - title: X↵    data: [1, 2]		bar labels A,B | series X (0, 1) (1, 2) | style hatched
 model	type: scatter↵style: Dotted↵points: (0, 1), (1, 2)		scatter x 0..1 | series Points (0, 1) (1, 2) | style dotted
+# Years: quoted labels are names, bare ones numbers
+model	type: line↵labels: ["2019", "2020"]↵series:↵  - title: R↵    data: [1, 2]		line labels 2019,2020 | series R (0, 1) (1, 2)
+model	type: line↵labels: [2019, 2020]↵series:↵  - title: R↵    data: [1, 2]		line x 2019..2020 | series R (2019, 1) (2020, 2)
+name	y=\sin(x)		y=sin(x)
+name	y=2^x		y=2ˣ
+name	y=\left(x+1\right)^2		y=(x+1)²
