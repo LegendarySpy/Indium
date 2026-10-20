@@ -378,8 +378,9 @@ private struct ChartView: View {
         }
         .modifier(XScale(domain: xDomain))
         .modifier(YScale(domain: yDomain, includesZero: model.beginAtZero))
-        .chartXAxis { axis(grid: model.grid) }
+        .chartXAxis { xAxis }
         .chartYAxis { axis(grid: model.grid, leading: true) }
+        .chartOverlay { proxy in xNumbers(proxy) }
         // A range set by hand cuts off what's past it; one fitted to the data leaves a point
         // on the edge whole.
         .chartPlotStyle { $0.clipShape(Rectangle().inset(by: model.kind == .graph || model.yDomain != nil ? 0 : -8)) }
@@ -404,25 +405,69 @@ private struct ChartView: View {
         model.yDomain.map { d in model.beginAtZero ? min(0, d.lowerBound)...max(0, d.upperBound) : d }
     }
 
-    /// Numbers (or labels) along an axis: x's centered under their ticks, y's to the left.
-    /// Labels along x have no ticks; they sit under their bars and points.
+    /// Numbers (or labels) along an axis, y's to the left. Labels along x have no ticks;
+    /// they sit under their bars and points.
     private func axis(grid: Bool, leading: Bool = false, ticks: Bool = true) -> some AxisContent {
         AxisMarks(position: leading ? .leading : .bottom) { value in
             if grid { AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(gridColor) }
             if ticks { AxisTick(length: 4, stroke: StrokeStyle(lineWidth: 0.75)).foregroundStyle(axisColor) }
             if leading {
-                AxisValueLabel(horizontalSpacing: 6).font(.system(size: 11).monospacedDigit()).foregroundStyle(secondary)
-            } else if let v = value.as(Double.self) {
-                // Swift Charts starts a number at its tick (and ignores `anchor` here); this
-                // one sits centered under it, in a narrow frame it overflows evenly both ways.
-                AxisValueLabel(horizontalSpacing: 0) {
-                    Text(v.formatted().replacingOccurrences(of: "-", with: "−")).font(.system(size: 11).monospacedDigit()).foregroundStyle(secondary)
-                        .fixedSize().frame(width: 2).offset(x: -1)
+                AxisValueLabel(horizontalSpacing: 6) {
+                    if let v = value.as(Double.self) { Text(Self.number(v)).font(.system(size: 11).monospacedDigit()).foregroundStyle(secondary) }
                 }
             } else {
                 AxisValueLabel().font(.system(size: 11)).foregroundStyle(secondary)
             }
         }
+    }
+
+    // MARK: Numbers along x
+
+    /// Grid lines and ticks along a numeric x, at `xTicks`. Their numbers are drawn over
+    /// the chart by `xNumbers`: Swift Charts starts each at its tick rather than centering
+    /// it, and drops the last one at the right edge (`/graph`'s 10). The blank label here
+    /// keeps their room below the plot.
+    private var xAxis: some AxisContent {
+        AxisMarks(position: .bottom, values: xTicks) { _ in
+            if model.grid { AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(gridColor) }
+            AxisTick(length: 4, stroke: StrokeStyle(lineWidth: 0.75)).foregroundStyle(axisColor)
+            AxisValueLabel { Text("0").font(.system(size: 11)).hidden() }
+        }
+    }
+
+    /// The x numbers, each centered under its tick, the last one at the right edge too.
+    private func xNumbers(_ proxy: ChartProxy) -> some View {
+        GeometryReader { geo in
+            if let anchor = proxy.plotFrame {
+                let plot = geo[anchor]
+                ForEach(xTicks, id: \.self) { v in
+                    if let x = proxy.position(forX: v) {
+                        Text(Self.number(v)).font(.system(size: 11).monospacedDigit()).foregroundStyle(secondary)
+                            .fixedSize()
+                            .position(x: plot.minX + x, y: plot.maxY + 13)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Round steps (1, 2 or 5 times a power of ten) across the x range, about one per
+    /// 90 points, ends included when they fall on a step.
+    private var xTicks: [Double] {
+        guard let d = xDomain, d.upperBound > d.lowerBound else { return [] }
+        let span = d.upperBound - d.lowerBound
+        let rough = span / max(2, Double(width) / 90)
+        let power = pow(10, floor(log10(rough)))
+        let step = [1.0, 2, 5, 10].map { $0 * power }.first { $0 >= rough } ?? 10 * power
+        let first = (d.lowerBound / step).rounded(.up), last = (d.upperBound / step).rounded(.down)
+        guard last >= first, last - first < 100 else { return [] }
+        // As multiples of the step, so 0.1 · 3 comes out 0.3 and not 0.30000000000000004.
+        return stride(from: first, through: last, by: 1).map { ($0 * step * 1e9).rounded() / 1e9 }
+    }
+
+    /// An axis number with a real minus sign: −5.
+    private static func number(_ v: Double) -> String {
+        (v == 0 ? 0 : v).formatted().replacingOccurrences(of: "-", with: "−")
     }
 }
 
