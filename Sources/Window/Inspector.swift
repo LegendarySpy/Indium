@@ -158,7 +158,8 @@ final class InspectorView: NSView, NSTextFieldDelegate {
 // MARK: - Variables
 
 /// The note's frontmatter numbers: name, value (with its unit), and how many formulas
-/// read each. Names and values are edited in place; a new one starts as a blank row.
+/// read each. Names and values are edited in place; a new one is typed whole, as
+/// `mass = 2 g`, in the field below them.
 private final class VariablesSection: NSView, NSTextFieldDelegate {
     /// Makes a change (named for Undo) to the note's text; false when it was refused.
     var onChange: ((String, (String) -> String?) -> Bool)?
@@ -171,8 +172,8 @@ private final class VariablesSection: NSView, NSTextFieldDelegate {
     private let message = NSTextField(wrappingLabelWithString: "")
     private var shown: [VariableEditing.Entry] = []
     private var text = ""
-    /// A row added with + that isn't in the note until it has a name and a value.
-    private var draft: VariableRow?
+    /// Where a new variable is typed, name and value together.
+    private let addField = InspectorField()
 
     init() {
         super.init(frame: .zero)
@@ -186,17 +187,19 @@ private final class VariablesSection: NSView, NSTextFieldDelegate {
         rows.alignment = .leading
         rows.spacing = 4
 
-        empty.stringValue = "Numbers in the note’s frontmatter, like mass: 2.008 g, can be used by name in formulas and quick answers."
+        empty.stringValue = "Name a number once, then use it in this note’s formulas and answers."
         for label in [empty, others, message] {
             label.font = NSFont.systemFont(ofSize: 11)
             // System label colors: they stay readable on the glass in light and dark.
             label.textColor = .secondaryLabelColor
             label.isSelectable = false
         }
-        message.textColor = .systemRed
         message.isHidden = true
+        addField.placeholderString = "Add a variable, like mass = 2 g"
+        addField.setAccessibilityLabel("New Variable")
+        addField.delegate = self
 
-        let column = NSStackView(views: [header, message, rows, empty, others])
+        let column = NSStackView(views: [header, rows, addField, message, empty, others])
         column.orientation = .vertical
         column.alignment = .leading
         column.spacing = 6
@@ -209,7 +212,7 @@ private final class VariablesSection: NSView, NSTextFieldDelegate {
             column.topAnchor.constraint(equalTo: topAnchor),
             column.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
-        for v in [header, rows, empty, others, message] as [NSView] {
+        for v in [header, rows, addField, empty, others, message] as [NSView] {
             v.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
         }
     }
@@ -222,14 +225,16 @@ private final class VariablesSection: NSView, NSTextFieldDelegate {
     func show(entries: [VariableEditing.Entry], text: String, editable: Bool) {
         self.text = text
         header.addButton.isEnabled = editable
+        addField.isEditable = editable
+        addField.isHidden = !editable
         let current = rows.arrangedSubviews.compactMap { $0 as? VariableRow }
-        if current.contains(where: { $0 !== draft && $0.hasUncommittedTyping }) { return }
+        if current.contains(where: { $0.hasUncommittedTyping }) { return }
         let variables = entries.filter { $0.quantity != nil }
         let changed = variables.map { [$0.name, $0.value] } != shown.map { [$0.name, $0.value] }
         shown = variables
         if changed {
-            let focused = current.first { $0 !== draft && $0.focusedField != nil }.map { ($0.originalName, $0.focusedField!) }
-            current.filter { $0 !== draft }.forEach { $0.removeFromSuperview() }
+            let focused = current.first { $0.focusedField != nil }.map { ($0.originalName, $0.focusedField!) }
+            current.forEach { $0.removeFromSuperview() }
             for (i, entry) in variables.enumerated() {
                 let row = VariableRow(name: entry.name, value: entry.value, delegate: self)
                 rows.insertArrangedSubview(row, at: i)
@@ -237,12 +242,12 @@ private final class VariablesSection: NSView, NSTextFieldDelegate {
                 if let (name, field) = focused, name == entry.name { field == .name ? row.focusName() : row.focusValue() }
             }
         }
-        for case let row as VariableRow in rows.arrangedSubviews where row !== draft {
+        for case let row as VariableRow in rows.arrangedSubviews {
             row.isEditable = editable
             let uses = VariableEditing.uses(of: row.originalName, in: text)
             row.uses = uses == 0 ? "" : uses == 1 ? "1 formula" : "\(uses) formulas"
         }
-        empty.isHidden = !variables.isEmpty || draft != nil
+        empty.isHidden = !variables.isEmpty
         let skipped = entries.compactMap { entry -> String? in
             switch entry.status {
             case .variable: return nil
@@ -250,7 +255,7 @@ private final class VariablesSection: NSView, NSTextFieldDelegate {
             case let .skipped(why): return "\(entry.name): \(why.lowercased())"
             }
         }
-        others.stringValue = skipped.isEmpty ? "" : "Not variables: " + skipped.joined(separator: "; ")
+        others.stringValue = skipped.isEmpty ? "" : "Not used as variables: " + skipped.joined(separator: "; ")
         others.isHidden = skipped.isEmpty
     }
 
@@ -259,19 +264,79 @@ private final class VariablesSection: NSView, NSTextFieldDelegate {
     }
 
     @objc private func addClicked() {
-        if let draft { draft.focusName(); return }
-        let row = VariableRow(name: "", value: "", delegate: self)
-        rows.addArrangedSubview(row)
-        row.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
-        draft = row
-        empty.isHidden = true
-        row.focusName()
+        window?.makeFirstResponder(addField)
     }
 
+    /// A quiet hint under the fields about what to type; nil clears it.
     private func say(_ problem: String?) {
         message.stringValue = problem ?? ""
         message.isHidden = problem == nil
-        if problem != nil { NSSound.beep() }
+    }
+
+    // MARK: Adding
+
+    /// `mass = 2 g`, `mass: 2 g` or `mass 2 g` as a name and a value. Spaces in the name
+    /// become _, so "molar mass = 18 g/mol" is molar_mass.
+    static func parseNew(_ typed: String) -> (name: String, value: String)? {
+        let t = typed.trimmingCharacters(in: .whitespaces)
+        let name: String, value: String
+        if let sep = t.firstIndex(where: { $0 == "=" || $0 == ":" }) {
+            name = String(t[..<sep])
+            value = String(t[t.index(after: sep)...])
+        } else {
+            // No = or :, so the value starts at the first word that's a number.
+            let words = t.split(whereSeparator: \.isWhitespace)
+            guard let i = words.indices.dropFirst().first(where: { words[$0].first.map { $0.isNumber || $0 == "-" || $0 == "." } ?? false })
+            else { return nil }
+            name = words[..<i].joined(separator: " ")
+            value = words[i...].joined(separator: " ")
+        }
+        let cleanName = name.trimmingCharacters(in: .whitespaces)
+            .split(whereSeparator: \.isWhitespace).joined(separator: "_")
+        let cleanValue = value.trimmingCharacters(in: .whitespaces)
+        guard !cleanName.isEmpty, !cleanValue.isEmpty else { return nil }
+        return (cleanName, cleanValue)
+    }
+
+    /// Puts what's typed in the add field into the note, or says what to change.
+    private func addTyped() {
+        let typed = addField.stringValue.trimmingCharacters(in: .whitespaces)
+        guard !typed.isEmpty else { say(nil); return }
+        guard let (name, value) = Self.parseNew(typed) else {
+            say("Type a name and a number, like mass = 2 g.")
+            return
+        }
+        if let problem = problem(name: name, value: value, replacing: nil) {
+            say(problem)
+            return
+        }
+        say(nil)
+        if onChange?("Add Variable", { VariableEditing.setting(name, to: value, in: $0) }) == true {
+            addField.stringValue = ""
+            shown = []
+        } else {
+            say("Couldn’t add “\(name)” to this note.")
+        }
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard obj.object as? NSTextField === addField else { return }
+        // Return adds it; clicking away keeps the typing for later, unless it's ready.
+        let movement = obj.userInfo?["NSTextMovement"] as? Int
+        if movement == NSTextMovement.return.rawValue {
+            addTyped()
+            if !addField.stringValue.isEmpty { window?.makeFirstResponder(addField) }
+        } else if let (name, value) = Self.parseNew(addField.stringValue), problem(name: name, value: value, replacing: nil) == nil {
+            addTyped()
+        }
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard control === addField, selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+        addField.stringValue = ""
+        say(nil)
+        onDismiss?()
+        return true
     }
 
     // MARK: Committing
@@ -280,28 +345,10 @@ private final class VariablesSection: NSView, NSTextFieldDelegate {
     fileprivate func commit(_ row: VariableRow, field: VariableRow.Field) {
         let name = row.name.trimmingCharacters(in: .whitespaces)
         let value = row.value.trimmingCharacters(in: .whitespaces)
-        if row === draft {
-            if name.isEmpty && value.isEmpty, field == .value { discardDraft(); return }
-            // Wait for both halves before writing anything.
-            guard !name.isEmpty, !value.isEmpty else { return }
-            guard let problem = problem(name: name, value: value, replacing: nil) else {
-                say(nil)
-                if onChange?("Add Variable", { VariableEditing.setting(name, to: value, in: $0) }) == true {
-                    // The note has it now: the next read shows it as an ordinary row.
-                    draft = nil
-                    row.removeFromSuperview()
-                    shown = []
-                } else {
-                    say("Couldn’t add “\(name)” to the frontmatter")
-                }
-                return
-            }
-            say(problem)
-            return
-        }
         switch field {
         case .name:
-            guard name != row.originalName else { say(nil); return }
+            let name = name.split(whereSeparator: \.isWhitespace).joined(separator: "_")
+            guard name != row.originalName else { say(nil); row.name = name; return }
             if let problem = problem(name: name, value: nil, replacing: row.originalName) {
                 say(problem)
                 row.name = row.originalName
@@ -333,33 +380,26 @@ private final class VariablesSection: NSView, NSTextFieldDelegate {
     /// What's wrong with a name or value, in a few words, or nil.
     private func problem(name: String?, value: String?, replacing: String?) -> String? {
         if let name {
-            if Evaluator.isReserved(name) { return "“\(name)” is a function or constant. Try another name." }
-            if !VariableEditing.isValidName(name) { return "Names start with a letter or _, then letters, digits or _." }
-            if name != replacing, shown.contains(where: { $0.name == name }) { return "There’s already a variable named “\(name)”." }
+            if Evaluator.isReserved(name) { return "“\(name)” already means something in formulas. Try another name." }
+            if name.first?.isNumber == true { return "Names can’t start with a number." }
+            if !VariableEditing.isValidName(name) { return "Use only letters and numbers in the name." }
+            if name != replacing, shown.contains(where: { $0.name == name }) { return "“\(name)” is already a variable." }
         }
         if let value, Quantity.parse(value) == nil || value.hasPrefix("*") || value.hasPrefix("_") {
-            return "“\(value)” isn’t a number. Write it like 2.008, 2.008 g or 85%."
+            return "Use a number for the value, like 2, 2.5 g or 85%."
         }
         return nil
     }
 
-    private func discardDraft() {
-        draft?.removeFromSuperview()
-        draft = nil
-        say(nil)
-        empty.isHidden = !shown.isEmpty
-    }
-
     fileprivate func delete(_ row: VariableRow) {
         say(nil)
-        if row === draft { discardDraft(); return }
         let old = row.originalName
         _ = onChange?("Delete Variable") { VariableEditing.removing(old, in: $0) }
     }
 
     fileprivate func cancel(_ row: VariableRow) {
         say(nil)
-        if row === draft { discardDraft() } else { row.revert() }
+        row.revert()
         onDismiss?()
     }
 
@@ -374,8 +414,9 @@ private final class VariablesSection: NSView, NSTextFieldDelegate {
         case "rename": if let r = row(kv[0]), kv.count == 2 { r.name = kv[1]; commit(r, field: .name) }
         case "delete": if let r = row(kv[0]) { delete(r) }
         case "add":
-            addClicked()
-            if let d = draft, kv.count == 2 { d.name = kv[0]; commit(d, field: .name); d.value = kv[1]; commit(d, field: .value) }
+            // `add:mass = 2 g`, as typed in the add field.
+            addField.stringValue = parts[1]
+            addTyped()
         default: print("  unknown step", step)
         }
     }
@@ -469,10 +510,10 @@ private final class VariableRow: NSView, NSTextFieldDelegate {
         translatesAutoresizingMaskIntoConstraints = false
 
         nameField.stringValue = name
-        nameField.placeholderString = "name"
+        nameField.placeholderString = "Name"
         nameField.setAccessibilityLabel("Variable Name")
         valueField.stringValue = value
-        valueField.placeholderString = "value, like 2.5 g"
+        valueField.placeholderString = "Value"
         valueField.setAccessibilityLabel(name.isEmpty ? "Value" : "Value of \(name)")
         for field in [nameField, valueField] { field.delegate = self }
         usesLabel.font = NSFont.systemFont(ofSize: 10)

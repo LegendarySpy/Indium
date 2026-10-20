@@ -86,7 +86,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
                 setSidebarVisible(true, remember: false)
             }
         }
-        if UserDefaults.standard.bool(forKey: Self.inspectorKey) { setInspectorVisible(true, remember: false) }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -187,11 +186,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         editor.onTyping = { [weak self] in self?.titleBar.setChromeVisible(false) }
         editor.onTitleChange = { [weak self] in self?.updateTitle() }
         editor.onContextChange = { [weak self] in self?.inspector?.refresh() }
-        // Charts are built in the inspector, so selecting one brings it out.
-        editor.onChartSelected = { [weak self] in
-            guard let self, !self.inspectorVisible else { return }
-            self.setInspectorVisible(true, animated: true)
-        }
+        // A new chart is set up in the inspector, so making one brings it out. Otherwise the
+        // inspector opens only from its button: not at launch, nor on moving onto a chart.
         editor.onChartInserted = { [weak self] in
             guard let self else { return }
             if !self.inspectorVisible { self.setInspectorVisible(true, animated: true) }
@@ -663,7 +659,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     // MARK: Inspector
 
-    private static let inspectorKey = "showInspector"
 
     @objc func toggleInspector(_ sender: Any?) {
         setInspectorVisible(!inspectorVisible, animated: true)
@@ -672,8 +667,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     /// The inspector docks on the window's right edge, the sidebar's mirror.
-    private func setInspectorVisible(_ visible: Bool, animated: Bool = false, remember: Bool = true) {
-        if remember { UserDefaults.standard.set(visible, forKey: Self.inspectorKey) }
+    private func setInspectorVisible(_ visible: Bool, animated: Bool = false) {
         guard visible != inspectorVisible else { return }
         inspectorVisible = visible
         titleBar.inspectorButton.isOn = visible
