@@ -598,7 +598,8 @@ enum DebugSnapshot {
     /// range of it. A case is `### name`, then sections whose body is the lines under them:
     /// `<<< note` the note, with the selection marked `«…»`; `<<< scope selection|document`
     /// what's asked for (default document); `<<< propose whole|selection` the text sent back
-    /// for the whole context or just the selection, `<<< list` items (a tab per level, `1.` first
+    /// for the whole context or just the selection, `<<< rich` the same with inline styles
+    /// (`{b:…}` `{i:…}` `{s:…}` `{sub:…}` `{sup:…}`), `<<< list` items (a tab per level, `1.` first
     /// for a numbered list) or `<<< table` rows (cells split by `⇥`) sent as a list or table.
     /// Checks: `>>> note` the note after, `>>> undone` after Undo, `>>> preserved` the
     /// stretches marked as not to change, one per line (`↵` a line break).
@@ -676,6 +677,30 @@ enum DebugSnapshot {
             if let p = section("<propose") {
                 proposed = NSAttributedString(string: p.body)
                 if p.arg == "whole" { range = NSRange(location: 0, length: context.attributedString.length) }
+            } else if let r = section("<rich") {
+                // `{b:bold}`, `{i:italic}`, `{s:struck}`, `{sub:2}`, `{sup:2}` in plain text, sent styled.
+                let m = NSMutableAttributedString()
+                let base = NSFont.systemFont(ofSize: 13)
+                var rest = Substring(r.body)
+                while let open = rest.firstIndex(of: "{"), let close = rest[open...].firstIndex(of: "}"),
+                      let colon = rest[open..<close].firstIndex(of: ":") {
+                    m.append(NSAttributedString(string: String(rest[..<open]), attributes: [.font: base]))
+                    let kind = rest[rest.index(after: open)..<colon], body = String(rest[rest.index(after: colon)..<close])
+                    var attrs: [NSAttributedString.Key: Any] = [.font: base]
+                    switch kind {
+                    case "b": attrs[.font] = NSFontManager.shared.convert(base, toHaveTrait: .boldFontMask)
+                    case "i": attrs[.font] = NSFontManager.shared.convert(base, toHaveTrait: .italicFontMask)
+                    case "s": attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+                    case "sub": attrs[.superscript] = -1
+                    case "sup": attrs[.superscript] = 1
+                    default: break
+                    }
+                    m.append(NSAttributedString(string: body, attributes: attrs))
+                    rest = rest[rest.index(after: close)...]
+                }
+                m.append(NSAttributedString(string: String(rest), attributes: [.font: base]))
+                proposed = m
+                if r.arg == "whole" { range = NSRange(location: 0, length: context.attributedString.length) }
             } else if let l = section("<list") {
                 let m = NSMutableAttributedString()
                 var items = l.body.components(separatedBy: "\n")

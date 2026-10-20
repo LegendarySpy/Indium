@@ -71,7 +71,13 @@ extension EditorController {
         let offset = writingToolsSpan.map { $0.location - context.range.location } ?? 0
         let target = NSRange(location: range.location + offset, length: range.length)
         var text = proposed
-        if var markdown = WritingToolsMarkdown.markdown(from: proposed) {
+        // Bold or italic in what comes back is Markdown only where the text it replaces
+        // wasn't drawn that way already (a heading's bold font isn't a ** to add).
+        let shown = target.location < storage.length
+            ? (storage.attribute(.font, at: target.location, effectiveRange: nil) as? NSFont)?.fontDescriptor.symbolicTraits ?? []
+            : []
+        let emphasis = (bold: !shown.contains(.bold), italic: !shown.contains(.italic))
+        if var markdown = WritingToolsMarkdown.markdown(from: proposed, emphasis: emphasis) {
             // A list or table ends its last line; text that didn't, still doesn't.
             let old = storage.string as NSString
             if markdown.hasSuffix("\n"), NSMaxRange(target) <= old.length, target.length > 0,
@@ -144,8 +150,10 @@ extension EditorTextView {
 
 /// Lists and tables from Writing Tools (Make List, Make Table) as Markdown source.
 enum WritingToolsMarkdown {
-    /// The text as Markdown, or nil when it has no list or table to convert.
-    static func markdown(from text: NSAttributedString) -> String? {
+    /// The text as Markdown, or nil when it has nothing to convert: lists, tables, and
+    /// inline bold, italic (where `emphasis` allows), strikethrough, links, and sub- and
+    /// superscripts as math (H₂O's 2 as `$_{2}$`).
+    static func markdown(from text: NSAttributedString, emphasis: (bold: Bool, italic: Bool) = (true, true)) -> String? {
         let string = text.string as NSString
         guard string.length > 0 else { return nil }
         var lines: [String] = []
@@ -170,6 +178,10 @@ enum WritingToolsMarkdown {
             location = NSMaxRange(paragraph)
             var line = string.substring(with: paragraph)
             while let last = line.last, last.isNewline { line.removeLast() }
+            if let styled = inline(text, in: NSRange(location: paragraph.location, length: (line as NSString).length), emphasis: emphasis) {
+                line = styled
+                converted = true
+            }
             let style = text.attribute(.paragraphStyle, at: paragraph.location, effectiveRange: nil) as? NSParagraphStyle
 
             if let block = style?.textBlocks.last as? NSTextTableBlock {
@@ -213,6 +225,34 @@ enum WritingToolsMarkdown {
         var result = lines.joined(separator: "\n")
         if string.length > 0, CharacterSet.newlines.contains(Unicode.Scalar(string.character(at: string.length - 1)) ?? " ") { result += "\n" }
         return result
+    }
+
+    /// One line's inline styles as Markdown, or nil when it has none.
+    private static func inline(_ text: NSAttributedString, in range: NSRange, emphasis: (bold: Bool, italic: Bool)) -> String? {
+        guard range.length > 0 else { return nil }
+        var out = ""
+        var styled = false
+        text.enumerateAttributes(in: range) { attrs, r, _ in
+            var run = (text.string as NSString).substring(with: r)
+            let traits = (attrs[.font] as? NSFont)?.fontDescriptor.symbolicTraits ?? []
+            let script = (attrs[.superscript] as? Int) ?? ((attrs[.baselineOffset] as? Double).map { $0 > 0.5 ? 1 : $0 < -0.5 ? -1 : 0 } ?? 0)
+            let trimmed = run.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { out += run; return }
+            // Markers hug the words; spaces at a run's edges stay outside them.
+            let lead = String(run.prefix { $0 == " " }), trail = String(run.reversed().prefix { $0 == " " })
+            run = trimmed
+            if script != 0 {
+                run = "$\(script > 0 ? "^" : "_"){\(run)}$"
+            } else {
+                if emphasis.italic, traits.contains(.italic) { run = "*\(run)*" }
+                if emphasis.bold, traits.contains(.bold) { run = "**\(run)**" }
+                if (attrs[.strikethroughStyle] as? Int ?? 0) != 0 { run = "~~\(run)~~" }
+                if let link = attrs[.link] { run = "[\(run)](\((link as? URL)?.absoluteString ?? "\(link)"))" }
+            }
+            if run != trimmed { styled = true }
+            out += lead + run + trail
+        }
+        return styled ? out : nil
     }
 
     /// A list item's text without the marker some exports put in front of it ("\t•\t").

@@ -151,8 +151,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         tv.mathExpressionCompletionType = .no
         tv.smartInsertDeleteEnabled = false
         tv.isGrammarCheckingEnabled = false
-        // Lists and tables come back as Markdown (see WritingTools.swift), not rich text.
-        tv.allowedWritingToolsResultOptions = [.plainText, .list, .table]
+        // Siri's formatting comes back as rich text; it lands as Markdown (see WritingTools.swift).
+        tv.allowedWritingToolsResultOptions = [.plainText, .richText, .list, .table]
         tv.usesInspectorBar = false
         tv.usesRuler = false
         tv.allowsDocumentBackgroundColorChange = false

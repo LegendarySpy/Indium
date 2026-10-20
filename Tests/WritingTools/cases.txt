@@ -194,3 +194,34 @@ End.
 >>> note
 - Milk
 - Eggs
+
+### Siri's chemistry formatting comes back as math subscripts
+<<< note
+Formulas: «Br1, Co2, H2O»
+<<< scope selection
+<<< rich selection
+Br{sub:1}, CO{sub:2}, H{sub:2}O
+>>> note
+Formulas: Br$_{1}$, CO$_{2}$, H$_{2}$O
+
+### Bold, italic and struck text come back as Markdown
+<<< note
+Plan: «make the key word stand out»
+<<< scope selection
+<<< rich selection
+make the {b:key} word {i:really} {s:not} stand out
+>>> note
+Plan: make the **key** word *really* ~~not~~ stand out
+
+### A heading's own bold isn't wrapped in **
+<<< note
+# «Groceri list»
+
+Text.
+<<< scope selection
+<<< rich selection
+{b:Grocery list}
+>>> note
+# Grocery list
+
+Text.
