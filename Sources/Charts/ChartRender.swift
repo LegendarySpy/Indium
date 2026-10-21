@@ -506,6 +506,21 @@ private struct ChartView: View {
 
     // MARK: Numbers along x (lines, scatter, curves, graphs)
 
+    /// One point of a series: its stretch of line (unless it's a scatter) and its dot.
+    /// Kept apart so the compiler checks it on its own, not inside the whole chart.
+    @ChartContentBuilder
+    private func seriesMarks(_ p: ChartModel.Point, series: String, palette: Int, color: Color) -> some ChartContent {
+        if model.kind != .scatter {
+            LineMark(x: .value("x", p.x), y: .value("y", p.y), series: .value("Series", series))
+                .foregroundStyle(color)
+                .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round, dash: dash(model.seriesDash(palette), width: 2)))
+        }
+        PointMark(x: .value("x", p.x), y: .value("y", p.y))
+            .foregroundStyle(color)
+            .symbol(symbol(series: palette))
+            .symbolSize(model.kind == .scatter ? 48 : 36)
+    }
+
     private var numericChart: some View {
         Chart {
             if model.kind == .graph, let x = model.xDomain, let y = model.yDomain {
@@ -517,15 +532,7 @@ private struct ChartView: View {
                 let color = paint(.palette(s.color))
                 ForEach(Array(s.segments.enumerated()), id: \.offset) { j, segment in
                     ForEach(Array(segment.enumerated()), id: \.offset) { _, p in
-                        if model.kind != .scatter {
-                            LineMark(x: .value("x", p.x), y: .value("y", p.y), series: .value("Series", "s\(i)-\(j)"))
-                                .foregroundStyle(color)
-                                .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round, dash: dash(model.seriesDash(s.color), width: 2)))
-                        }
-                        PointMark(x: .value("x", p.x), y: .value("y", p.y))
-                            .foregroundStyle(color)
-                            .symbol(symbol(series: s.color))
-                            .symbolSize(model.kind == .scatter ? 48 : 36)
+                        seriesMarks(p, series: "s\(i)-\(j)", palette: s.color, color: color)
                     }
                 }
             }
