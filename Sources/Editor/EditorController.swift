@@ -56,6 +56,12 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// A computed answer offered after an `=` at the caret.
     var answer: (location: Int, result: MathAnswer.Result)?
     var answerDismissedAt: Int?
+    var wordSuggestion: (location: Int, insertion: String)?
+    var wordDismissedAt: Int?
+    var wordCounts: (version: Int, counts: [String: Int])?
+    var boxCache: (version: Int, width: CGFloat, boxes: [(region: LayoutRegion, boxes: [NSRect])])?
+    var boxInteractionActive = false
+    var imageResizers: [BoxResizeView] = []
     /// Math shortcuts, blanks to Tab through and the preview, for the note's text.
     lazy var math = MathEditor(host: self)
     private var relayout: NSRange?
@@ -188,6 +194,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         scrollView.scrollerInsets = NSEdgeInsetsZero
 
         imageControls.isHidden = true
+        imageResizers.forEach { $0.isHidden = true }
         imageControls.onWidth = { [weak self] f in self?.setSelectedImageWidth(fraction: f) }
         imageControls.onCaption = { [weak self] in self?.editSelectedImageCaption() }
         imageControls.onRemove = { [weak self] in _ = self?.deleteSelectedImage() }
@@ -807,6 +814,37 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         onContextChange?()
     }
 
+    /// The caret never rests where nothing can be typed: on a hidden column marker, where it
+    /// would be a speck, or inside a rendered table's source, where Return would split it.
+    func textView(_ textView: NSTextView, willChangeSelectionFromCharacterRanges old: [NSValue], toCharacterRanges new: [NSValue]) -> [NSValue] {
+        guard !isLoading, new.count == 1, new[0].rangeValue.length == 0, AppSettings.shared.syntax != .always else { return new }
+        let to = new[0].rangeValue.location
+        let from = old.first?.rangeValue.location ?? to
+        let snapped = caretPlace(for: to, forward: to > from && !self.textView.isTrackingMouse)
+        return snapped == to ? new : [NSValue(range: NSRange(location: snapped, length: 0))]
+    }
+
+    private func caretPlace(for location: Int, forward: Bool) -> Int {
+        guard let i = styler.blockIndex(containing: location), location < storage.length else { return location }
+        let block = styler.blocks[i].range
+        switch styler.blocks[i].kind {
+        case .columnMarker(.start), .columnMarker(.split), .columnMarker(.end):
+            var isStart = false
+            if case .columnMarker(.start) = styler.blocks[i].kind { isStart = true }
+            if !forward, !isStart, block.location > 0 {
+                let before = block.location - 1
+                if let j = styler.blockIndex(containing: before), case .columnMarker = styler.blocks[j].kind {} else { return before }
+            }
+            let after = NSMaxRange(block)
+            return after < storage.length ? caretPlace(for: after, forward: true) : after
+        case .table:
+            guard location > block.location, tableEditor == nil else { return location }
+            return forward ? NSMaxRange(block) : block.location
+        default:
+            return location
+        }
+    }
+
     func textViewDidChangeSelection(_ notification: Notification) {
         guard !isLoading else { return }
         if !textView.isWritingToolsActive { writingToolsSpan = nil }
@@ -822,6 +860,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         updateSelectionBar()
         updateSlashSuggestion()
         updateAnswerSuggestion()
+        updateWordSuggestion()
         math.selectionChanged()
         math.updatePreview()
         onContextChange?()
@@ -1287,8 +1326,15 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             if hit.onAction { recalculateFormulas(at: hit.formulas) } else { showFormulaList(formulasAt: hit.formulas, from: hit.rect) }
             return true
         }
+        if clickCount == 1, event?.modifierFlags.contains(.shift) != true, clickBelowBoxText(at: point) { return true }
         for block in visibleBlocks() {
             if case let .table(table) = block.decoration.content {
+                // Anywhere right of it on the page: the line below, the place to keep writing.
+                if block.decoration.placement == .replace, point.x > block.content.maxX + 4, point.x <= block.area.maxX + layoutManager.gutter,
+                   point.y >= block.content.minY, point.y <= block.content.maxY {
+                    placeCaretBelowTable(at: block.range.location)
+                    return true
+                }
                 guard block.decoration.placement != .below, tableClickArea(block).contains(point) else { continue }
                 let location = lineRange(at: block.range.location).content.location
                 // Under the grid (its bottom padding): the line after the table, as if
@@ -1298,10 +1344,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                     textView.setSelectedRange(NSRange(location: min(NSMaxRange(styler.blocks[i].range), storage.length), length: 0))
                     return true
                 }
-                // Beside a row: into that row, at the start of its first cell from the left,
-                // the end of its last cell from the right (Notion's way; there's no caret
-                // beside a table, so the grid is the nearest place to type).
                 let local = NSPoint(x: point.x - block.content.minX, y: point.y - block.content.minY)
+                // Left of a row: into that row, at the start of its first cell.
                 let inside = NSPoint(x: min(max(local.x, 0), table.width - 1), y: min(max(local.y, 0), table.height - 1))
                 let cell = table.cell(at: inside) ?? (0, 0)
                 beginTableEditing(at: location, row: cell.row, column: cell.column)
@@ -1365,6 +1409,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         selectedImageLine = nil
         styler.selectedImageLine = nil
         imageControls.isHidden = true
+        imageResizers.forEach { $0.isHidden = true }
         captionPopover?.close()
         if line < storage.length { styler.restyleBlock(at: line, in: storage) }
     }
@@ -1388,6 +1433,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private func positionImageControls() {
         guard let loc = selectedImageLine, let container = textView.textContainer else {
             imageControls.isHidden = true
+            imageResizers.forEach { $0.isHidden = true }
             return
         }
         layoutManager.ensureLayout(for: container)
@@ -1395,6 +1441,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard let block = layoutManager.blockRects(in: chars, origin: textView.textContainerOrigin).first,
               let image = selectedImage() else {
             imageControls.isHidden = true
+            imageResizers.forEach { $0.isHidden = true }
             return
         }
         imageControls.configure(currentWidth: image.ref.width, column: styler.config.columnWidth, captionAllowed: !image.ref.isWiki)
@@ -1402,6 +1449,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         var y = block.content.minY - size.height - 10
         if y < textView.visibleRect.minY + 40 { y = block.content.minY + 10 }
         imageControls.frame = NSRect(x: round(block.content.midX - size.width / 2), y: round(y), width: size.width, height: size.height)
+        placeImageResizers(beside: block.content)
         if imageControls.isHidden {
             imageControls.isHidden = false
             imageControls.alphaValue = 0
@@ -1435,6 +1483,62 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         changingImageSelection = false
         styler.restyleBlock(at: loc, in: storage)
         positionImageControls()
+    }
+
+    /// A grip just outside each side of a selected image.
+    private func placeImageResizers(beside image: NSRect) {
+        if imageResizers.isEmpty {
+            imageResizers = [true, false].map { leading in
+                let view = BoxResizeView(frame: .zero)
+                view.onDrag = { [weak self] event in self?.resizeSelectedImage(from: event, leading: leading) }
+                textView.addSubview(view)
+                return view
+            }
+        }
+        let width: CGFloat = 26
+        imageResizers[0].frame = NSRect(x: image.minX - width, y: image.minY, width: width, height: image.height)
+        imageResizers[1].frame = NSRect(x: image.maxX, y: image.minY, width: width, height: image.height)
+        imageResizers.forEach { $0.isHidden = false }
+    }
+
+    /// Follows the pointer; one undo in the end, and Escape puts it back.
+    private func resizeSelectedImage(from event: NSEvent, leading: Bool) {
+        guard let window = textView.window, let (_, _, ref) = selectedImage() else { return }
+        let original = ref.width
+        let column = styler.config.columnWidth
+        var width = original
+        func live(_ value: CGFloat?) {
+            textView.undoManager?.disableUndoRegistration()
+            rewriteSelectedImage({ $0.width = value }, actionName: "Image Size")
+            textView.undoManager?.enableUndoRegistration()
+        }
+        let startX = event.locationInWindow.x
+        let startWidth = imageResizerStartWidth(fallback: original ?? column)
+        var cancelled = false
+        NSCursor.resizeLeftRight.push()
+        defer { NSCursor.pop() }
+        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .keyDown]) {
+            if next.type == .leftMouseUp { break }
+            if next.type == .keyDown {
+                if next.keyCode == 53 { cancelled = true; break }
+                continue
+            }
+            let moved = next.locationInWindow.x - startX
+            let value = round(min(max(startWidth + (leading ? -moved : moved), 80), column))
+            guard value != width else { continue }
+            width = value
+            live(value)
+            textView.displayIfNeeded()
+        }
+        guard width != original else { return }
+        live(original)
+        if !cancelled { rewriteSelectedImage({ $0.width = width }, actionName: "Image Size") }
+    }
+
+    private func imageResizerStartWidth(fallback: CGFloat) -> CGFloat {
+        guard let loc = selectedImageLine else { return fallback }
+        let chars = NSRange(location: loc, length: max(0, min(1, storage.length - loc)))
+        return layoutManager.blockRects(in: chars, origin: textView.textContainerOrigin).first?.content.width ?? fallback
     }
 
     private func setSelectedImageWidth(fraction: CGFloat?) {
@@ -1472,6 +1576,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         selectedImageLine = nil
         styler.selectedImageLine = nil
         imageControls.isHidden = true
+        imageResizers.forEach { $0.isHidden = true }
         replace(full, with: "", select: NSRange(location: loc, length: 0), actionName: "Remove Image")
         return true
     }

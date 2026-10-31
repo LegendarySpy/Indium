@@ -270,6 +270,208 @@ extension EditorController {
     }
 }
 
+// MARK: - Boxes
+
+/// Each column of a side-by-side region is a box: hovering shows a quiet grip that moves all
+/// of it, and the gap between two boxes resizes them. A box is only a view of the note's
+/// Markdown (`<!-- columns 60/40 -->`), so every move and resize is an ordinary text edit.
+extension EditorController {
+    var boxMoveHandle: BoxMoveView? { textView.subviews.lazy.compactMap { $0 as? BoxMoveView }.first }
+    var boxResizers: [BoxResizeView] { textView.subviews.compactMap { ($0 as? BoxResizeView).flatMap { view in imageResizers.contains { $0 === view } ? nil : view } } }
+
+    /// Regions with their boxes, in text view coordinates, as tall as the region.
+    private func boxLayout() -> [(region: LayoutRegion, boxes: [NSRect])] {
+        if let cached = boxCache, cached.version == textVersion, cached.width == textView.bounds.width { return cached.boxes }
+        var result: [(LayoutRegion, [NSRect])] = []
+        for case let .region(region) in layoutModel.items {
+            let frames = columnFrames(of: region)
+            guard frames.count == region.columns.count, let first = frames.first else { continue }
+            let union = frames.reduce(first) { $0.union($1) }
+            result.append((region, frames.map { NSRect(x: $0.minX - 8, y: union.minY - 6, width: $0.width + 16, height: union.height + 12) }))
+        }
+        boxCache = (textVersion, textView.bounds.width, result)
+        return result
+    }
+
+    func hoverBoxes(at point: NSPoint) {
+        guard textView.isEditable, !textView.isTrackingMouse, AppSettings.shared.syntax != .always, !boxInteractionActive,
+              let (region, boxes) = boxLayout().first(where: { entry in
+                  entry.boxes.reduce(entry.boxes[0]) { $0.union($1) }.insetBy(dx: -4, dy: -14).contains(point)
+              }) else { return hideBoxes() }
+        // The nearest box, so the gap between two still belongs to one.
+        guard let index = boxes.indices.min(by: { abs(boxes[$0].midX - point.x) < abs(boxes[$1].midX - point.x) }) else { return }
+
+        let box = boxes[index]
+        let size = BoxMoveView.hitSize
+        let handle = boxMoveHandle ?? {
+            let view = BoxMoveView(frame: .zero)
+            textView.addSubview(view)
+            return view
+        }()
+        handle.frame = NSRect(x: round(box.midX - size.width / 2), y: round(box.minY - size.height / 2 - 3), width: size.width, height: size.height)
+        // Out of the way of a table's own edge controls just above.
+        handle.isHidden = region.columns[index].groups.isEmpty || tableStrips.contains { !$0.isHidden && $0.frame.intersects(handle.frame) }
+        let location = region.range.location
+        handle.onDrag = { [weak self] event in self?.dragBox(regionAt: location, column: index, from: event) }
+
+        var resizers = boxResizers
+        while resizers.count > boxes.count - 1 { resizers.removeLast().removeFromSuperview() }
+        while resizers.count < boxes.count - 1 {
+            let view = BoxResizeView(frame: .zero)
+            // Under a table's grip, where the two meet.
+            textView.addSubview(view, positioned: .below, relativeTo: nil)
+            resizers.append(view)
+        }
+        for (i, view) in resizers.enumerated() {
+            let middle = (boxes[i].maxX + boxes[i + 1].minX) / 2
+            view.frame = NSRect(x: round(middle - 13), y: box.minY, width: 26, height: box.height)
+            view.gripY = box.intersection(textView.visibleRect).midY - box.minY
+            view.onDrag = { [weak self] event in self?.resizeBoxes(regionAt: location, divider: i, from: event) }
+        }
+    }
+
+    func hideBoxes() {
+        boxMoveHandle?.removeFromSuperview()
+        boxResizers.forEach { $0.removeFromSuperview() }
+    }
+
+    /// A click in the blank below a shorter box's text belongs to that box, not to the
+    /// nearest text, which may be in a taller box beside it.
+    func clickBelowBoxText(at point: NSPoint) -> Bool {
+        for (region, boxes) in boxLayout() where boxes.reduce(boxes[0], { $0.union($1) }).contains(point) {
+            let frames = columnFrames(of: region)
+            guard frames.count == region.columns.count,
+                  let i = frames.indices.min(by: { abs(frames[$0].midX - point.x) < abs(frames[$1].midX - point.x) }),
+                  point.y > frames[i].maxY, let last = region.columns[i].groups.last else { return false }
+            textView.window?.makeFirstResponder(textView)
+            textView.setSelectedRange(NSRange(location: NSMaxRange(last.range), length: 0))
+            return true
+        }
+        return false
+    }
+
+    private func region(at location: Int) -> LayoutRegion? {
+        for case let .region(region) in layoutModel.items where region.range.location == location { return region }
+        return nil
+    }
+
+    /// Lifts a whole box. Its blocks travel as one, so a drop means what it does for a block.
+    private func dragBox(regionAt location: Int, column: Int, from event: NSEvent) {
+        guard let region = region(at: location), column < region.columns.count, !region.columns[column].groups.isEmpty,
+              let lifted = boxLayout().first(where: { $0.region === region })?.boxes[column] else { return }
+        let groups = region.columns[column].groups
+        let range = groups.dropFirst().reduce(groups[0].range) { NSUnionRange($0, $1.range) }
+        let whole = groups.count == 1 ? groups[0] : LayoutGroup(range: range, text: groups.map(\.text).joined(separator: "\n\n"))
+        // Only for this drag: whatever happens, the model is built afresh after it.
+        region.columns[column].groups = [whole]
+        boxInteractionActive = true
+        hideBoxes()
+        defer {
+            boxInteractionActive = false
+            cachedLayout = nil
+            boxCache = nil
+        }
+        dragBlock(whole, lifted: lifted, from: event) { [weak self] target in
+            guard let self else { return }
+            // Dropped on another box of the same row, it takes that box's place.
+            if let place = self.boxPlace(of: target, in: region) {
+                guard place != column else { return }
+                let edit = self.layoutModel.reorderColumns(of: region, from: column, to: place)
+                self.replaceKeepingScroll(edit.range, with: edit.text, select: NSRange(location: edit.range.location, length: 0), actionName: "Move Box")
+            } else {
+                self.moveBlock(whole, to: target)
+            }
+        }
+    }
+
+    /// Which box of `region` a drop landed on, if it landed on one.
+    private func boxPlace(of target: DropTarget, in region: LayoutRegion) -> Int? {
+        switch target {
+        case let .column(r, c) where r === region:
+            return c
+        case let .before(anchor), let .after(anchor), let .beside(anchor, _):
+            return region.columns.firstIndex { $0.groups.contains { $0 === anchor } }
+        default:
+            return nil
+        }
+    }
+
+    /// Drags the strip between two boxes: live, in steps of 5%, and one undo in the end.
+    private func resizeBoxes(regionAt location: Int, divider: Int, from event: NSEvent) {
+        guard let window = textView.window, let region = region(at: location), let container = textView.textContainer else { return }
+        let count = region.columns.count
+        guard divider + 1 < count else { return }
+        let start = Self.percents(region.ratios, count: count)
+        let original = LayoutModel.header(ratios: region.ratios, columns: count)
+        let page = container.size.width - layoutManager.gutter * 2
+        let selection = textView.selectedRange()
+        var header = ns.lineRange(for: NSRange(location: location, length: 0))
+        if header.length > 0, ns.character(at: NSMaxRange(header) - 1) == 0x0A { header.length -= 1 }
+        let sourceHeader = ns.substring(with: header)
+
+        func apply(_ text: String) {
+            let delta = (text as NSString).length - header.length
+            let shifted = selection.location > location ? NSRange(location: selection.location + (text as NSString).length - (sourceHeader as NSString).length, length: selection.length) : selection
+            let offset = scrollView.contentView.bounds.origin
+            textView.undoManager?.disableUndoRegistration()
+            replace(header, with: text, select: shifted)
+            textView.undoManager?.enableUndoRegistration()
+            scrollView.contentView.scroll(to: offset)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            header.length += delta
+        }
+
+        boxInteractionActive = true
+        defer { boxInteractionActive = false }
+        hideBoxes()
+        hideTableGrip()
+        let guide = BoxOutlineView(frame: textView.bounds)
+        guide.boxes = boxLayout().first { $0.region.range.location == location }?.boxes ?? []
+        textView.addSubview(guide)
+        defer { guide.removeFromSuperview() }
+        var current = start
+        var cancelled = false
+        NSCursor.resizeLeftRight.push()
+        defer { NSCursor.pop() }
+        let startX = event.locationInWindow.x
+        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .keyDown]) {
+            if next.type == .leftMouseUp { break }
+            if next.type == .keyDown {
+                if next.keyCode == 53 { cancelled = true; break }
+                continue
+            }
+            let pair = start[divider] + start[divider + 1]
+            let moved = Int(((next.locationInWindow.x - startX) / page * 20).rounded()) * 5
+            let left = min(max(start[divider] + moved, 20), pair - 20)
+            guard left != current[divider] else { continue }
+            current[divider] = left
+            current[divider + 1] = pair - left
+            apply(LayoutModel.header(ratios: current, columns: count))
+            layoutManager.ensureLayout(for: container)
+            guide.boxes = boxLayout().first { $0.region.range.location == location }?.boxes ?? []
+            textView.displayIfNeeded()
+            #if DEBUG
+            Self.onDragStep?()
+            #endif
+        }
+        let final = LayoutModel.header(ratios: current, columns: count)
+        guard final != original || sourceHeader != ns.substring(with: header) else { return }
+        // Back to where it began, then the change that undo will remember.
+        apply(sourceHeader)
+        guard !cancelled, final != original else { return }
+        let shifted = selection.location > location ? NSRange(location: selection.location + (final as NSString).length - (sourceHeader as NSString).length, length: selection.length) : selection
+        replaceKeepingScroll(header, with: final, select: shifted, actionName: "Resize Boxes")
+    }
+
+    /// The written ratios as whole percents adding to 100, or an equal share each.
+    private static func percents(_ ratios: [Int], count: Int) -> [Int] {
+        let total = ratios.reduce(0, +)
+        var out = ratios.count == count && total > 0 ? ratios.map { $0 * 100 / total } : Array(repeating: 100 / count, count: count)
+        out[count - 1] += 100 - out.reduce(0, +)
+        return out
+    }
+}
+
 // MARK: - Moving a table by its grip
 
 /// Hovering a table shows a grip beside its header; dragging it lifts the table (with
@@ -325,7 +527,43 @@ extension EditorController {
             }
             return
         }
+        // Any other block outside a box: the grip beside its first line, shown from the margin too.
+        for frame in visibleGroupFrames() where !frame.inColumn {
+            let grip = Self.gripFrame(table: frame.rect, headerHeight: min(frame.rect.height, BlockHandleView.size.height))
+            guard frame.rect.union(grip).insetBy(dx: -4, dy: 0).contains(point) else { continue }
+            let view = tableGrip ?? {
+                let view = BlockHandleView(frame: grip)
+                textView.addSubview(view)
+                return view
+            }()
+            view.frame = grip
+            let location = frame.group.range.location
+            view.onDrag = { [weak self] event in self?.dragText(at: location, from: event) }
+            return
+        }
         hideTableGrip()
+    }
+
+    private func dragText(at location: Int, from event: NSEvent) {
+        guard let grip = tableGrip, let source = layoutModel.group(containing: location),
+              let lifted = visibleGroupFrames().first(where: { $0.group === source })?.rect else { return }
+        grip.dragging = true
+        grip.isHidden = true
+        defer {
+            grip.dragging = false
+            grip.removeFromSuperview()
+        }
+        dragBlock(source, lifted: lifted, from: event)
+    }
+
+    /// True once the pointer has really moved; a click on a grip lifts nothing.
+    private func dragBegan(from event: NSEvent, in window: NSWindow) -> Bool {
+        let start = event.locationInWindow
+        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            if next.type == .leftMouseUp { return false }
+            if hypot(next.locationInWindow.x - start.x, next.locationInWindow.y - start.y) >= 3 { return true }
+        }
+        return false
     }
 
     func hideTableGrip() {
@@ -372,14 +610,17 @@ extension EditorController {
 
     /// Lifts the block `source`, drawn at `lifted`, and follows the pointer until it's
     /// dropped (moved, one undo step) or Escape puts it back. Tables and charts move so.
-    func dragBlock(_ source: LayoutGroup, lifted: NSRect, from event: NSEvent) {
-        guard let window = textView.window else { return }
+    func dragBlock(_ source: LayoutGroup, lifted: NSRect, from event: NSEvent, drop: ((DropTarget) -> Void)? = nil) {
+        guard let window = textView.window, dragBegan(from: event, in: window) else { return }
         // Only the block moves: a selection elsewhere and its bar go.
         selectionBar.dismiss()
         clearChartSelection()
-        changingChartSelection = true
-        textView.setSelectedRange(NSRange(location: source.range.location, length: 0))
-        changingChartSelection = false
+        let selection = textView.selectedRange()
+        if selection.length > 0 {
+            changingChartSelection = true
+            textView.setSelectedRange(NSRange(location: NSMaxRange(selection), length: 0))
+            changingChartSelection = false
+        }
 
         // A lifted picture of the table follows the pointer: a wide one shrunk to under
         // half the view, so it never hides where it's going.
@@ -418,13 +659,10 @@ extension EditorController {
         veil.layer?.backgroundColor = Palette.background.withAlphaComponent(0.65).cgColor
         let indicator = DropIndicatorView()
         indicator.isHidden = true
-        // Every spot it can go stays outlined for the whole drag, blank space included.
-        let zonesView = DropZonesView(frame: textView.bounds)
+        // Only the spot it would land on shows, right where it will land.
         var zones = dropZones(dragging: source)
         var zonesSeen = textView.visibleRect
-        zonesView.zones = zones
         textView.addSubview(veil)
-        textView.addSubview(zonesView)
         textView.addSubview(indicator)
         textView.addSubview(ghost)
 
@@ -453,20 +691,17 @@ extension EditorController {
             if textView.visibleRect != zonesSeen {
                 zonesSeen = textView.visibleRect
                 zones = dropZones(dragging: source)
-                zonesView.zones = zones
             }
             let p = textView.convert(next.locationInWindow, from: nil)
             place(at: p)
             if let zone = zones.first(where: { $0.hit.contains(p) }) {
                 target = zone.target
-                zonesView.active = zone.shape
                 indicator.style = zone.style
                 indicator.frame = zone.active
                 indicator.isHidden = false
                 indicator.needsDisplay = true
             } else {
                 target = dropTarget(at: p, dragging: source)
-                zonesView.active = nil
                 showIndicator(indicator, for: target)
             }
             #if DEBUG
@@ -476,9 +711,10 @@ extension EditorController {
         NSCursor.pop()
         ghost.removeFromSuperview()
         veil.removeFromSuperview()
-        zonesView.removeFromSuperview()
         indicator.removeFromSuperview()
-        if let target { moveBlock(source, to: target) }
+        if let target {
+            if let drop { drop(target) } else { moveBlock(source, to: target) }
+        }
     }
 
     /// Where a block dropped at `p` goes: before or after the block under the pointer
@@ -529,8 +765,8 @@ extension EditorController {
         return NSRect(x: leading ? r.minX - 6 : r.maxX - w + 6, y: r.minY - 6, width: w, height: max(r.height + 12, 44))
     }
 
-    /// A spot a dragged block can go: `hit` is where the pointer picks it, `shape` its
-    /// outline for the whole drag, `active` what shows once it's picked.
+    /// A spot a dragged block can go: `hit` is where the pointer picks it, `active` what
+    /// shows then, and `shape` the spot itself.
     struct DropZone {
         let target: DropTarget
         let hit: NSRect

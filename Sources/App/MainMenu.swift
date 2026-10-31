@@ -16,6 +16,7 @@ enum MainMenu {
         main.addItem(submenu(window))
         NSApp.windowsMenu = window
         let help = NSMenu(title: "Help")
+        add(help, "Copy Instructions for AI Agents", #selector(AppDelegate.copyAgentInstructions(_:)))
         main.addItem(submenu(help))
         NSApp.helpMenu = help
         return main
@@ -79,6 +80,7 @@ enum MainMenu {
         add(m, "Save", #selector(W.saveNote(_:)), "s")
         add(m, "Rename…", #selector(W.renameNote(_:)))
         add(m, "Show in Finder", #selector(W.revealInFinder(_:)), "r", [.command, .shift])
+        add(m, "Copy Path", #selector(W.copyNotePath(_:)))
         add(m, "Move to Trash", #selector(W.trashNote(_:)), "\u{8}", .command)
         m.addItem(.separator())
         add(m, "Export as PDF…", #selector(W.exportPDF(_:)), "e", [.command, .shift])

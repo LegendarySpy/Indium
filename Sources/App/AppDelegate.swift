@@ -161,8 +161,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// Indium's formats, written for an AI agent to paste in (skills/indium/SKILL.md).
+    @objc func copyAgentInstructions(_ sender: Any?) {
+        guard let url = Bundle.main.url(forResource: "SKILL", withExtension: "md"),
+              let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         mainController?.editor.saveNow(interactive: false)
+        mainController?.discardIfUntouched(mainController?.editor.note?.url)
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {

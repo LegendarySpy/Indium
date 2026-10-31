@@ -44,6 +44,13 @@ struct SettingsView: View {
 
                 Toggle("Check spelling while typing", isOn: $settings.spellcheck)
 
+                Toggle("Suggest words and note links", isOn: $settings.wordCompletion)
+                    .help("Offers the rest of a word used in this note, or a note's name after [[. Tab or → takes it.")
+
+                Picker("New notes are named", selection: $settings.newNoteName) {
+                    ForEach(NewNoteName.allCases) { Text($0.title).tag($0) }
+                }
+
                 Toggle("Math shortcuts", isOn: $settings.mathShortcuts)
                     .help("Type mk for an equation, x/ for a fraction and more, as in Obsidian's LaTeX Suite.")
 

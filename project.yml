@@ -47,6 +47,8 @@ targets:
     sources:
       - path: Sources
         excludes: ["**/README.md"]
+      - path: skills/indium/SKILL.md
+        buildPhase: resources
     dependencies:
       - package: SwiftMath
       - package: Sparkle
@@ -160,6 +162,8 @@ targets:
     sources:
       - path: Sources
         excludes: ["**/README.md", "Info.plist"]
+      - path: skills/indium/SKILL.md
+        buildPhase: resources
       - path: AppStore/PrivacyInfo.xcprivacy
         buildPhase: resources
     dependencies:

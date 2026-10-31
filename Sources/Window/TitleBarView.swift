@@ -14,8 +14,6 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
     static let height: CGFloat = 38
 
     var onRename: ((String) -> Void)?
-    /// Rename while still typing; conflicts should be skipped quietly.
-    var onLiveRename: ((String) -> Void)?
     /// Rename finished or was cancelled; the window returns focus to the page.
     var onRenameEnded: (() -> Void)?
     var headingLevel: (() -> Int)?
@@ -315,6 +313,7 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Rename…", action: #selector(DocumentWindowController.renameNote(_:)), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Show in Finder", action: #selector(DocumentWindowController.revealInFinder(_:)), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Copy Path", action: #selector(DocumentWindowController.copyNotePath(_:)), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Move to Trash", action: #selector(DocumentWindowController.trashNote(_:)), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Open Folder…", action: #selector(AppDelegate.openFolder(_:)), keyEquivalent: ""))
@@ -331,21 +330,9 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
 
     // MARK: Rename
 
-    private var renameTimer: Timer?
-
-    /// Renames follow typing, a moment after the last keystroke: no Return or ⌘S needed.
-    func controlTextDidChange(_ obj: Notification) {
-        guard renaming else { return }
-        renameTimer?.invalidate()
-        renameTimer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: false) { [weak self] _ in
-            guard let self, self.renaming else { return }
-            let name = self.titleField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !name.isEmpty, name != self.title { self.onLiveRename?(name) }
-        }
-    }
-
+    /// The file moves once, when the name is finished: moving it per pause in typing
+    /// races iCloud Drive, which is still uploading the last name.
     func controlTextDidEndEditing(_ obj: Notification) {
-        renameTimer?.invalidate()
         guard renaming else { return }
         renaming = false
         let newName = titleField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)

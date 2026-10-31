@@ -242,6 +242,15 @@ enum GraphMath {
                     var run = String(chars[i..<j])
                     // `Y = 3`, as dictation and phones write it.
                     if run == "X" || run == "Y", !names.contains(run) { run = run.lowercased() }
+                    // A note variable written whole: water_molar_mass.
+                    var whole = j
+                    while whole < chars.count, chars[whole] == "_" || chars[whole].isLetter || chars[whole].isNumber { whole += 1 }
+                    let written = String(chars[i..<whole])
+                    if whole > j, names.contains(written) {
+                        out.append(.name(written))
+                        i = whole
+                        continue
+                    }
                     var parts = names.contains(run) ? [run] : GraphMath.splitRun(run, names: names)
                     // A subscript joins the name before it: k_1, m_{water}.
                     if j < chars.count, chars[j] == "_" {

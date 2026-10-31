@@ -677,11 +677,92 @@ extension EditorController {
     }
 
     private func deleteEditedTable() {
-        guard let location = styler.editingTableLocation, let i = styler.blockIndex(containing: location) else { return }
-        // Its formula lines go with it.
-        let range = rangeWithFormulas(ofBlock: i)
+        guard let location = styler.editingTableLocation else { return }
+        // Ending the edit can rewrite the table, so its range is read afterwards.
         endTableEditing()
+        guard let range = wholeTable(at: location) else { return }
         replace(range, with: "", select: NSRange(location: range.location, length: 0), actionName: "Delete Table")
+    }
+
+    /// The caret on the line after a table, which is added at the end of a note.
+    func placeCaretBelowTable(at location: Int) {
+        guard let range = wholeTable(at: location) else { return }
+        textView.window?.makeFirstResponder(textView)
+        let end = NSMaxRange(range)
+        if end == storage.length, end > 0, ns.character(at: end - 1) != 0x0A {
+            replace(NSRange(location: end, length: 0), with: "\n", select: NSRange(location: end + 1, length: 0), actionName: "New Line")
+        } else {
+            textView.setSelectedRange(NSRange(location: end, length: 0))
+        }
+    }
+
+    /// The table at `location` with what belongs to it: its formula lines and float marker.
+    private func wholeTable(at location: Int) -> NSRange? {
+        guard let i = styler.blockIndex(containing: location) else { return nil }
+        var table = i
+        if case .tableFormulas = styler.blocks[i].kind { table = i - 1 }
+        guard table >= 0, case .table = styler.blocks[table].kind else { return nil }
+        var range = rangeWithFormulas(ofBlock: table)
+        if table > 0, case .columnMarker(.float) = styler.blocks[table - 1].kind { range = NSUnionRange(range, styler.blocks[table - 1].range) }
+        return range
+    }
+
+    /// Backspace at the start of a box, or Delete at the end of one, would eat a hidden column
+    /// marker. At the top of a row, Backspace takes what's above; otherwise the caret just moves.
+    private func deleteAroundBox(backward: Bool, caret: Int) -> Bool {
+        if !backward {
+            guard caret < storage.length - 1, ns.character(at: caret) == 0x0A, caret > 0, ns.character(at: caret - 1) != 0x0A,
+                  let next = styler.blockIndex(containing: caret + 1), Self.isBoxMarker(styler.blocks[next].kind) else { return false }
+            return true
+        }
+        guard caret > 0, let i = styler.blockIndex(containing: caret - 1), Self.isBoxMarker(styler.blocks[i].kind) else { return false }
+        let marker = styler.blocks[i].range
+        guard case .columnMarker(.start) = styler.blocks[i].kind else {
+            if marker.location > 0 { textView.setSelectedRange(NSRange(location: marker.location - 1, length: 0)) }
+            return true
+        }
+        var j = i - 1
+        while j >= 0, case .blank = styler.blocks[j].kind { j -= 1 }
+        if j >= 0, let table = wholeTable(at: styler.blocks[j].range.location) {
+            let range = NSRange(location: table.location, length: marker.location - table.location)
+            replace(range, with: "", select: NSRange(location: caret - range.length, length: 0), actionName: "Delete Table")
+        } else if j + 1 < i {
+            let blank = styler.blocks[j + 1].range.location
+            let range = NSRange(location: blank, length: marker.location - blank)
+            replace(range, with: "", select: NSRange(location: caret - range.length, length: 0), actionName: "Delete")
+        } else if marker.location > 0 {
+            textView.setSelectedRange(NSRange(location: marker.location - 1, length: 0))
+        }
+        return true
+    }
+
+    private static func isBoxMarker(_ kind: BlockKind) -> Bool {
+        switch kind {
+        case .columnMarker(.start), .columnMarker(.split), .columnMarker(.end): return true
+        default: return false
+        }
+    }
+
+    /// Delete keys never leave part of a rendered table's source behind: a selection reaching
+    /// into one takes all of it, and from the caret the table goes whole, as one undo.
+    func deleteTableIfTouched(backward: Bool) -> Bool {
+        guard textView.isEditable, AppSettings.shared.syntax != .always else { return false }
+        let sel = textView.selectedRange()
+        if sel.length == 0, deleteAroundBox(backward: backward, caret: sel.location) { return true }
+        if sel.length > 0 {
+            var range = sel
+            for block in styler.blocks where NSIntersectionRange(block.range, sel).length > 0 {
+                if let whole = wholeTable(at: block.range.location) { range = NSUnionRange(range, whole) }
+            }
+            guard range != sel else { return false }
+            return replace(range, with: "", select: NSRange(location: range.location, length: 0), actionName: "Delete Table")
+        }
+        guard !backward || sel.location > 0, let whole = wholeTable(at: backward ? sel.location - 1 : sel.location) else { return false }
+        // On the blank line below a table, Backspace takes that line and not the table.
+        if backward, sel.location == NSMaxRange(whole), sel.location < storage.length, ns.character(at: sel.location) == 0x0A {
+            return replace(NSRange(location: sel.location, length: 1), with: "", select: NSRange(location: sel.location, length: 0), actionName: "Delete")
+        }
+        return replace(whole, with: "", select: NSRange(location: whole.location, length: 0), actionName: "Delete Table")
     }
 
     func endTableEditing(caretAfter: Bool = false, caretBefore: Bool = false) {

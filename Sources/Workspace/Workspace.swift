@@ -1,5 +1,12 @@
 import AppKit
 
+extension NSPasteboard {
+    func copyPath(of url: URL) {
+        clearContents()
+        setString(url.path, forType: .string)
+    }
+}
+
 final class FileNode {
     let url: URL
     let isFolder: Bool
@@ -36,6 +43,10 @@ final class Workspace {
     private var filesByName: [String: [URL]] = [:]
     private var watcher: FileWatcher?
     private var rescanPending = false
+    /// Bumped by each scan, so one that started before a rename can't bring the old name back.
+    private var scanGeneration = 0
+    /// New notes nobody has named or written in yet.
+    private var untouchedNotes: Set<URL> = []
     let search = NoteSearch()
 
     var name: String { root.lastPathComponent }
@@ -88,6 +99,7 @@ final class Workspace {
         var notDownloaded: [URL] = []
         var conflicted: [URL] = []
         let fm = FileManager.default
+        let sort = AppSettings.shared.sidebarSort
         let keys: [URLResourceKey] = [.isDirectoryKey, .isHiddenKey, .ubiquitousItemDownloadingStatusKey, .ubiquitousItemHasUnresolvedConflictsKey]
 
         func walk(_ url: URL) -> FileNode {
@@ -114,12 +126,44 @@ final class Workspace {
                 }
             }
             let order: (FileNode, FileNode) -> Bool = { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-            node.children = folders.sorted(by: order) + files.sorted(by: order)
+            node.children = folders.sorted(by: order) + sortedNotes(files, by: sort, order)
             return node
         }
 
         let tree = walk(root)
         return Scan(tree: tree, notes: notes, byName: byName, notDownloaded: notDownloaded, conflicted: conflicted)
+    }
+
+    /// Newest first for the date orders, ties by name.
+    private static func sortedNotes(_ files: [FileNode], by sort: SidebarSort, _ byName: (FileNode, FileNode) -> Bool) -> [FileNode] {
+        guard sort != .name else { return files.sorted(by: byName) }
+        let dated = files.map { (node: $0, date: noteDate($0.url, sort)) }
+        return dated.sorted { $0.date != $1.date ? $0.date > $1.date : byName($0.node, $1.node) }.map(\.node)
+    }
+
+    /// The file's date, or for creation a frontmatter `created:` or `date:` when it has one,
+    /// which survives syncing and copying where the file's own date may not.
+    private static func noteDate(_ url: URL, _ sort: SidebarSort) -> Date {
+        let values = try? url.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey, .ubiquitousItemDownloadingStatusKey])
+        if sort == .modified { return values?.contentModificationDate ?? .distantPast }
+        if values?.ubiquitousItemDownloadingStatus != .notDownloaded, let date = frontmatterDate(url) { return date }
+        return values?.creationDate ?? .distantPast
+    }
+
+    private static func frontmatterDate(_ url: URL) -> Date? {
+        guard let file = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? file.close() }
+        guard let data = try? file.read(upToCount: 1024), let head = String(data: data, encoding: .utf8), head.hasPrefix("---") else { return nil }
+        for line in head.split(separator: "\n").dropFirst() {
+            if line.hasPrefix("---") { return nil }
+            guard line.hasPrefix("created:") || line.hasPrefix("date:"), let colon = line.firstIndex(of: ":") else { continue }
+            let value = line[line.index(after: colon)...].trimmingCharacters(in: CharacterSet(charactersIn: " \t\r\"'"))
+            let day = DateFormatter()
+            day.locale = Locale(identifier: "en_US_POSIX")
+            day.dateFormat = "yyyy-MM-dd"
+            return ISO8601DateFormatter().date(from: value) ?? day.date(from: String(value.prefix(10)))
+        }
+        return nil
     }
 
     // MARK: iCloud
@@ -172,6 +216,8 @@ final class Workspace {
             guard let self else { return }
             let root = self.root
             let access = self.access
+            self.scanGeneration += 1
+            let generation = self.scanGeneration
             DispatchQueue.global(qos: .userInitiated).async {
                 let scan = withExtendedLifetime(access) { () -> Scan in
                     let scan = Workspace.scan(root)
@@ -180,6 +226,7 @@ final class Workspace {
                 }
                 DispatchQueue.main.async {
                     self.rescanPending = false
+                    guard generation == self.scanGeneration else { return }
                     self.apply(scan)
                     NotificationCenter.default.post(name: Workspace.didChange, object: self, userInfo: ["paths": paths])
                 }
@@ -194,6 +241,7 @@ final class Workspace {
     }
 
     func rescanNow() {
+        scanGeneration += 1
         apply(Workspace.scan(root))
         NotificationCenter.default.post(name: Workspace.didChange, object: self, userInfo: ["paths": [String]()])
     }
@@ -311,6 +359,23 @@ final class Workspace {
         return url
     }
 
+    func markUntouched(_ url: URL) {
+        untouchedNotes.insert(url.standardizedFileURL)
+    }
+
+    /// A new note left empty and unnamed goes away instead of syncing as a stray file.
+    /// Only ever removes a file Indium just made that is still zero bytes.
+    func discardIfUntouched(_ url: URL?) {
+        guard let key = url?.standardizedFileURL, untouchedNotes.remove(key) != nil,
+              (try? key.resourceValues(forKeys: [.fileSizeKey]))?.fileSize == 0 else { return }
+        do {
+            try Workspace.coordinate(writing: key, options: .forDeleting) { try FileManager.default.removeItem(at: $0) }
+            rescanNow()
+        } catch {
+            NSLog("Indium couldn't remove an empty new note: %@", String(describing: error))
+        }
+    }
+
     func createFolder(in folder: URL?, name: String = "New Folder") throws -> URL {
         let url = Workspace.uniqueURL(in: folder ?? root, base: Workspace.sanitize(name), ext: "")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
@@ -334,6 +399,7 @@ final class Workspace {
 
     private func move(_ url: URL, to target: URL) throws -> URL {
         guard target.standardizedFileURL != url.standardizedFileURL else { return url }
+        untouchedNotes.remove(url.standardizedFileURL)
         // Allow case-only renames on case-insensitive volumes.
         let caseOnly = target.path.lowercased() == url.path.lowercased()
         if !caseOnly, FileManager.default.fileExists(atPath: target.path) {

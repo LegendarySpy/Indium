@@ -31,6 +31,14 @@ enum AskModel {
         - Tables: a header row, then | --- | under each column, then one row per line.
         - Math is LaTeX between dollar signs: inline $E = mc^2$, or $$...$$ on lines of its own. \
         When the selection is part of a sentence, keep it inline with single dollar signs.
+        - Never use \\( \\) or \\[ \\] for math. Every $ that opens math has a closing $, with no \
+        space just inside either one. Write money outside math as \\$5.
+        - Inside math, escape percent as \\%: $21.1\\%$. Outside math write it plainly: 21.1%. \
+        Use numbers and units in math like $3.0\\ \\text{g}$, words as $\\text{percent yield}$, \
+        fractions as $\\frac{a}{b}$, multiplication as $\\times$ or $\\cdot$, and arrows as $\\to$.
+        - A chemical formula uses roman letters: $\\mathrm{H_2SO_4}$, $\\mathrm{Fe^{3+}}$.
+        - A worked calculation goes on its own line:
+        $$\\text{percent water} = \\frac{0.633}{3.000} \\times 100 = 21.1\\%$$
         - Subscripts and superscripts are always math: H$_2$O, x$^2$, 10$^{-3}$. Never use \
         characters like ₂ or ², and never ~x~, ^x^, <sub>, <sup> or other HTML.
         - Links are [text](url); links to other notes are [[Note name]].
@@ -80,7 +88,7 @@ enum AskModel {
             }
         }
         text = cleaned(text)
-        if kind == .edit { text = mathScripts(text) }
+        if kind == .edit { text = mathScripts(plainPercents(mathDelimiters(text))) }
         return Reply(kind: kind, text: text)
     }
 
@@ -107,6 +115,19 @@ enum AskModel {
             chars = chars.dropFirst()
         }
         return out
+    }
+
+    /// LaTeX's \\( \\) and \\[ \\], which models often write, as the dollar signs Indium reads.
+    static func mathDelimiters(_ text: String) -> String {
+        text.replacingOccurrences(of: #"\\\((.+?)\\\)"#, with: "\\$$1\\$", options: .regularExpression)
+            .replacingOccurrences(of: #"(?s)\\\[(.+?)\\\]"#, with: "\\$\\$$1\\$\\$", options: .regularExpression)
+    }
+
+    /// `\\%` belongs in math; outside it the backslash would just be noise.
+    static func plainPercents(_ text: String) -> String {
+        text.components(separatedBy: "$").enumerated()
+            .map { $0.offset % 2 == 0 ? $0.element.replacingOccurrences(of: "\\%", with: "%") : $0.element }
+            .joined(separator: "$")
     }
 
     /// The reply without a code fence wrapped around all of it.

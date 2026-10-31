@@ -79,9 +79,14 @@ final class EditorTextView: NSTextView {
     override func mouseMoved(with event: NSEvent) {
         editor?.hoverTables(at: convert(event.locationInWindow, from: nil))
         editor?.hoverTableGrip(at: convert(event.locationInWindow, from: nil))
+        editor?.hoverBoxes(at: convert(event.locationInWindow, from: nil))
         editor?.updateCellTips()
         if pointerIsOverChrome(event) {
-            NSCursor.arrow.set()
+            switch hitTest(convert(event.locationInWindow, to: superview)) {
+            case is BoxResizeView: NSCursor.resizeLeftRight.set()
+            case is BoxMoveView, is BlockHandleView: NSCursor.openHand.set()
+            default: NSCursor.arrow.set()
+            }
             return
         }
         // A table's formula caption is a button: its list, or Recalculate.
@@ -96,6 +101,7 @@ final class EditorTextView: NSTextView {
         super.mouseExited(with: event)
         editor?.hideTableStrips()
         editor?.hideTableGrip()
+        editor?.hideBoxes()
     }
 
     override func cursorUpdate(with event: NSEvent) {
@@ -246,6 +252,12 @@ final class EditorTextView: NSTextView {
     /// Where each exported page after the first begins (character offsets), shown as
     /// dashed lines when Show Page Lines is on.
     var pageStarts: [Int] = [] { didSet { if pageStarts != oldValue { needsDisplay = true } } }
+
+    /// Draws two screens ahead each way, so a fast scroll doesn't outrun the page into blank.
+    override func prepareContent(in rect: NSRect) {
+        let ahead = (enclosingScrollView?.contentView.bounds.height ?? rect.height) * 2
+        super.prepareContent(in: rect.insetBy(dx: 0, dy: -ahead).intersection(bounds))
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
@@ -414,6 +426,7 @@ final class EditorTextView: NSTextView {
         // Typing hides the pointer; the table strips go with it (the text may move).
         editor?.hideTableStrips()
         editor?.hideTableGrip()
+        editor?.hideBoxes()
         keyEvent = event
         defer { keyEvent = nil }
         super.keyDown(with: event)
@@ -444,6 +457,7 @@ final class EditorTextView: NSTextView {
     override func deleteBackward(_ sender: Any?) {
         if editor?.deleteSelectedImage() == true { return }
         if editor?.deleteSelectedChart() == true { return }
+        if editor?.deleteTableIfTouched(backward: true) == true { return }
         if editor?.math.handleBackspace() == true { return }
         super.deleteBackward(sender)
     }
@@ -451,6 +465,7 @@ final class EditorTextView: NSTextView {
     override func deleteForward(_ sender: Any?) {
         if editor?.deleteSelectedImage() == true { return }
         if editor?.deleteSelectedChart() == true { return }
+        if editor?.deleteTableIfTouched(backward: false) == true { return }
         super.deleteForward(sender)
     }
 

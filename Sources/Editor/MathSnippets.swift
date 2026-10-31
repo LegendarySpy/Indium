@@ -289,6 +289,7 @@ struct MathSnippet {
             .init("dm", "$$\n$0\n$$", "tAw"),
 
             // Greek letters.
+            .init(#"(?<!\\)%"#, "\\%", "rmA"),
             .init("@a", "\\alpha", "mA"), .init("@b", "\\beta", "mA"), .init("@g", "\\gamma", "mA"), .init("@G", "\\Gamma", "mA"),
             .init("@d", "\\delta", "mA"), .init("@D", "\\Delta", "mA"), .init("@e", "\\epsilon", "mA"), .init(":e", "\\varepsilon", "mA"),
             .init("@z", "\\zeta", "mA"), .init("@t", "\\theta", "mA"), .init("@T", "\\Theta", "mA"), .init(":t", "\\vartheta", "mA"),

@@ -129,13 +129,17 @@ struct LayoutModel {
         groups.first { NSLocationInRange(location, $0.group.range) || NSMaxRange($0.group.range) == location }?.group
     }
 
+    static func header(ratios: [Int], columns: Int) -> String {
+        let equal = ratios.count != columns || Set(ratios).count <= 1
+        return equal ? "<!-- columns -->" : "<!-- columns \(ratios.map(String.init).joined(separator: "/")) -->"
+    }
+
     static func serialize(_ item: LayoutItem) -> String {
         switch item {
         case let .group(g):
             return g.text
         case let .region(r):
-            let equal = r.ratios.count != r.columns.count || Set(r.ratios).count <= 1
-            let header = equal ? "<!-- columns -->" : "<!-- columns \(r.ratios.map(String.init).joined(separator: "/")) -->"
+            let header = header(ratios: r.ratios, columns: r.columns.count)
             let body = r.columns.map { $0.groups.map(\.text).joined(separator: "\n\n") }.joined(separator: "\n<!-- column -->\n")
             return header + "\n" + body + "\n<!-- /columns -->"
         }
@@ -320,6 +324,14 @@ struct LayoutModel {
         return (r.range, LayoutModel.serialize(.region(swapped)))
     }
 
+    /// Moves a whole column to another place in its region; its width goes with it.
+    func reorderColumns(of region: LayoutRegion, from: Int, to: Int) -> (range: NSRange, text: String) {
+        var columns = region.columns, ratios = region.ratios
+        columns.insert(columns.remove(at: from), at: to)
+        if ratios.count == columns.count { ratios.insert(ratios.remove(at: from), at: to) }
+        return (region.range, LayoutModel.serialize(.region(LayoutRegion(ratios: ratios, columns: columns))))
+    }
+
     /// Unwraps the region containing `group` back to full width.
     func unwrapRegion(containing group: LayoutGroup) -> (range: NSRange, text: String)? {
         guard let i = itemIndex(of: group), case let .region(r) = items[i] else { return nil }
@@ -340,9 +352,9 @@ final class BlockHandleView: NSView {
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        toolTip = "Drag to move the table · drop at a side to place it beside"
+        toolTip = "Drag to move · drop at a side to place it beside"
         setAccessibilityRole(.button)
-        setAccessibilityLabel("Move table")
+        setAccessibilityLabel("Move block")
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -409,37 +421,111 @@ final class DropIndicatorView: NSView {
     }
 }
 
-/// Outlines every spot a dragged block can go, faintly, so blank space reads as a
-/// place to drop too. The one under the pointer is left to `DropIndicatorView`.
-final class DropZonesView: NSView {
-    var zones: [EditorController.DropZone] = [] { didSet { needsDisplay = true } }
-    var active: NSRect? { didSet { if active != oldValue { needsDisplay = true } } }
+/// Outlines the boxes of a region, only while they're being resized.
+final class BoxOutlineView: NSView {
+    var boxes: [NSRect] = [] { didSet { if boxes != oldValue { needsDisplay = true } } }
 
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func draw(_ dirtyRect: NSRect) {
-        let accent = NSColor.controlAccentColor
-        for zone in zones where zone.shape.intersects(dirtyRect) && zone.shape != active {
-            switch zone.style {
-            case .line:
-                let line = NSBezierPath()
-                line.move(to: NSPoint(x: zone.shape.minX + 4, y: zone.shape.midY))
-                line.line(to: NSPoint(x: zone.shape.maxX - 4, y: zone.shape.midY))
-                line.lineWidth = 1.5
-                line.lineCapStyle = .round
-                line.setLineDash([6, 4], count: 2, phase: 0)
-                accent.withAlphaComponent(0.4).setStroke()
-                line.stroke()
-            case .area:
-                let path = NSBezierPath(roundedRect: zone.shape.insetBy(dx: 1, dy: 1), xRadius: min(10, zone.shape.width / 2), yRadius: min(10, zone.shape.width / 2))
-                accent.withAlphaComponent(0.04).setFill()
-                path.fill()
-                accent.withAlphaComponent(0.4).setStroke()
-                path.lineWidth = 1.5
-                path.setLineDash([6, 4], count: 2, phase: 0)
-                path.stroke()
+        for box in boxes {
+            let path = NSBezierPath(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
+            NSColor.controlAccentColor.withAlphaComponent(0.45).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
+    }
+}
+
+/// The quiet grip above a box that moves the whole box.
+final class BoxMoveView: NSView {
+    /// What's drawn; the view itself is larger, so it's easy to catch.
+    static let size = NSSize(width: 32, height: 14)
+    static let hitSize = NSSize(width: 64, height: 28)
+    var onDrag: ((NSEvent) -> Void)?
+    private var hovering = false
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        toolTip = "Drag to move this box"
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("Move box")
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .cursorUpdate, .activeAlways, .inVisibleRect], owner: self))
+    }
+
+    override func cursorUpdate(with event: NSEvent) { NSCursor.openHand.set() }
+    override func mouseEntered(with event: NSEvent) { hovering = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovering = false; needsDisplay = true }
+    override func mouseDown(with event: NSEvent) { onDrag?(event) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        if hovering {
+            Palette.hoverFill.setFill()
+            let pill = NSRect(x: bounds.midX - Self.size.width / 2, y: bounds.midY - Self.size.height / 2, width: Self.size.width, height: Self.size.height)
+            NSBezierPath(roundedRect: pill, xRadius: 5, yRadius: 5).fill()
+        }
+        (hovering ? Palette.secondaryText : Palette.tertiaryText).setFill()
+        let d: CGFloat = 3
+        for col in 0..<3 {
+            for row in 0..<2 {
+                let x = bounds.midX - 7 + CGFloat(col) * 5.5 - d / 2 + 1.5, y = bounds.midY - 3.5 + CGFloat(row) * 4
+                NSBezierPath(ovalIn: NSRect(x: x, y: y, width: d, height: d)).fill()
             }
+        }
+    }
+}
+
+/// The grip to drag for resizing, between two boxes or beside a selected image: two
+/// upright bars, in a tall area that's easy to catch.
+final class BoxResizeView: NSView {
+    var onDrag: ((NSEvent) -> Void)?
+    /// Where the bars sit, in this view's coordinates; the middle if unset.
+    var gripY: CGFloat? { didSet { if gripY != oldValue { needsDisplay = true } } }
+    private var hovering = false
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        toolTip = "Drag to resize"
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("Resize")
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .cursorUpdate, .activeAlways, .inVisibleRect], owner: self))
+    }
+
+    override func cursorUpdate(with event: NSEvent) { NSCursor.resizeLeftRight.set() }
+    override func mouseEntered(with event: NSEvent) { hovering = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovering = false; needsDisplay = true }
+    override func mouseDown(with event: NSEvent) { onDrag?(event) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let y = (gripY ?? bounds.midY) - 11
+        if hovering {
+            Palette.hoverFill.setFill()
+            NSBezierPath(roundedRect: NSRect(x: bounds.midX - 7, y: y - 3, width: 14, height: 28), xRadius: 5, yRadius: 5).fill()
+        }
+        (hovering ? Palette.secondaryText : Palette.tertiaryText).setFill()
+        for x in [bounds.midX - 3, bounds.midX + 1] {
+            NSBezierPath(roundedRect: NSRect(x: x, y: y, width: 2, height: 22), xRadius: 1, yRadius: 1).fill()
         }
     }
 }

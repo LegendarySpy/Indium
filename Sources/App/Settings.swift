@@ -63,6 +63,37 @@ enum SyntaxVisibility: String, CaseIterable, Identifiable {
     }
 }
 
+/// What a new note is called before anyone names it.
+enum NewNoteName: String, CaseIterable, Identifiable {
+    case untitled, date
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .untitled: "Untitled"
+        case .date: name()
+        }
+    }
+    func name(on day: Date = Date()) -> String {
+        guard self == .date else { return "Untitled" }
+        let f = DateFormatter()
+        f.dateFormat = "EEEE MMMM d yyyy"
+        return f.string(from: day)
+    }
+}
+
+/// How notes are ordered within a folder in the sidebar. Folders stay first, by name.
+enum SidebarSort: String, CaseIterable, Identifiable {
+    case name, modified, created
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .name: "Name"
+        case .modified: "Date Modified"
+        case .created: "Date Created"
+        }
+    }
+}
+
 /// The app's preferences.
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
@@ -108,6 +139,9 @@ final class AppSettings: ObservableObject {
     @Published var suggestIcons: Bool { didSet { save(suggestIcons, "suggestIcons") } }
     @Published var showPageLines: Bool { didSet { save(showPageLines, "showPageLines") } }
     @Published var mathShortcuts: Bool { didSet { save(mathShortcuts, "mathShortcuts") } }
+    @Published var newNoteName: NewNoteName { didSet { save(newNoteName.rawValue, "newNoteName") } }
+    @Published var sidebarSort: SidebarSort { didSet { save(sidebarSort.rawValue, "sidebarSort") } }
+    @Published var wordCompletion: Bool { didSet { save(wordCompletion, "wordCompletion") } }
 
     private init() {
         appearance = AppearanceSetting(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
@@ -120,6 +154,9 @@ final class AppSettings: ObservableObject {
         suggestIcons = defaults.object(forKey: "suggestIcons") as? Bool ?? true
         showPageLines = defaults.bool(forKey: "showPageLines")
         mathShortcuts = defaults.object(forKey: "mathShortcuts") as? Bool ?? true
+        newNoteName = NewNoteName(rawValue: defaults.string(forKey: "newNoteName") ?? "") ?? .untitled
+        sidebarSort = SidebarSort(rawValue: defaults.string(forKey: "sidebarSort") ?? "") ?? .name
+        wordCompletion = defaults.bool(forKey: "wordCompletion")
     }
 
     private func save(_ value: Any, _ key: String) {

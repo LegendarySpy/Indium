@@ -229,6 +229,12 @@ final class SidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate,
             let removed = IndexSet(old.indices.filter { !newIDs.contains(ObjectIdentifier(old[$0])) })
             let added = IndexSet(new.indices.filter { !oldIDs.contains(ObjectIdentifier(new[$0])) })
             shown[parentURL] = new
+            // Same notes in a new order (sorted by date, one was just edited).
+            if removed.isEmpty, added.isEmpty {
+                outline.reloadItem(parent, reloadChildren: true)
+                selectCurrent()
+                return
+            }
             if !removed.isEmpty { outline.removeItems(at: removed, inParent: parent, withAnimation: []) }
             if !added.isEmpty {
                 outline.insertItems(at: added, inParent: parent, withAnimation: [])
@@ -552,10 +558,19 @@ final class SidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate,
         menuItemTarget = item
         menu.addItem(withTitle: "New Note", action: #selector(newNoteClicked), keyEquivalent: "").target = self
         menu.addItem(withTitle: "New Folder", action: #selector(newFolderClicked), keyEquivalent: "").target = self
+        let sort = NSMenu(title: "Sort By")
+        for option in SidebarSort.allCases {
+            let entry = sort.addItem(withTitle: option.title, action: #selector(sortClicked(_:)), keyEquivalent: "")
+            entry.target = self
+            entry.representedObject = option.rawValue
+            entry.state = AppSettings.shared.sidebarSort == option ? .on : .off
+        }
+        menu.addItem(withTitle: "Sort By", action: nil, keyEquivalent: "").submenu = sort
         guard let item else { return }
         menu.addItem(.separator())
         menu.addItem(withTitle: "Rename", action: #selector(renameClicked), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Show in Finder", action: #selector(revealClicked), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Copy Path", action: #selector(copyPathClicked), keyEquivalent: "").target = self
         if AppSettings.shared.suggestIcons, !item.isFolder {
             // Shown even when Apple Intelligence is off, so choosing it can say why it can't.
             let suggesting = NoteIcons.shared.suggestion(for: item.url) == .suggesting
@@ -621,6 +636,16 @@ final class SidebarView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate,
 
     @objc private func revealClicked() {
         if let item = clickedItem { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
+    }
+
+    @objc private func sortClicked(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let sort = SidebarSort(rawValue: raw) else { return }
+        AppSettings.shared.sidebarSort = sort
+        workspace?.rescanNow()
+    }
+
+    @objc private func copyPathClicked() {
+        if let item = clickedItem { NSPasteboard.general.copyPath(of: item.url) }
     }
 
     @objc fileprivate func trashClicked() {

@@ -14,12 +14,18 @@ final class HoverButton: NSButton {
     }
     var isOn = false { didSet { needsDisplay = true } }
     var popUpMenu: NSMenu?
+    /// A tall symbol's own size and insets would otherwise push the button out of its bar.
+    private var fixedSize: NSSize?
+    override var intrinsicContentSize: NSSize { fixedSize ?? super.intrinsicContentSize }
+    override var alignmentRectInsets: NSEdgeInsets { fixedSize == nil ? super.alignmentRectInsets : NSEdgeInsetsZero }
 
     convenience init(symbol: String, label: String, pointSize: CGFloat = 13, target: AnyObject?, action: Selector?) {
         self.init(frame: .zero)
         let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .regular)
         image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?.withSymbolConfiguration(config)
         imagePosition = .imageOnly
+        imageScaling = .scaleProportionallyDown
+        fixedSize = NSSize(width: 28, height: 24)
         commonInit(label: label, target: target, action: action)
         widthAnchor.constraint(equalToConstant: 28).withPriority(.init(999)).isActive = true
         heightAnchor.constraint(equalToConstant: 24).withPriority(.init(999)).isActive = true

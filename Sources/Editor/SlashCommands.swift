@@ -160,10 +160,78 @@ extension EditorController {
         textView.ghost = nil
     }
 
+    // MARK: Word and note link completion
+
+    /// The rest of a word already in this note, or of a note's name after `[[`.
+    func updateWordSuggestion() {
+        guard answer == nil, slash == nil else { return }
+        let old = wordSuggestion
+        wordSuggestion = computeWordSuggestion()
+        if let wordSuggestion { textView.ghost = wordSuggestion.insertion }
+        else if old != nil { textView.ghost = nil }
+    }
+
+    private func computeWordSuggestion() -> (location: Int, insertion: String)? {
+        let sel = textView.selectedRange()
+        guard AppSettings.shared.wordCompletion, textView.isEditable, sel.length == 0, !textView.hasMarkedText(),
+              sel.location > 0, sel.location != wordDismissedAt, mathSpan(at: sel.location) == nil else { return nil }
+        if let i = styler.blockIndex(containing: sel.location) {
+            switch styler.blocks[i].kind {
+            case .code, .math, .frontmatter, .table, .tableFormulas: return nil
+            default: break
+            }
+        }
+        let line = lineRange(at: sel.location).content
+        let before = ns.substring(with: NSRange(location: line.location, length: sel.location - line.location))
+        let after = ns.substring(with: NSRange(location: sel.location, length: NSMaxRange(line) - sel.location))
+        guard after.trimmingCharacters(in: .whitespaces).isEmpty || after.hasPrefix("]]") else { return nil }
+        if let open = before.range(of: "[[", options: .backwards), !before[open.upperBound...].contains("]") {
+            let typed = String(before[open.upperBound...]).lowercased()
+            guard !typed.isEmpty, let workspace else { return nil }
+            let names = workspace.notes.map { $0.deletingPathExtension().lastPathComponent }
+            guard let name = names.filter({ $0.lowercased().hasPrefix(typed) && $0.count > typed.count }).min(by: { $0.count < $1.count }) else { return nil }
+            return (sel.location, String(name.dropFirst(typed.count)) + (after.hasPrefix("]]") ? "" : "]]"))
+        }
+        guard after.isEmpty || after.first?.isWhitespace == true else { return nil }
+        let prefix = String(before.reversed().prefix { $0.isLetter }.reversed())
+        guard prefix.count >= 3, !before.hasSuffix("://") else { return nil }
+        let lowered = prefix.lowercased()
+        let best = noteWordCounts().filter { $0.key.count > prefix.count && $0.key.lowercased().hasPrefix(lowered) }
+            .max { ($0.value, $1.key) < ($1.value, $0.key) }
+        return best.map { (sel.location, String($0.key.dropFirst(prefix.count))) }
+    }
+
+    /// How often each word of four letters or more appears in the note.
+    private func noteWordCounts() -> [String: Int] {
+        if let cached = wordCounts, cached.version == textVersion { return cached.counts }
+        var counts: [String: Int] = [:]
+        storage.string.enumerateSubstrings(in: storage.string.startIndex..., options: .byWords) { word, _, _, _ in
+            if let word, word.count >= 4, word.allSatisfy(\.isLetter) { counts[word, default: 0] += 1 }
+        }
+        wordCounts = (textVersion, counts)
+        return counts
+    }
+
     /// Key handling while a suggestion is showing. Returns true if the key was used.
     func handleSlashKey(_ selector: Selector) -> Bool {
         // A suggestion with no room to show isn't offered.
         guard textView.showsGhost else { return false }
+        if let word = wordSuggestion {
+            switch selector {
+            case #selector(NSResponder.insertTab(_:)):
+                wordSuggestion = nil
+                textView.ghost = nil
+                textView.insertText(word.insertion, replacementRange: NSRange(location: word.location, length: 0))
+                return true
+            case #selector(NSResponder.cancelOperation(_:)):
+                wordDismissedAt = word.location
+                wordSuggestion = nil
+                textView.ghost = nil
+                return true
+            default:
+                return false
+            }
+        }
         if let answer {
             switch selector {
             case #selector(NSResponder.insertTab(_:)):
@@ -206,7 +274,7 @@ extension EditorController {
     func acceptSuggestionWithRightArrow() -> Bool {
         let sel = textView.selectedRange()
         guard textView.showsGhost, sel.length == 0, !textView.hasMarkedText() else { return false }
-        let atGhost = answer?.location == sel.location || slash.map { NSMaxRange($0.range) == sel.location } == true
+        let atGhost = answer?.location == sel.location || wordSuggestion?.location == sel.location || slash.map { NSMaxRange($0.range) == sel.location } == true
         return atGhost && handleSlashKey(#selector(NSResponder.insertTab(_:)))
     }
 

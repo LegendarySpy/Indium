@@ -156,7 +156,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         titleBar.onIconClick = { [weak self] anchor in self?.showIconPicker(from: anchor) }
         titleBar.headingLevel = { [weak self] in self?.editor.currentHeadingLevel() ?? 0 }
         titleBar.onRename = { [weak self] name in self?.rename(to: name) }
-        titleBar.onLiveRename = { [weak self] name in self?.rename(to: name, quietly: true) }
         titleBar.onRenameEnded = { [weak self] in
             guard let self, self.note != nil else { return }
             self.window?.makeFirstResponder(self.editor.textView)
@@ -476,6 +475,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
         // A note whose edits couldn't be saved stays until that's resolved (the editor
         // shows why and what you can do).
+        let left = editor.note?.url
+        defer { if left?.standardizedFileURL != editor.note?.url?.standardizedFileURL { discardIfUntouched(left) } }
         if editor.note !== note, !editor.load(note) {
             // The page may have made way for a download; bring the unsaved note back.
             refreshEmptyState()
@@ -528,7 +529,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
     #endif
 
-    private func rename(to name: String, quietly: Bool = false) {
+    private func rename(to name: String) {
         guard let url = note?.url, let workspace else { return }
         editor.saveNow()
         do {
@@ -537,7 +538,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             noteOrder = noteOrder.map { $0 == url.standardizedFileURL ? newURL.standardizedFileURL : $0 }
         } catch {
             NSLog("Indium rename failed: %@", String(describing: error))
-            if !quietly, let window { NSAlert(error: error).beginSheetModal(for: window) }
+            if let window { NSAlert(error: error).beginSheetModal(for: window) }
         }
         updateTitle()
     }
@@ -787,15 +788,17 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     enum RenameTarget { case none, titleBar, sidebar }
 
-    private func createNote(in folder: URL?, name: String = "Untitled", renameIn target: RenameTarget = .titleBar) {
+    /// Without a name it gets the default from Settings, and one that's dated needs no naming.
+    private func createNote(in folder: URL?, name: String? = nil, renameIn target: RenameTarget = .titleBar) {
         guard let workspace else {
             AppDelegate.shared.openFolder(nil)
             return
         }
         do {
-            let url = try workspace.createNote(in: folder ?? note?.url?.deletingLastPathComponent(), name: name)
+            let url = try workspace.createNote(in: folder ?? note?.url?.deletingLastPathComponent(), name: name ?? AppSettings.shared.newNoteName.name())
+            if name == nil { workspace.markUntouched(url) }
             open(url)
-            switch target {
+            switch name == nil && AppSettings.shared.newNoteName == .date ? .none : target {
             case .none: break
             case .titleBar: titleBar.beginRename()
             case .sidebar: sidebar?.beginRename(url, focusPage: true)
@@ -812,6 +815,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
 
     @objc func revealInFinder(_ sender: Any?) {
         if let url = note?.url { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+    }
+
+    @objc func copyNotePath(_ sender: Any?) {
+        if let url = note?.url { NSPasteboard.general.copyPath(of: url) }
     }
 
     @objc func trashNote(_ sender: Any?) {
@@ -955,8 +962,19 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     /// The note is saved (or there's nothing to save), so it's fine to move on.
     func canLeaveNote() -> Bool { editor.canLeaveNote() }
 
+    /// Forgets the cached note along with its file.
+    func discardIfUntouched(_ url: URL?) {
+        guard let url else { return }
+        workspace?.discardIfUntouched(url)
+        if !FileManager.default.fileExists(atPath: url.path) {
+            noteCache.removeValue(forKey: url.standardizedFileURL)
+            noteOrder.removeAll { $0 == url.standardizedFileURL }
+        }
+    }
+
     func windowWillClose(_ notification: Notification) {
         editor.saveNow()
+        discardIfUntouched(editor.note?.url)
         if kind != .vault { AppDelegate.shared.windowClosed(self) }
     }
 

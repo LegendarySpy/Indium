@@ -44,6 +44,7 @@ So Indium shows one note at a time. There are no tabs or split views, just the n
 - **Live updates.** If another app or an AI agent edits a note, you see it as it happens.
 - **Note icons.** Apple Intelligence picks an icon for each note, on your Mac. Ask for another and it tells you when it kept the same one, or why it couldn't.
 - **Quick Look.** Press Space on a note in Finder to see it rendered.
+- **Instructions for AI agents.** Help › Copy Instructions for AI Agents copies [everything Indium's notes can do](skills/indium/SKILL.md), so an agent can write columns, charts, graphs and formulas correctly. It's also a skill you can install.
 - **PDF export.** Clean pages in light or dark. Turn on page lines to see where pages break, or type `/page break` to start a new one.
 
 For what carries over from Obsidian and what doesn't, see [Compatibility](COMPATIBILITY.md).

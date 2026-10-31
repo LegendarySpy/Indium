@@ -1078,6 +1078,73 @@ enum DebugSnapshot {
                 undo?.endUndoGrouping()
                 EditorController.onDragStep = nil
                 print("  CHART DRAGGED to \(args[1]) \(args[2]); undo name:", undo?.undoActionName ?? "-", "selected chart:", editor.styler.selectedChart.map(String.init) ?? "none")
+            case "pointclick":
+                // `pointclick:x,y`: a real click at a point, with the caret it leaves.
+                guard args.count >= 2, let x = Double(args[0]), let y = Double(args[1]) else { break }
+                let p = NSPoint(x: x, y: y)
+                NSApp.postEvent(mouse(.leftMouseUp, p), atStart: false)
+                tv.mouseDown(with: mouse(.leftMouseDown, p))
+                RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+                print("  POINT \(x),\(y): caret", tv.selectedRange().location)
+            case "boxhover":
+                if args.count >= 2, let x = Double(args[0]), let y = Double(args[1]) { editor.hoverBoxes(at: NSPoint(x: x, y: y)) }
+            case "boxresize":
+                // `boxresize:x,y,dx`: hovers at a point, then drags the strip between two boxes by dx.
+                guard args.count >= 3, let x = Double(args[0]), let y = Double(args[1]), let dx = Double(args[2]) else { break }
+                editor.hoverBoxes(at: NSPoint(x: x, y: y))
+                guard let strip = editor.boxResizers.first else { print("  no strip"); break }
+                let from = NSPoint(x: strip.frame.midX, y: strip.frame.midY)
+                let to = NSPoint(x: from.x + dx, y: from.y)
+                NSApp.postEvent(mouse(.leftMouseDragged, NSPoint(x: from.x + dx / 2, y: from.y)), atStart: false)
+                NSApp.postEvent(mouse(.leftMouseDragged, to), atStart: false)
+                NSApp.postEvent(mouse(.leftMouseUp, to), atStart: false)
+                undo?.beginUndoGrouping()
+                strip.mouseDown(with: mouse(.leftMouseDown, from))
+                undo?.endUndoGrouping()
+                print("  BOX RESIZED:", editor.text.debugDescription, "undo:", undo?.undoActionName ?? "-")
+            case "boxmove":
+                // `boxmove:x,y,toX,toY[,shot]`: hovers at a point, then drags that box's pill to another.
+                guard args.count >= 4, let x = Double(args[0]), let y = Double(args[1]), let tx = Double(args[2]), let ty = Double(args[3]) else { break }
+                editor.hoverBoxes(at: NSPoint(x: x, y: y))
+                guard let pill = editor.boxMoveHandle else { print("  no pill"); break }
+                print("  PILL:", pill.frame)
+                let from = NSPoint(x: pill.frame.midX, y: pill.frame.midY)
+                let to = NSPoint(x: tx, y: ty)
+                if args.count > 4 { EditorController.onDragStep = { debugShot(window: window, path: args[4]) } }
+                NSApp.postEvent(mouse(.leftMouseDragged, to), atStart: false)
+                NSApp.postEvent(mouse(.leftMouseDragged, to), atStart: false)
+                NSApp.postEvent(mouse(.leftMouseUp, to), atStart: false)
+                undo?.beginUndoGrouping()
+                pill.mouseDown(with: mouse(.leftMouseDown, from))
+                undo?.endUndoGrouping()
+                EditorController.onDragStep = nil
+                print("  BOX MOVED:", editor.text.debugDescription, "undo:", undo?.undoActionName ?? "-")
+            case "imageclick":
+                guard let block = editor.visibleBlocks().first(where: { if case .image = $0.decoration.content { return true }; return false }) else { print("  no image"); break }
+                let p = NSPoint(x: block.content.midX, y: block.content.midY)
+                NSApp.postEvent(mouse(.leftMouseUp, p), atStart: false)
+                tv.mouseDown(with: mouse(.leftMouseDown, p))
+                RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+                for bar in tv.subviews where bar is ImageControlsView {
+                    print("  IMAGE BAR:", bar.frame, bar.subviews.flatMap(\.subviews).map { "\($0.frame)" })
+                }
+            case "textdrag":
+                // `textdrag:Second,First,before`: moves a block by the grip beside its first line.
+                guard args.count >= 3, let from = editor.visibleGroupFrames().first(where: { $0.group.text.hasPrefix(args[0]) }),
+                      let to = editor.visibleGroupFrames().first(where: { $0.group.text.hasPrefix(args[1]) }) else { print("  no block"); break }
+                editor.hoverTableGrip(at: NSPoint(x: from.rect.minX + 4, y: from.rect.minY + 4))
+                guard let grip = editor.tableGrip else { print("  no grip"); break }
+                let p = NSPoint(x: to.rect.midX, y: args[2] == "before" ? to.rect.minY + 1 : to.rect.maxY - 1)
+                let start = NSPoint(x: grip.frame.midX, y: grip.frame.midY)
+                if args.count > 3 { EditorController.onDragStep = { debugShot(window: window, path: args[3]) } }
+                NSApp.postEvent(mouse(.leftMouseDragged, p), atStart: false)
+                NSApp.postEvent(mouse(.leftMouseDragged, p), atStart: false)
+                NSApp.postEvent(mouse(.leftMouseUp, p), atStart: false)
+                undo?.beginUndoGrouping()
+                grip.mouseDown(with: mouse(.leftMouseDown, start))
+                undo?.endUndoGrouping()
+                EditorController.onDragStep = nil
+                print("  TEXT MOVED:", editor.text.debugDescription, "undo:", undo?.undoActionName ?? "-")
             case "chartclick":
                 guard let rect = chart(Int(args.first ?? "0") ?? 0) else { break }
                 let clicks = Int(args.count > 1 ? args[1] : "1") ?? 1
