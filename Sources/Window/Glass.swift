@@ -60,54 +60,36 @@ final class ScrollEdgeBlurView: NSView {
     }
 }
 
-/// Blurs what's behind it, most at the top and none at the bottom. Uses the private
-/// CABackdropLayer and variableBlur CAFilter, adapted from Haze (MrKai77/Haze, Apache-2.0).
+/// Blurs what's behind it, most at the top and none at the bottom, using the private
+/// CABackdropLayer and variableBlur filter. Without them it draws nothing.
 private final class VariableBackdropView: NSView {
-    private let filter: NSObject?
-
     init(maxRadius: CGFloat) {
-        filter = Self.makeFilter(maxRadius: maxRadius)
         super.init(frame: .zero)
-        guard let type = NSClassFromString("CABackdropLayer") as? CALayer.Type else { return }
+        guard let layerType = NSClassFromString("CABackdropLayer") as? CALayer.Type,
+              let filter = Self.makeFilter(maxRadius: maxRadius) else { return }
         wantsLayer = true
-        let backdrop = type.init()
-        layer = backdrop
-        backdrop.masksToBounds = true
-        backdrop.setValue(true, forKey: "windowServerAware")
-        backdrop.setValue(true, forKey: "allowsInPlaceFiltering")
-        backdrop.setValue(true, forKey: "allowsGroupBlending")
-        backdrop.setValue(true, forKey: "allowsGroupOpacity")
-        backdrop.setValue(false, forKey: "allowsEdgeAntialiasing")
-        backdrop.setValue(true, forKey: "disablesOccludedBackdropBlurs")
-        backdrop.setValue(true, forKey: "ignoresOffscreenGroups")
-        backdrop.setValue(12.0, forKey: "bleedAmount")
+        layer = layerType.init()
+        layer?.filters = [filter]
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    override func layout() {
-        super.layout()
-        guard let filter else { return }
-        layer?.filters = []
-        layer?.filters = [filter]
-    }
-
     private static func makeFilter(maxRadius: CGFloat) -> NSObject? {
-        let selector = Selector(("filterWithType:"))
-        guard let type = NSClassFromString("CAFilter") as AnyObject as? NSObject, type.responds(to: selector),
-              let made = type.perform(selector, with: "variableBlur")?.takeUnretainedValue() as? NSObject,
+        let create = Selector(("filterWithType:"))
+        guard let filterType = NSClassFromString("CAFilter") as AnyObject as? NSObject, filterType.responds(to: create),
+              let filter = filterType.perform(create, with: "variableBlur")?.takeUnretainedValue() as? NSObject,
               let gradient = CIFilter(name: "CILinearGradient") else { return nil }
         gradient.setValue(CIVector(x: 0, y: 100), forKey: "inputPoint0")
         gradient.setValue(CIColor.black, forKey: "inputColor0")
         gradient.setValue(CIVector(x: 0, y: 0), forKey: "inputPoint1")
         gradient.setValue(CIColor.clear, forKey: "inputColor1")
-        guard let output = gradient.outputImage,
-              let mask = CIContext().createCGImage(output, from: CGRect(x: 0, y: 0, width: 100, height: 100)) else { return nil }
-        made.setValue(true, forKey: "inputNormalizeEdges")
-        made.setValue(maxRadius, forKey: "inputRadius")
-        made.setValue(mask, forKey: "inputMaskImage")
-        return made
+        guard let ramp = gradient.outputImage,
+              let mask = CIContext().createCGImage(ramp, from: CGRect(x: 0, y: 0, width: 1, height: 100)) else { return nil }
+        filter.setValue(true, forKey: "inputNormalizeEdges")
+        filter.setValue(maxRadius, forKey: "inputRadius")
+        filter.setValue(mask, forKey: "inputMaskImage")
+        return filter
     }
 }
