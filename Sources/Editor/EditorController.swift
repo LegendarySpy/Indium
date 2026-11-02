@@ -3,7 +3,7 @@ import Combine
 import UniformTypeIdentifiers
 
 /// Owns one text system and whichever note is currently shown in it.
-final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegate, NSLayoutManagerDelegate, ImageResolving {
+final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegate, ImageResolving {
     let scrollView = NSScrollView()
     let textView: EditorTextView
     let storage = NSTextStorage()
@@ -184,7 +184,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         tv.setAccessibilityLabel("Note")
         tv.registerForDraggedTypes([.fileURL, .png, .tiff])
         storage.delegate = self
-        layoutManager.delegate = self
+        layoutManager.onLayoutComplete = { [weak tv] in tv?.placeBacklinks() }
 
         scrollView.documentView = tv
         scrollView.hasVerticalScroller = true
@@ -456,10 +456,6 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     private static func noteName(_ url: URL) -> String {
         url.deletingPathExtension().lastPathComponent
-    }
-
-    func layoutManager(_ layoutManager: NSLayoutManager, didCompleteLayoutFor textContainer: NSTextContainer?, atEnd layoutFinishedFlag: Bool) {
-        textView.placeBacklinks()
     }
 
     private func setText(_ text: String) {
