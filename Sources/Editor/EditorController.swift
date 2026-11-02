@@ -435,6 +435,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         storage.beginEditing()
         storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: text)
         storage.endEditing()
+        styler.rescan(storage)
         isLoading = false
     }
 
@@ -656,6 +657,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             textView.didChangeText()
             textView.undoManager?.setActionName("Change from Another App")
         }
+        styler.rescan(storage)
         let caret = outsideHiddenFrontmatter(NSRange(location: min(map(selection.location), storage.length), length: 0))
         textView.setSelectedRange(caret)
         isLoading = false

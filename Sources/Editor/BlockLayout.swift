@@ -87,6 +87,10 @@ struct LayoutModel {
             switch block.kind {
             case .blank:
                 flush()
+            case .frontmatter:
+                flush()
+                pending.append(i)
+                flush()
             case let .columnMarker(.start(ratios)) where region == nil && validRegionStarts.contains(i):
                 flush()
                 region = LayoutRegion(ratios: ratios, columns: [LayoutColumn()])

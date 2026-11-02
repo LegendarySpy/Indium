@@ -77,6 +77,11 @@ final class MarkdownStyler {
 
     // MARK: Entry points
 
+    func rescan(_ storage: NSTextStorage) {
+        text = storage.string as NSString
+        blocks = MarkdownScanner.scan(text)
+    }
+
     func styleAll(_ storage: NSTextStorage, selection: [NSRange]) {
         self.selection = selection
         text = storage.string as NSString
