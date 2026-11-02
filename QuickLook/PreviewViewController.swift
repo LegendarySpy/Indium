@@ -10,6 +10,9 @@ final class PreviewViewController: NSViewController, QLPreviewingController, Ima
     private let styler = MarkdownStyler(config: .current)
     private var textView: PreviewTextView!
     private var noteURL: URL?
+    private var styledScroll: NSScrollView!
+    private var rawScroll: NSScrollView?
+    private var rawText = ""
 
     override func loadView() {
         let config = styler.config
@@ -52,8 +55,26 @@ final class PreviewViewController: NSViewController, QLPreviewingController, Ima
         scroll.drawsBackground = true
         scroll.backgroundColor = Palette.background
         scroll.borderType = .noBorder
-        scroll.appearance = AppSettings.shared.appearance.appearance
-        view = scroll
+        // The toggle sits in a strip above the text, where nothing resets its cursor.
+        scroll.frame = NSRect(x: 0, y: 0, width: 800, height: 600 - 44)
+        scroll.autoresizingMask = [.width, .height]
+        styledScroll = scroll
+
+        let root = PreviewRootView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        root.appearance = AppSettings.shared.appearance.appearance
+        root.addSubview(scroll)
+
+        let toggle = RawToggle(image: NSImage(systemSymbolName: "chevron.left.forwardslash.chevron.right",
+                                             accessibilityDescription: "Show raw Markdown") ?? NSImage(),
+                              target: self, action: #selector(modeChanged(_:)))
+        toggle.setButtonType(.pushOnPushOff)
+        toggle.isBordered = false
+        toggle.contentTintColor = .secondaryLabelColor
+        toggle.toolTip = "Show raw Markdown"
+        toggle.frame = NSRect(x: 800 - 10 - 28, y: 600 - 10 - 28, width: 28, height: 28)
+        toggle.autoresizingMask = [.minXMargin, .minYMargin]
+        root.addSubview(toggle)
+        view = root
         preferredContentSize = NSSize(width: config.columnWidth + config.gutter * 2 + 80, height: 800)
     }
 
@@ -61,6 +82,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController, Ima
         var encoding = String.Encoding.utf8
         let text = try (try? String(contentsOf: url, encoding: .utf8)) ?? String(contentsOf: url, usedEncoding: &encoding)
         noteURL = url
+        rawText = text
         _ = view
         storage.setAttributedString(NSAttributedString(string: text))
         restyle()
@@ -71,6 +93,38 @@ final class PreviewViewController: NSViewController, QLPreviewingController, Ima
     override func viewDidAppear() {
         super.viewDidAppear()
         textView.scroll(.zero)
+    }
+
+    @objc private func modeChanged(_ sender: NSButton) {
+        let showsRaw = sender.state == .on
+        sender.toolTip = showsRaw ? "Show preview" : "Show raw Markdown"
+        sender.image?.accessibilityDescription = sender.toolTip
+        sender.contentTintColor = showsRaw ? .labelColor : .secondaryLabelColor
+        if showsRaw, rawScroll == nil { rawScroll = makeRawScroll() }
+        rawScroll?.isHidden = !showsRaw
+        styledScroll.isHidden = showsRaw
+    }
+
+    /// The file's text exactly as saved, built the first time it's asked for.
+    private func makeRawScroll() -> NSScrollView {
+        let scroll = NSTextView.scrollableTextView()
+        scroll.frame = styledScroll.frame
+        scroll.autoresizingMask = [.width, .height]
+        scroll.autohidesScrollers = true
+        scroll.borderType = .noBorder
+        scroll.backgroundColor = Palette.background
+        if let tv = scroll.documentView as? NSTextView {
+            tv.isEditable = false
+            tv.isSelectable = true
+            tv.isRichText = false
+            tv.backgroundColor = Palette.background
+            tv.textColor = .labelColor
+            tv.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+            tv.textContainerInset = NSSize(width: 24, height: 8)
+            tv.string = rawText
+        }
+        view.addSubview(scroll, positioned: .below, relativeTo: styledScroll)
+        return scroll
     }
 
     private func columnChanged(_ column: CGFloat) {
@@ -201,6 +255,24 @@ final class PreviewViewController: NSViewController, QLPreviewingController, Ima
     }
 }
 
+private final class PreviewRootView: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        Palette.background.setFill()
+        dirtyRect.fill()
+    }
+}
+
+/// Draws its own fill, so it follows the appearance and shows when Raw is on.
+private final class RawToggle: NSButton {
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        Palette.background.blended(withFraction: state == .on ? 0.16 : 0.06, of: .labelColor)?.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 7, yRadius: 7).fill()
+        super.draw(dirtyRect)
+    }
+}
+
 /// Centers the note's column like the editor does and draws floating tables and images.
 final class PreviewTextView: NSTextView {
     var columnWidth: CGFloat = 700 { didSet { updateGeometry() } }
@@ -208,7 +280,7 @@ final class PreviewTextView: NSTextView {
     var onColumnChange: ((CGFloat) -> Void)?
     private var insetX: CGFloat = 0
     private var column: CGFloat = 0
-    private let topPadding: CGFloat = 36
+    private let topPadding: CGFloat = 8
 
     override var textContainerOrigin: NSPoint { NSPoint(x: insetX, y: topPadding) }
 
