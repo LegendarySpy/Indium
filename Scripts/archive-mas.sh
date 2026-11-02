@@ -27,7 +27,7 @@ for part in "$VERSION" "$BUILD"; do
 done
 # Each version and build gets its own folder. Nothing here deletes or overwrites: an
 # existing folder means that build was already archived, so the script stops.
-OUT="build/AppStore/Indium-$VERSION-$BUILD"
+OUT="build/AppStore.noindex/Indium-$VERSION-$BUILD"
 ARCHIVE="$OUT/Indium.xcarchive"
 if [[ -e "$OUT" ]]; then
   echo "error: $OUT already exists. Use a new build number, or move that folder away yourself." >&2
