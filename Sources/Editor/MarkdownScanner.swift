@@ -582,16 +582,18 @@ enum MarkdownScanner {
         }
 
         // Math.
-        for (regex, display) in [(Regex.displayMathInline, true), (Regex.inlineMath, false)] {
-            for m in regex.matches(in: line as String, range: full) where free(m.range) {
-                let d = display ? 2 : 1
-                consume(m.range)
-                spans.append(Span(kind: .math(line.substring(with: m.range(at: 1)), display: display), range: abs(m.range),
-                                  markers: [abs(NSRange(location: m.range.location, length: d)),
-                                            abs(NSRange(location: NSMaxRange(m.range) - d, length: d))],
-                                  content: abs(m.range(at: 1))))
-            }
+        func addMath(_ range: NSRange, display: Bool) {
+            guard free(range) else { return }
+            let d = display ? 2 : 1
+            let content = NSRange(location: range.location + d, length: range.length - 2 * d)
+            consume(range)
+            spans.append(Span(kind: .math(line.substring(with: content), display: display), range: abs(range),
+                              markers: [abs(NSRange(location: range.location, length: d)),
+                                        abs(NSRange(location: NSMaxRange(range) - d, length: d))],
+                              content: abs(content)))
         }
+        for m in Regex.displayMathInline.matches(in: line as String, range: full) { addMath(m.range, display: true) }
+        for range in inlineMathRanges(in: line) { addMath(range, display: false) }
 
         // Escapes elsewhere: the escaped character loses its syntactic meaning.
         for m in Regex.escape.matches(in: line as String, range: full) where free(m.range) {
@@ -783,8 +785,6 @@ enum MarkdownScanner {
         static let escape = make(#"\\[!-/:-@\[-`{-~]"#)
         static let codeSpan = make(#"(`+)(?!`)(.+?)(?<!`)\1(?!`)"#)
         static let displayMathInline = make(#"\$\$(.+?)\$\$"#)
-        // A `\ce{…}`'s braces may hold `$…$`, up to the depth Mhchem reads inside a math span here.
-        static let inlineMath = make(#"(?<![\\$])\$(?=[^\s$])((?:\\ce\{(?:\\.|[^{}\\]|\{(?:\\.|[^{}\\]|\{(?:\\.|[^{}\\])*\})*\})*\}|\\.|[^\\$])+?)(?<=[^\s\\])\$(?![\d$])"#)
         static let wikiLink = make(#"(!?)\[\[([^\[\]\n]+?)\]\]"#)
         static let link = make(#"(!?)\[((?:\\.|[^\[\]\\]|\[[^\[\]]*\])*)\]\((<[^>\n]*>|[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)(?:[ \t]+(?:"[^"]*"|'[^']*'))?\)"#)
         static let autolink = make(#"<((?:https?|mailto):[^>\s]+)>"#)
@@ -806,4 +806,69 @@ enum MarkdownScanner {
         static let strikeTyping = make(#"(?<!~)~~(?=[^\s~])([^~]+?)[ \t]+~~(?!~)"#)
         static let highlightTyping = make(#"(?<!=)==(?=[^\s=])([^=]+?)[ \t]+==(?!=)"#)
     }
+}
+
+/// Inline `$…$` spans of a line, in one pass. A `\ce{…}`'s balanced braces may hold `$`.
+private func inlineMathRanges(in line: NSString) -> [NSRange] {
+    guard line.range(of: "$").location != NSNotFound else { return [] }
+    let dollar: unichar = 0x24, backslash: unichar = 0x5C
+    let count = line.length
+    let chars = (0..<count).map { line.character(at: $0) }
+
+    func isSpace(_ c: unichar) -> Bool {
+        UnicodeScalar(c).map { CharacterSet.whitespacesAndNewlines.contains($0) } ?? false
+    }
+    func isDigit(_ c: unichar) -> Bool {
+        UnicodeScalar(c).map { CharacterSet.decimalDigits.contains($0) } ?? false
+    }
+    func isLineEnd(_ c: unichar) -> Bool { [0x0A, 0x0B, 0x0C, 0x0D, 0x85, 0x2028, 0x2029].contains(c) }
+
+    var closingBrace: [Int: Int] = [:]
+    var open: [Int] = []
+    var b = 0
+    while b < count {
+        if chars[b] == backslash { b += 2; continue }
+        if chars[b] == 0x7B { open.append(b) } else if chars[b] == 0x7D, let start = open.popLast() { closingBrace[start] = b }
+        b += 1
+    }
+    /// The index past `\ce{…}` at `i`, if one starts there and its braces close.
+    func pastChemistry(_ i: Int) -> Int? {
+        guard i + 2 < count, chars[i + 1] == 0x63, chars[i + 2] == 0x65 else { return nil }
+        var j = i + 3
+        while j < count, isSpace(chars[j]) { j += 1 }
+        return closingBrace[j].map { $0 + 1 }
+    }
+    /// The closing `$` for the opener at `start`; a `$` that can't close ends the search.
+    func closer(_ start: Int) -> Int? {
+        var i = start + 1
+        while i < count {
+            if chars[i] == dollar {
+                let closes = !isSpace(chars[i - 1]) && chars[i - 1] != backslash
+                    && (i + 1 == count || (chars[i + 1] != dollar && !isDigit(chars[i + 1])))
+                return closes ? i : nil
+            }
+            if chars[i] == backslash {
+                if let past = pastChemistry(i) { i = past; continue }
+                guard i + 1 < count, !isLineEnd(chars[i + 1]) else { return nil }
+                i += 2
+            } else {
+                i += 1
+            }
+        }
+        return nil
+    }
+
+    var ranges: [NSRange] = []
+    var i = 0
+    while i + 1 < count {
+        let opens = chars[i] == dollar && (i == 0 || (chars[i - 1] != backslash && chars[i - 1] != dollar))
+            && chars[i + 1] != dollar && !isSpace(chars[i + 1])
+        if opens, let end = closer(i) {
+            ranges.append(NSRange(location: i, length: end - i + 1))
+            i = end + 1
+        } else {
+            i += 1
+        }
+    }
+    return ranges
 }
