@@ -838,10 +838,14 @@ private func inlineMathRanges(in line: NSString) -> [NSRange] {
         while j < count, isSpace(chars[j]) { j += 1 }
         return closingBrace[j].map { $0 + 1 }
     }
+    // A walk from one position always ends the same way, so a later opener stops where an earlier one failed.
+    var walked = [Bool](repeating: false, count: count)
     /// The closing `$` for the opener at `start`; a `$` that can't close ends the search.
     func closer(_ start: Int) -> Int? {
         var i = start + 1
         while i < count {
+            if walked[i] { return nil }
+            walked[i] = true
             if chars[i] == dollar {
                 let closes = !isSpace(chars[i - 1]) && chars[i - 1] != backslash
                     && (i + 1 == count || (chars[i + 1] != dollar && !isDigit(chars[i + 1])))
