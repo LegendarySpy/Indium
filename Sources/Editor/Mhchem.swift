@@ -90,7 +90,7 @@ enum Mhchem {
                 } else if !attached {
                     out.append(ch)
                     finish(.start)
-                } else if hyphen || bondsToGroup(c, i) {
+                } else if hyphen || (ch == "-" && bondsToGroup(c, i)) {
                     out += "\\mathord{-}"
                     finish(.start)
                 } else {
