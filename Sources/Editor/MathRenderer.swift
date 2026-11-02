@@ -42,8 +42,12 @@ enum MathRenderer {
         return c
     }()
 
+    // Typesetting takes up to about 40µs per byte, so this is about a second at worst.
+    private static let maxLength = 32_768
+
     /// Returns nil when the LaTeX cannot be parsed; callers then show the source.
     static func render(_ latex: String, size: CGFloat, display: Bool) -> MathRender? {
+        guard latex.utf8.count <= maxLength else { return nil }
         let key = "\(display ? "D" : "T")\(size)|\(latex)" as NSString
         if let hit = cache.object(forKey: key) { return hit.render }
         // The typesetter's style argument doesn't reach every path; state it in the source.
@@ -62,6 +66,7 @@ enum MathRenderer {
     /// so the preview keeps up instead of vanishing on every keystroke.
     static func renderWhileTyping(_ latex: String, size: CGFloat, display: Bool) -> MathRender? {
         if let r = render(latex, size: size, display: display) { return r }
+        guard latex.utf8.count <= maxLength else { return nil }
         var s = latex
         for _ in 0..<8 {
             if let r = render(closeOpenGroups(s), size: size, display: display) { return r }

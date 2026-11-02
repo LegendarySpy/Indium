@@ -8,7 +8,9 @@ public enum MathTypesetting {
         var error: NSError?
         guard let list = MTMathListBuilder.build(fromString: latex, error: &error), error == nil else { return nil }
         let font = MathFont.latinModernFont.mtfont(size: fontSize)
-        return MTTypesetter.createLineForMathList(list, font: font, style: displayStyle ? .display : .text)
+        guard let display = MTTypesetter.createLineForMathList(list, font: font, style: displayStyle ? .display : .text),
+              display.ascent + display.descent <= MTTypesetter.maxHeight else { return nil }
+        return display
     }
 }
 

@@ -274,6 +274,15 @@ extension MTMathListBuilder {
         }
     }
 
+    // An arrow's labels are typeset twice, doubling the cost per nested arrow, so a label counts as many levels.
+    static let arrowLabelCost = 12
+
+    /// The extra depth a script on `atom` costs: an arrow's label, when `^` or `_` adds one later.
+    func labelCost(_ atom: MTMathAtom?) -> Int {
+        if let op = atom as? MTLargeOperator, case .arrow = op.decoration { return Self.arrowLabelCost }
+        return 0
+    }
+
     /// Commands handled here; `handled` is false for anything else.
     mutating func indiumAtom(forCommand command: String) -> (handled: Bool, atom: MTMathAtom?) {
         switch command {
@@ -346,6 +355,8 @@ extension MTMathListBuilder {
         }
         if let arrow = Self.extensibleArrows[command] {
             // \xrightarrow[below]{above}
+            depth += Self.arrowLabelCost
+            defer { depth -= Self.arrowLabelCost }
             skipSpaces()
             var below: MTMathList?
             if hasCharacters, string[currentCharIndex] == "[" {
