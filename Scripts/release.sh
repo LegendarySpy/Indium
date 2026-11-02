@@ -13,7 +13,8 @@ VERSION=${1:?version, e.g. 1.1}
 BUILD=${2:-$(date +%Y%m%d%H%M)}
 REPO="LegendarySpy/Indium"
 TEAM="S8W699VPD7"
-APP=build/Build/Products/Release/Indium.app
+DERIVED=build/Release.noindex
+APP=$DERIVED/Build/Products/Release/Indium.app
 ZIP="Releases/Indium-$VERSION.zip"
 
 IDENTITY=""
@@ -22,7 +23,7 @@ if security find-identity -v -p codesigning | grep -q "Developer ID Application"
 fi
 
 xcodegen generate -q
-xcodebuild -project Indium.xcodeproj -scheme Indium -configuration Release -derivedDataPath build -quiet \
+xcodebuild -project Indium.xcodeproj -scheme Indium -configuration Release -derivedDataPath "$DERIVED" -quiet \
   MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD" build
 
 if [[ -n "$IDENTITY" ]]; then
@@ -60,7 +61,7 @@ fi
 
 SIGN=(--account indium)
 [[ -n "${SPARKLE_KEY_FILE:-}" ]] && SIGN=(--ed-key-file "$SPARKLE_KEY_FILE")
-build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast "${SIGN[@]}" --embed-release-notes \
+$DERIVED/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast "${SIGN[@]}" --embed-release-notes \
   --download-url-prefix "https://github.com/$REPO/releases/download/v$VERSION/" Releases
 
 echo "Built $ZIP and Releases/appcast.xml"
