@@ -4,7 +4,20 @@ enum Mhchem {
     private enum Previous { case start, coefficient, formula }
 
     private static let arrows: [(token: String, command: String)] = [
-        ("<=>", "rightleftharpoons"), ("<->", "xleftrightarrow"), ("->", "xrightarrow"), ("<-", "xleftarrow"),
+        ("<-->", "xrightleftarrows"), ("<=>>", "xRightleftharpoons"), ("<<=>", "xLeftrightharpoons"),
+        ("<=>", "xrightleftharpoons"), ("<->", "xleftrightarrow"), ("->", "xrightarrow"), ("<-", "xleftarrow"),
+        ("\u{2192}", "xrightarrow"), ("\u{27F6}", "xrightarrow"), ("\u{2190}", "xleftarrow"), ("\u{27F5}", "xleftarrow"),
+        ("\u{2194}", "xleftrightarrow"), ("\u{27F7}", "xleftrightarrow"), ("\u{21CC}", "xrightleftharpoons"),
+        ("\u{21C4}", "xrightleftarrows"),
+    ]
+    private static let bonds: [String: String] = [
+        "-": "\\mathord{-}", "1": "\\mathord{-}", "=": "\\mathord{=}", "2": "\\mathord{=}",
+        "#": "\\mathord{\\equiv}", "3": "\\mathord{\\equiv}",
+        "~": "\\tripledash ", "~-": "\\tripledashsingle ", "~--": "\\tripledashdouble ", "~=": "\\tripledashdouble ",
+        "-~-": "\\singletripledashsingle ",
+        "...": "\\mathord{\\cdot}\\mathord{\\cdot}\\mathord{\\cdot}",
+        "....": "\\mathord{\\cdot}\\mathord{\\cdot}\\mathord{\\cdot}\\mathord{\\cdot}",
+        "->": "\\mathord{\\rightarrow}", "<-": "\\mathord{\\leftarrow}",
     ]
     private static let states = ["(aq)", "(s)", "(l)", "(g)"]
     private static let dot = "\\,\\mathord{\\cdot}\\,"
@@ -26,7 +39,8 @@ enum Mhchem {
             if name == "ce" || name == "pu", open < c.count, c[open] == "{", let close = matching(c, open) {
                 let body = Array(c[(open + 1)..<close])
                 if nesting(body) <= maxNesting, let tex = name == "ce" ? ce(body) : pu(body) {
-                    out += "\\mathrm{\(tex)}"
+                    // Nothing to draw isn't an error: mhchem typesets an empty formula as nothing.
+                    out += tex.isEmpty ? "\\phantom{}" : "\\mathrm{\(tex)}"
                     i = close + 1
                     continue
                 }
@@ -38,7 +52,11 @@ enum Mhchem {
         return out
     }
 
-    private static func ce(_ c: [Character], depth: Int = 0) -> String? {
+    private static func ce(_ source: [Character], depth: Int = 0) -> String? {
+        let c = source.flatMap { ch -> [Character] in
+            if "\u{2212}\u{2013}\u{2014}\u{2010}".contains(ch) { return ["-"] }
+            return ch == "\u{2026}" ? [".", ".", "."] : [ch]
+        }
         var out = ""
         var i = 0
         var previous = Previous.start
@@ -72,14 +90,7 @@ enum Mhchem {
                 }
                 let above = labels.first ?? ""
                 let below = labels.count > 1 ? labels[1] : ""
-                if arrow.command.hasPrefix("x") {
-                    out += "\\\(arrow.command)" + (below.isEmpty ? "" : "[{\(below)}]") + "{\(above)}"
-                } else {
-                    var stacked = "\\\(arrow.command)"
-                    if !above.isEmpty { stacked = "\\overset{\(above)}{\(stacked)}" }
-                    if !below.isEmpty { stacked = "\\underset{\(below)}{\(stacked)}" }
-                    out += stacked + " "
-                }
+                out += "\\\(arrow.command)" + (below.isEmpty ? "" : "[{\(below)}]") + "{\(above)}"
                 finish(.start)
             } else if ch == "+" || ch == "-" {
                 i += 1
@@ -113,11 +124,19 @@ enum Mhchem {
                     i += 1
                     out += "\\uparrow "
                     finish(.formula)
-                } else {
+                } else if attached {
                     i += 1
-                    guard attached, let argument = script(c, &i, charge: ch == "^") else { return nil }
-                    out += "\(ch){\(argument)}"
+                    guard let argument = script(c, &i, charge: ch == "^"), let body = scriptBody(argument) else { return nil }
+                    out += "\(ch){\(body)}"
+                } else {
+                    guard let scripts = prescripts(c, &i) else { return nil }
+                    lead()
+                    out += scripts
+                    finish(.start)
                 }
+            } else if ch == "'", attached {
+                let primes = run(c, &i, while: { $0 == "'" })
+                out += "^{\(primes.map { _ in "\\prime " }.joined())}"
             } else if ch == "v", standalone {
                 i += 1
                 out += "\\downarrow "
@@ -141,15 +160,26 @@ enum Mhchem {
                 out.append(ch)
                 finish(.start)
             } else if ch == "{" {
-                guard let close = matching(c, i), !c[i..<close].contains("$") else { return nil }
+                guard let close = matching(c, i), let text = textWithMath(Array(c[(i + 1)..<close])) else { return nil }
                 lead()
-                out += "\\text{\(String(c[(i + 1)..<close]))}"
+                out += text
                 i = close + 1
                 finish(.formula)
+            } else if ch == "$" {
+                lead()
+                guard let tex = inlineMath(c, &i) else { return nil }
+                out += tex
+                // Like a coefficient before a spaced formula: `$n$ H2O`.
+                finish(i < c.count && c[i].isWhitespace ? .coefficient : .formula)
+            } else if c[i...].starts(with: "\\bond{") {
+                guard let close = matching(c, i + 5), let bond = bonds[String(c[(i + 6)..<close])] else { return nil }
+                out += bond
+                i = close + 1
+                finish(.start)
             } else if ch == "\\" {
                 lead()
                 guard let tex = command(c, &i) else { return nil }
-                out += tex
+                out += expand(tex)
                 finish(.formula)
             } else if isDigit(ch) {
                 if attached {
@@ -173,11 +203,100 @@ enum Mhchem {
                     out.append(ch)
                     finish(.formula)
                 }
+            } else if !ch.isASCII {
+                i += 1
+                lead()
+                out += "\\text{\(ch)}"
+                finish(.formula)
             } else {
                 return nil
             }
         }
         return out
+    }
+
+    /// `^14_6` before an element: the scripts on an empty base, right-aligned as mhchem does.
+    private static func prescripts(_ c: [Character], _ i: inout Int) -> String? {
+        var scripts: [Character: String] = [:]
+        var j = i
+        while j < c.count, c[j] == "^" || c[j] == "_", scripts[c[j]] == nil {
+            let key = c[j]
+            j += 1
+            guard j < c.count else { return nil }
+            if c[j] == "{" {
+                guard let close = matching(c, j), let body = scriptBody(String(c[(j + 1)..<close])) else { return nil }
+                scripts[key] = body
+                j = close + 1
+            } else if c[j] == "." {
+                scripts[key] = scriptBody(".")
+                j += 1
+            } else {
+                let start = j
+                if c[j] == "-" || c[j] == "+" { j += 1 }
+                let digits = run(c, &j, while: isDigit)
+                guard !digits.isEmpty else { return nil }
+                scripts[key] = String(c[start..<j])
+            }
+        }
+        guard j < c.count, isLetter(c[j]) || "\\{([$".contains(c[j]) || !c[j].isASCII else { return nil }
+        i = j
+        var sup = scripts["^"] ?? "", sub = scripts["_"] ?? ""
+        if !sup.isEmpty, !sub.isEmpty, (sup + sub).allSatisfy({ isDigit($0) || $0 == "-" || $0 == "+" }) {
+            let pad = "\\phantom{\((sup.count > sub.count ? sup : sub).prefix(abs(sup.count - sub.count)))}"
+            if sup.count > sub.count { sub = pad + sub } else if sub.count > sup.count { sup = pad + sup }
+        }
+        return "{}" + (sup.isEmpty ? "" : "^{\(sup)}") + (sub.isEmpty ? "" : "_{\(sub)}")
+    }
+
+    /// A charge or index as written, with its radical dots and `$…$` typeset.
+    private static func scriptBody(_ text: String) -> String? {
+        let c = Array(text)
+        var out = ""
+        var i = 0
+        while i < c.count {
+            if c[i] == "$" {
+                guard let tex = inlineMath(c, &i) else { return nil }
+                out += tex
+            } else if c[i] == "\\" {
+                let end = min(i + 2, c.count)
+                out += String(c[i..<end])
+                i = end
+            } else if c[i] == "'" {
+                out += "\\prime "
+                i += 1
+            } else if c[i] == ".", i + 1 == c.count || !isDigit(c[i + 1]) {
+                out += "\\mathord{\\bullet}"
+                i += 1
+            } else {
+                out.append(c[i])
+                i += 1
+            }
+        }
+        return out
+    }
+
+    private static func textWithMath(_ c: [Character]) -> String? {
+        var out = ""
+        var i = 0
+        while i < c.count {
+            if c[i] == "$" {
+                guard let tex = inlineMath(c, &i) else { return nil }
+                out += tex
+            } else {
+                let text = run(c, &i, while: { $0 != "$" })
+                out += "\\text{\(text)}"
+            }
+        }
+        return out
+    }
+
+    /// `$…$` starting at `i`, back in the math font; the formula around it is upright.
+    private static func inlineMath(_ c: [Character], _ i: inout Int) -> String? {
+        var end = i + 1
+        while end < c.count, c[end] != "$" { end += c[end] == "\\" ? 2 : 1 }
+        guard end < c.count else { return nil }
+        defer { i = end + 1 }
+        return "\\mathnormal{\(expand(String(c[(i + 1)..<end])))}"
     }
 
     private static func pu(_ c: [Character]) -> String? {
@@ -377,9 +496,14 @@ enum Mhchem {
             defer { i = close + 1 }
             return String(c[(i + 1)..<close])
         }
+        if c[i] == "$" {
+            let open = i
+            guard inlineMath(c, &i) != nil else { return nil }
+            return String(c[open..<i])
+        }
         let start = i
         _ = run(c, &i, while: isDigit)
-        if i == start, isLetter(c[i]) || c[i] == "*" { i += 1 }
+        if i == start, isLetter(c[i]) || c[i] == "*" || (charge && c[i] == ".") { i += 1 }
         if charge, i < c.count, c[i] == "+" || c[i] == "-" { i += 1 }
         return i > start ? String(c[start..<i]) : nil
     }

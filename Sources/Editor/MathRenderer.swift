@@ -126,7 +126,7 @@ enum MathRenderer {
         // Spellings the typesetter knows under another name.
         let aliases = [
             "mathscr": "mathcal", "mbox": "text", "textnormal": "text", "textup": "text", "hbox": "text",
-            "lvert": "vert", "rvert": "vert", "lVert": "Vert", "rVert": "Vert", "mathnormal": "mathit",
+            "lvert": "vert", "rvert": "vert", "lVert": "Vert", "rVert": "Vert",
         ]
         for (from, to) in aliases {
             s = s.replacingOccurrences(of: #"\\"# + from + #"(?![A-Za-z])"#, with: #"\\"# + to, options: .regularExpression)

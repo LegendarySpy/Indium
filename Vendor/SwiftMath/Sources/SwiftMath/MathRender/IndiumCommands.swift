@@ -18,6 +18,10 @@ public enum MTDecoration {
     case braceAbove, braceBelow
     /// An arrow as wide as its labels: heads at either end, `fill` repeated between.
     case arrow(left: String?, right: String?, fill: String)
+    /// Two such arrows stacked; a short one is half as wide and centered.
+    case stackedArrows(upper: (left: String?, right: String?, short: Bool), lower: (left: String?, right: String?, short: Bool))
+    /// mhchem's bonds with a dashed line: `dashed` for each line, top to bottom.
+    case bondLines(dashed: [Bool])
     /// A thin frame around the base (`\boxed`).
     case box
     /// Strokes through the base (`\cancel`, `\bcancel`, `\xcancel`).
@@ -63,8 +67,8 @@ extension MTTypesetter {
         let rule = styleFont.mathTable?.fractionRuleThickness ?? em * 0.04
         let range = op.indexRange
 
-        if case let .arrow(left, right, fill) = op.decoration {
-            // As wide as the wider label plus a little, and never shorter than \longrightarrow.
+        // As wide as the wider label plus a little, and never shorter than \longrightarrow.
+        func arrowWidth() -> CGFloat {
             let scriptStyle = self.scriptStyle()
             let scriptFont = font.copy(withSize: MTTypesetter.getStyleSize(scriptStyle, font: font))
             var labels: CGFloat = 0
@@ -75,7 +79,46 @@ extension MTTypesetter {
                     labels = max(labels, d.width)
                 }
             }
-            return makeExtensibleArrow(width: max(labels + em * 0.6, em * 1.6), left: left, right: right, fill: fill, range: range)
+            return max(labels + em * 0.6, em * 1.6)
+        }
+
+        if case let .arrow(left, right, fill) = op.decoration {
+            return makeExtensibleArrow(width: arrowWidth(), left: left, right: right, fill: fill, range: range)
+        }
+
+        if case let .stackedArrows(upper, lower) = op.decoration {
+            let width = arrowWidth()
+            let offset = em * 0.14
+            var rows: [MTDisplay] = []
+            for (row, y) in [(upper, offset), (lower, -offset)] {
+                let rowWidth = row.short ? width / 2 : width
+                guard let arrow = makeExtensibleArrow(width: rowWidth, left: row.left, right: row.right, fill: "\u{2212}", range: range) else { return nil }
+                arrow.position = CGPoint(x: (width - rowWidth) / 2, y: y)
+                rows.append(arrow)
+            }
+            let display = MTMathListDisplay(withDisplays: rows, range: range)
+            display.width = width
+            return display
+        }
+
+        if case let .bondLines(dashed) = op.decoration {
+            let axis = styleFont.mathTable?.axisHeight ?? em * 0.25
+            let stroke = MTStrokeDisplay()
+            stroke.range = range
+            stroke.lineWidth = rule
+            let inset = em * 0.08, width = em * 0.78, gap = em * 0.2, dash = (width - 2 * inset) / 5
+            let top = axis + gap * CGFloat(dashed.count - 1) / 2
+            for (row, isDashed) in dashed.enumerated() {
+                let y = top - gap * CGFloat(row)
+                for piece in 0..<(isDashed ? 3 : 1) {
+                    let x = inset + (isDashed ? CGFloat(piece) * 2 * dash : 0)
+                    stroke.segments.append((CGPoint(x: x, y: y), CGPoint(x: x + (isDashed ? dash : width - 2 * inset), y: y)))
+                }
+            }
+            stroke.width = width
+            stroke.ascent = top + rule
+            stroke.descent = max(0, -(top - gap * CGFloat(dashed.count - 1)) + rule)
+            return stroke
         }
 
         guard let inner = MTTypesetter.createLineForMathList(base, font: font, style: style, cramped: cramped) else { return nil }
@@ -204,6 +247,15 @@ extension MTMathListBuilder {
         "xLeftrightarrow": .arrow(left: "\u{21D0}", right: "\u{21D2}", fill: "="),
         "xmapsto": .arrow(left: "\u{22A2}", right: "\u{2192}", fill: "\u{2212}"),
         "xlongequal": .arrow(left: nil, right: nil, fill: "="),
+        "xrightleftharpoons": .stackedArrows(upper: (nil, "\u{21C0}", false), lower: ("\u{21BD}", nil, false)),
+        "xRightleftharpoons": .stackedArrows(upper: (nil, "\u{21C0}", false), lower: ("\u{21BD}", nil, true)),
+        "xLeftrightharpoons": .stackedArrows(upper: (nil, "\u{21C0}", true), lower: ("\u{21BD}", nil, false)),
+        "xrightleftarrows": .stackedArrows(upper: (nil, "\u{2192}", false), lower: ("\u{2190}", nil, false)),
+    ]
+
+    static let bondCommands: [String: [Bool]] = [
+        "tripledash": [true], "tripledashsingle": [true, false], "tripledashdouble": [true, false, false],
+        "singletripledashsingle": [false, true, false],
     ]
 
     /// Atom types the \mathXXX class commands give their argument.
@@ -305,6 +357,13 @@ extension MTMathListBuilder {
             op.decoration = arrow
             if let above, !above.atoms.isEmpty { op.superScript = above }
             if let below, !below.atoms.isEmpty { op.subScript = below }
+            return (true, op)
+        }
+        if let lines = Self.bondCommands[command] {
+            let op = MTLargeOperator(base: MTMathList(), spacingType: .ordinary)
+            op.decoration = .bondLines(dashed: lines)
+            op.limits = false
+            op.alwaysLimits = false
             return (true, op)
         }
         if let type = Self.classCommands[command] {
