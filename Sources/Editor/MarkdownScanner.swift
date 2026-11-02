@@ -783,7 +783,8 @@ enum MarkdownScanner {
         static let escape = make(#"\\[!-/:-@\[-`{-~]"#)
         static let codeSpan = make(#"(`+)(?!`)(.+?)(?<!`)\1(?!`)"#)
         static let displayMathInline = make(#"\$\$(.+?)\$\$"#)
-        static let inlineMath = make(#"(?<![\\$])\$(?=[^\s$])((?:\\.|[^\\$])+?)(?<=[^\s\\])\$(?![\d$])"#)
+        // A `\ce{…}`'s braces may hold `$…$`, up to the depth Mhchem reads inside a math span here.
+        static let inlineMath = make(#"(?<![\\$])\$(?=[^\s$])((?:\\ce\{(?:\\.|[^{}\\]|\{(?:\\.|[^{}\\]|\{(?:\\.|[^{}\\])*\})*\})*\}|\\.|[^\\$])+?)(?<=[^\s\\])\$(?![\d$])"#)
         static let wikiLink = make(#"(!?)\[\[([^\[\]\n]+?)\]\]"#)
         static let link = make(#"(!?)\[((?:\\.|[^\[\]\\]|\[[^\[\]]*\])*)\]\((<[^>\n]*>|[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)(?:[ \t]+(?:"[^"]*"|'[^']*'))?\)"#)
         static let autolink = make(#"<((?:https?|mailto):[^>\s]+)>"#)
