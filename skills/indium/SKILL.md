@@ -55,7 +55,7 @@ LaTeX, `$inline$` or `$$display$$`. For a display equation, use `$$` on its own 
 - Escape percent: `$21.1\%$`. Outside math, write it plainly: 21.1%.
 - Use `\text{...}` for words and units: `$3.0\ \text{g}$`.
 - Fractions `\frac{a}{b}`, `\times`, `\cdot`, `\to`, `\sqrt{x}`, `\sum`, `\int`, Greek letters, `aligned`, `align`, `gather`, `pmatrix`, `bmatrix`, `cases`.
-- Chemistry: mhchem's `\ce{}` and `\pu{}` don't render. Write `$\mathrm{H_2SO_4}$`, `$\mathrm{Fe^{3+}}$`, or H$_2$O in prose.
+- Chemistry: use mhchem, `$\ce{CuSO4*5H2O -> CuSO4 + 5H2O}$`, `$\ce{SO4^2-}$`, `$\pu{1.5 g/mol}$`. Isotopes, `\bond`, `$…$` inside `\ce`, and arrows other than `->`, `<-`, `<->`, `<=>` don't render.
 - Use math for sub- and superscripts, not Unicode characters like ₂ or ², `<sub>`, or `~x~`.
 - A literal dollar sign in prose is `\$5`, so it isn't read as math.
 - Math works in table cells. Avoid `|` there, since it ends the cell: use `\vert`.

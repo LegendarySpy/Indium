@@ -180,7 +180,6 @@ final class MathSnippetConfig: NSObject {
         var out = "# Math Shortcuts\n\n"
         out += "Shortcuts as in Obsidian's LaTeX Suite: *auto* ones expand as you type, the others on Tab. In the replacements, `$0`, `$1`… are the blanks Tab moves through and `[[0]]`, `[[1]]`… what a regex trigger matched. "
         out += "`/` after a term makes a fraction of it, Tab leaves a bracket or the equation, and in a table cell bars are written `\\lvert`, `\\rvert`, `\\mid` so they can't split the row.\n\n"
-        out += "Not supported: mhchem's `\\ce{…}` and `\\pu{…}` don't typeset. Write formulas with subscripts instead: `$CuSO_{4}\\cdot 5H_{2}O$`.\n\n"
         out += "## Yours\n\n"
         out += "From `\(url.path)` (Format ▸ Edit Math Shortcuts…). A shortcut of yours wins over a built-in with the same trigger and priority.\n\n"
         if !problems.isEmpty {

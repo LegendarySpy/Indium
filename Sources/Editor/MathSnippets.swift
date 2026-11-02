@@ -267,7 +267,7 @@ struct MathSnippet {
         "angle", "triangle", "square", "checkmark", "displaystyle", "textstyle", "limits", "nolimits", "coprod", "sup",
         "arg", "deg", "dim", "gcd", "hom", "ker", "Pr", "bra", "ket", "braket", "mid", "nmid", "not", "neq", "ne",
         "approx", "cong", "pm", "mp", "div", "ast", "dagger", "ddagger", "aleph", "Re", "Im", "wp", "varnothing",
-        "rightharpoonup", "leftharpoondown", "hookrightarrow", "mapsto", "color", "textcolor", "phantom", "hspace",
+        "rightharpoonup", "leftharpoondown", "hookrightarrow", "mapsto", "color", "textcolor", "phantom", "hspace", "ce", "pu",
     ])
 
     /// True when `\word` followed by `letter` should become `\word letter`.
@@ -425,7 +425,7 @@ struct MathSnippet {
             .init("outer", "\\ket{${0:\\psi}} \\bra{${0:\\psi}} $1", "mAw"),
             .init("tayl", "${0:f}(${1:x} + ${2:h}) = ${0:f}(${1:x}) + ${0:f}'(${1:x})${2:h} + ${0:f}''(${1:x}) \\frac{${2:h}^{2}}{2!} + \\dots$3", "mAw"),
 
-            // Chemistry (isotopes; \ce and \pu need mhchem, which the typesetter doesn't have).
+            // Chemistry (isotopes).
             .init("he4", "{}^{4}_{2}He ", "mAw", priority: 1),
             .init("he3", "{}^{3}_{2}He ", "mAw", priority: 1),
             .init("iso", "{}^{${0:4}}_{${1:2}}${2:He}", "mAw"),
