@@ -225,8 +225,10 @@ private final class Reader {
         let full = text.substring(with: block.range)
         var lines = full.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
         if lines.last == "" { lines.removeLast() }
-        let fence = lines.first?.trimmingCharacters(in: .whitespaces).first
-        let closed = lines.count > 1 && lines.last?.trimmingCharacters(in: .whitespaces).first == fence
+        let opening = lines[0].trimmingCharacters(in: .whitespaces)
+        let closing = lines.last?.trimmingCharacters(in: .whitespaces) ?? ""
+        let fence = opening.prefix { $0 == opening.first }
+        let closed = lines.count > 1 && closing.count >= fence.count && closing.allSatisfy { $0 == opening.first }
         let body = lines.dropFirst().dropLast(closed ? 1 : 0).joined(separator: "\n")
         guard ChartModel.handles(language) else { return .code(language: language, body) }
         let text = self.text, blocks = scanned
@@ -307,7 +309,7 @@ private final class Reader {
             case .strongEmphasis: out.append(.styled(.bold, [.styled(.italic, children())]))
             case .strike: out.append(.styled(.strike, children()))
             case .highlight: out.append(.styled(.highlight, children()))
-            case .code: out.append(.styled(.code, [.text(content().trimmingCharacters(in: .whitespaces))]))
+            case .code: out.append(.styled(.code, [.text(content())]))
             case let .math(latex, display):
                 if let image = equation(latex, size: display ? 18 : 17, display: display) {
                     out.append(.image(image, alt: latex))
@@ -363,7 +365,8 @@ private final class Reader {
             result.data = jpeg
             result.fileExtension = "jpg"
         }
-        if let width, width > 0 {
+        // The scanner takes anything `Double` parses, `inf` included.
+        if let width, width > 0, width <= 10_000 {
             result.size = NSSize(width: width, height: width * image.size.height / image.size.width)
         }
         return result
