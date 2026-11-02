@@ -11,6 +11,7 @@ Indium opens an Obsidian vault as it is and writes plain Markdown back. This pag
 - `[[Wiki links]]`, with `|aliases`. A link to `[[Note#Heading]]` opens the note.
 - Images on a line of their own, `![[image.png]]` or `![](image.png)`, with a width (`![[image.png|300]]`).
 - `![[Note]]` embeds, including `![[Note#Heading]]` and `![[Note#^block]]`. Nested embeds go two levels deep, and a note that embeds itself (directly or in a loop) shows as a link.
+- Backlinks from `[[links]]` and `![[embeds]]` anywhere in the folder, resolved the way the links themselves are.
 - Callouts (`> [!note] Title`), with folding (`[!tip]-` starts closed, `[!tip]+` open).
 - `#tags`, shown as small pills.
 - `%% comments %%`, hidden until you edit them.
@@ -21,6 +22,7 @@ Indium opens an Obsidian vault as it is and writes plain Markdown back. This pag
 **Limits**
 
 - Embeds work only on a line of their own. `![[Note]]` in the middle of a sentence stays a link.
+- Backlinks ignore links in frontmatter, code, math and comments, and notes iCloud hasn't downloaded yet count once they arrive. Renaming a note doesn't rewrite links to it, so those links stop counting.
 - Only notes are embedded. PDFs, audio, video, canvases and bases stay links.
 - A `%%` comment that starts partway through a line and runs onto later lines isn't treated as a comment. Comments on one line, or starting a line, are.
 - Inline footnotes (`^[text]`) are shown small and dimmed where they're written, but not numbered.

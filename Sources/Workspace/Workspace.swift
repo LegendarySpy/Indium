@@ -31,6 +31,7 @@ final class Workspace {
     /// Posted as soon as files change, before the (debounced) rescan: open notes use
     /// it to show another app's edits live.
     static let filesTouched = Notification.Name("IndiumWorkspaceFilesTouched")
+    static let backlinksDidChange = Notification.Name("IndiumWorkspaceBacklinksDidChange")
 
     static let markdownExtensions: Set<String> = ["md", "markdown", "mdown"]
 
@@ -48,6 +49,7 @@ final class Workspace {
     /// New notes nobody has named or written in yet.
     private var untouchedNotes: Set<URL> = []
     let search = NoteSearch()
+    let backlinks = BacklinkIndex()
 
     var name: String { root.lastPathComponent }
 
@@ -238,6 +240,9 @@ final class Workspace {
         tree = scan.tree
         notes = scan.notes
         filesByName = scan.byName
+        backlinks.update(notes: scan.notes, files: scan.byName, root: root, access: access) { [weak self] in
+            NotificationCenter.default.post(name: Workspace.backlinksDidChange, object: self)
+        }
     }
 
     func rescanNow() {
@@ -259,6 +264,10 @@ final class Workspace {
 
     /// Obsidian-style `[[Target]]`, `[[folder/Target#Heading|Alias]]`.
     func resolveWiki(_ target: String, from note: URL?) -> URL? {
+        Workspace.resolveWiki(target, from: note, root: root, files: filesByName)
+    }
+
+    static func resolveWiki(_ target: String, from note: URL?, root: URL, files: [String: [URL]]) -> URL? {
         var t = target.components(separatedBy: "#")[0].trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty else { return nil }
         if t.contains("/") {
@@ -270,7 +279,7 @@ final class Workspace {
             if FileManager.default.fileExists(atPath: u.path) { return u }
             t = (t as NSString).lastPathComponent
         }
-        let candidates = filesByName[t.lowercased()] ?? filesByName[(t as NSString).deletingPathExtension.lowercased()] ?? []
+        let candidates = files[t.lowercased()] ?? files[(t as NSString).deletingPathExtension.lowercased()] ?? []
         guard !candidates.isEmpty else { return nil }
         if let dir = note?.deletingLastPathComponent().standardizedFileURL,
            let near = candidates.first(where: { $0.deletingLastPathComponent().standardizedFileURL == dir }) {

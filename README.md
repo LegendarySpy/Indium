@@ -39,6 +39,7 @@ So Indium shows one note at a time. There are no tabs or split views, just the n
 - **An inspector.** Press ⌥⌘I for a panel that edits the note's variables. Click a chart or graph and build it there: equations, colors, ranges, columns, points and curves, no Markdown needed.
 - **Text beside tables and images.** Let writing wrap around a table, or put two blocks side by side.
 - **Obsidian's extras.** Callouts, embedded notes (`![[Note]]`), `#tags`, `%% comments %%` and footnotes, drawn the way Obsidian draws them.
+- **Backlinks.** The notes that link to this one are listed quietly below it. Click one to open it. They stay out of the file and out of PDFs.
 - **Slash commands.** Type `/` for tables, headings, equations, and more.
 - **Temporary notes.** A scratch note that's never saved unless you keep it.
 - **Live updates.** If another app or an AI agent edits a note, you see it as it happens.
@@ -53,7 +54,6 @@ For what carries over from Obsidian and what doesn't, see [Compatibility](COMPAT
 
 A soft list of what I'd like to add, in no particular order:
 
-- Backlinks for `[[wiki links]]`, shown quietly at the bottom of a note
 - More export options, like HTML and Word
 
 What it won't have: a graph view of linked notes, or a plugin store. Indium is meant to stay small.

@@ -16,6 +16,9 @@ final class EditorTextView: NSTextView {
     /// like a live resize and restyle once it settles.
     var isAnimatingFrame = false
     private var insetX: CGFloat = 0
+    /// The empty page below the backlinks, for scrolling the end of the note up.
+    private var overscroll: CGFloat = 0
+    let backlinks = BacklinksView()
 
     override var textContainerOrigin: NSPoint {
         NSPoint(x: insetX, y: topPadding)
@@ -24,6 +27,7 @@ final class EditorTextView: NSTextView {
     override func setFrameSize(_ newSize: NSSize) {
         let widthChanged = newSize.width != frame.width
         super.setFrameSize(newSize)
+        placeBacklinks()
         if widthChanged {
             updateGeometry()
             editor?.geometryDidChange()
@@ -35,8 +39,8 @@ final class EditorTextView: NSTextView {
         let column = max(200, min(columnWidth, available - gutter * 2 - 24))
         let newInset = max(0, floor((available - column) / 2 - gutter))
         let visibleHeight = enclosingScrollView?.contentSize.height ?? 800
-        let bottom = max(160, visibleHeight * 0.35)
-        let insetHeight = (topPadding + bottom) / 2
+        overscroll = max(160, visibleHeight * 0.35)
+        let insetHeight = (topPadding + overscroll + backlinks.frame.height) / 2
         if newInset != insetX || textContainerInset.height != insetHeight {
             insetX = newInset
             textContainerInset = NSSize(width: newInset, height: insetHeight)
@@ -51,6 +55,21 @@ final class EditorTextView: NSTextView {
             effectiveColumn = column
             editor?.columnDidChange(column)
         }
+        placeBacklinks()
+    }
+
+    /// Just past the end of the text, in page the text view keeps free for it.
+    private func placeBacklinks() {
+        let height = backlinks.frame.height
+        let inset = BacklinksView.hoverInset
+        backlinks.frame = NSRect(x: insetX + gutter - inset, y: bounds.height - overscroll - height,
+                                 width: effectiveColumn + inset * 2, height: height)
+    }
+
+    func showBacklinks(_ rows: [BacklinksView.Row], typography: Typography) {
+        guard backlinks.show(rows, typography: typography) else { return }
+        updateGeometry()
+        sizeToFit()
     }
 
     // MARK: Mouse

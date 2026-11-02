@@ -179,7 +179,7 @@ enum DebugSnapshot {
         run(0)
     }
 
-    /// `-IndiumAccessSteps "type:x;save;open:B.md;switch:/abs;close;openFile:/abs;grant;quit;wait:1;dump;exit"`
+    /// `-IndiumAccessSteps "type:x;save;open:B.md;switch:/abs;close;openFile:/abs;grant;backlink:Name;quit;wait:1;dump;exit"`
     /// drives saving, switching and folder access (works without `-IndiumSnapshot`, and in
     /// the sandboxed App Store build). `dump` prints the open note, its unsaved state and
     /// how many holders keep each folder open.
@@ -201,6 +201,7 @@ enum DebugSnapshot {
             if let url = note?.url {
                 print("  note holders:", FolderAccess.holders(of: url), "folder holders:", FolderAccess.holders(of: url.deletingLastPathComponent()),
                       "bar:", target.debugFolderAccessBarShown, "file windows:", fileControllers().count)
+                print("  backlinks:", target.editor.textView.backlinks.debugTitles)
                 print("  editor text:", target.editor.text.debugDescription)
                 print("  disk text:  ", ((try? String(contentsOf: url, encoding: .utf8)) ?? "<unreadable>").debugDescription)
             }
@@ -230,6 +231,7 @@ enum DebugSnapshot {
                 AppDelegate.shared.openDocument(URL(fileURLWithPath: arg))
                 if let c = fileControllers().first(where: { $0.note?.url?.path == URL(fileURLWithPath: arg).standardizedFileURL.path }) { target = c }
             case "grant": target.debugGrantFolderAccess()
+            case "backlink": target.editor.textView.backlinks.debugClick(arg)
             case "file": if let c = fileControllers().first { target = c } else { print("  no file window") }
             case "trash": target.trashNote(nil)
             case "tempimage":
