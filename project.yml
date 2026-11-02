@@ -106,6 +106,7 @@ targets:
       - Sources/Editor/MarkdownDecorations.swift
       - Sources/Editor/MarkdownLayoutManager.swift
       - Sources/Editor/MathRenderer.swift
+      - Sources/Editor/Mhchem.swift
       - Sources/Editor/TableRender.swift
       - Sources/Charts
       - Sources/Formulas/Evaluator.swift
@@ -244,6 +245,7 @@ targets:
       - Sources/Editor/MarkdownDecorations.swift
       - Sources/Editor/MarkdownLayoutManager.swift
       - Sources/Editor/MathRenderer.swift
+      - Sources/Editor/Mhchem.swift
       - Sources/Editor/TableRender.swift
       - Sources/Charts
       - Sources/Formulas/Evaluator.swift

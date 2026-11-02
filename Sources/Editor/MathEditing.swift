@@ -175,7 +175,7 @@ final class MathEditor {
     private func argument(in span: MathSpan, at location: Int) -> (words: Bool, superscript: Bool) {
         let text = source
         let wordy: Set<String> = ["text", "textbf", "textit", "textrm", "texttt", "textsf", "textnormal", "mathrm", "operatorname",
-                                  "mbox", "hbox", "begin", "end", "label", "tag", "color", "textcolor"]
+                                  "mbox", "hbox", "begin", "end", "label", "tag", "color", "textcolor", "ce", "pu"]
         enum Group { case words, script, plain }
         var stack: [Group] = []
         var command: String?

@@ -267,7 +267,7 @@ struct MathSnippet {
         "angle", "triangle", "square", "checkmark", "displaystyle", "textstyle", "limits", "nolimits", "coprod", "sup",
         "arg", "deg", "dim", "gcd", "hom", "ker", "Pr", "bra", "ket", "braket", "mid", "nmid", "not", "neq", "ne",
         "approx", "cong", "pm", "mp", "div", "ast", "dagger", "ddagger", "aleph", "Re", "Im", "wp", "varnothing",
-        "rightharpoonup", "leftharpoondown", "hookrightarrow", "mapsto", "color", "textcolor", "phantom", "hspace",
+        "rightharpoonup", "leftharpoondown", "hookrightarrow", "mapsto", "color", "textcolor", "phantom", "hspace", "ce", "pu",
     ])
 
     /// True when `\word` followed by `letter` should become `\word letter`.
