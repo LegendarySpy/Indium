@@ -17,6 +17,7 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     /// The text view's selection, so rendered blocks (tables, equations, images) can show
     /// they're selected with a tint instead of revealing their source.
     var selectedRanges: [NSRange] = []
+    var onLayoutComplete: (() -> Void)?
 
     override init() {
         super.init()
@@ -28,6 +29,10 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    func layoutManager(_ layoutManager: NSLayoutManager, didCompleteLayoutFor textContainer: NSTextContainer?, atEnd layoutFinishedFlag: Bool) {
+        onLayoutComplete?()
+    }
 
     // MARK: Glyph generation
 
