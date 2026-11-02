@@ -432,8 +432,8 @@ enum MarkdownScanner {
             var alt = ns.substring(with: m.range(at: 1))
             var altRange = m.range(at: 1)
             var width: CGFloat?
-            if let bar = alt.lastIndex(of: "|"), let w = Double(alt[alt.index(after: bar)...].trimmingCharacters(in: .whitespaces)) {
-                width = CGFloat(w)
+            if let bar = alt.lastIndex(of: "|"), let w = imageWidth(String(alt[alt.index(after: bar)...])) {
+                width = w
                 alt = String(alt[..<bar])
                 altRange.length = (alt as NSString).length
             }
@@ -446,10 +446,15 @@ enum MarkdownScanner {
             let parts = inner.components(separatedBy: "|")
             let target = parts[0].trimmingCharacters(in: .whitespaces)
             guard imageExtensions.contains((target as NSString).pathExtension.lowercased()) else { return nil }
-            let width = parts.count > 1 ? Double(parts[1].trimmingCharacters(in: .whitespaces)).map { CGFloat($0) } : nil
+            let width = parts.count > 1 ? imageWidth(parts[1]) : nil
             return ImageRef(source: target, alt: "", width: width, isWiki: true, altRange: NSRange(location: NSNotFound, length: 0))
         }
         return nil
+    }
+
+    private static func imageWidth(_ text: String) -> CGFloat? {
+        guard let width = Double(text.trimmingCharacters(in: .whitespaces)), width.isFinite, width > 0 else { return nil }
+        return CGFloat(width)
     }
 
     static let attachmentExtensions: Set<String> = ["pdf", "mp3", "mp4", "m4a", "wav", "ogg", "flac", "webm", "mov", "mkv", "3gp", "canvas", "base"]

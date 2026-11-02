@@ -365,8 +365,7 @@ private final class Reader {
             result.data = jpeg
             result.fileExtension = "jpg"
         }
-        // The scanner takes anything `Double` parses, `inf` included.
-        if let width, width > 0, width <= 10_000 {
+        if let width, width <= 10_000 {
             result.size = NSSize(width: width, height: width * image.size.height / image.size.width)
         }
         return result
