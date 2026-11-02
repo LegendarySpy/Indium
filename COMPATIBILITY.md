@@ -27,6 +27,7 @@ Indium opens an Obsidian vault as it is and writes plain Markdown back. This pag
 - A `%%` comment that starts partway through a line and runs onto later lines isn't treated as a comment. Comments on one line, or starting a line, are.
 - Inline footnotes (`^[text]`) are shown small and dimmed where they're written, but not numbered.
 - Callouts are recognized at the top level only. A callout inside a quote or another callout reads as a quote.
+- Math nested very deeply (about 64 levels of `\frac`, `\sqrt` or `x^{}`, or 128 of braces), taller than about 16,000 points, or longer than 32 KB shows its source in red instead of being typeset.
 - No Dataview, Mermaid, canvases, or plugin syntax, apart from the Charts and Desmos plugins' blocks (below). It's kept as written.
 
 ## LaTeX Suite

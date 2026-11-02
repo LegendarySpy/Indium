@@ -355,7 +355,7 @@ final class TableRender {
                     let attachment = MathCellAttachment(natural: NSRect(x: 0, y: -render.descent, width: render.width, height: render.height), image: image)
                     out.append(NSAttributedString(attachment: attachment))
                 } else {
-                    out.append(NSAttributedString(string: ns.substring(with: math.0), attributes: [.font: font(bold: false, italic: false, code: true), .foregroundColor: color]))
+                    out.append(NSAttributedString(string: ns.substring(with: math.0), attributes: [.font: font(bold: false, italic: false, code: true), .foregroundColor: Palette.error]))
                 }
                 i = NSMaxRange(math.0)
                 continue

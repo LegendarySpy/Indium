@@ -60,6 +60,8 @@ enum MTParseErrors:Int {
     case internalError
     /// Limit control applied incorrectly
     case invalidLimits
+    /// Groups are nested too deeply to typeset safely.
+    case nestingTooDeep
 }
 
 let MTParseError = "ParseError"
@@ -93,6 +95,9 @@ public struct MTMathListBuilder {
     var currentFontStyle:MTFontStyle
     var spacesAllowed:Bool
     var mathMode: MathMode = .display
+    var depth = 0
+    // About two levels per \frac{ or x^{, one per { or \left. Debug builds overflow the stack past about 1,000.
+    private static let maxDepth = 128
 
     /** Contains any error that occurred during parsing. */
     var error:NSError?
@@ -389,6 +394,12 @@ public struct MTMathListBuilder {
     }
     
     public mutating func buildInternal(_ oneCharOnly: Bool, stopChar stop: Character?) -> MTMathList? {
+        depth += 1
+        defer { depth -= 1 }
+        guard depth <= Self.maxDepth else {
+            self.setError(.nestingTooDeep, message: "Nesting too deep")
+            return nil
+        }
         let list = MTMathList()
         assert(!(oneCharOnly && stop != nil), "Cannot set both oneCharOnly and stopChar.")
         var prevAtom: MTMathAtom? = nil

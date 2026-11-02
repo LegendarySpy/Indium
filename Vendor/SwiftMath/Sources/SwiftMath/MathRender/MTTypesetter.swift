@@ -426,6 +426,9 @@ func getBboxDetails(_ bbox:CGRect, ascent:inout CGFloat, descent:inout CGFloat) 
  For detailed line breaking implementation notes, see `MULTILINE_IMPLEMENTATION_NOTES.md`.
  */
 class MTTypesetter {
+    /// Points. Taller math is rejected instead of drawn.
+    static let maxHeight: CGFloat = 16384
+
     var font:MTFont!
     var displayAtoms = [MTDisplay]()
     var currentPosition = CGPoint.zero
@@ -1023,7 +1026,14 @@ class MTTypesetter {
         }
         var glyphs = [NSNumber](), offsets = [NSNumber]()
         var height:CGFloat=0
-        self.constructGlyphWithParts(parts, glyphHeight:glyphHeight, glyphs:&glyphs, offsets:&offsets, height:&height)
+        if glyphHeight <= MTTypesetter.maxHeight {
+            self.constructGlyphWithParts(parts, glyphHeight:glyphHeight, glyphs:&glyphs, offsets:&offsets, height:&height)
+        } else {
+            // \left around \frac doubles in height per level. Keep the height, so MathTypesetting rejects it, but skip the glyphs.
+            glyphs = [NSNumber(value: parts[0].glyph)]
+            offsets = [NSNumber(value: 0)]
+            height = glyphHeight
+        }
         var first = glyphs[0].uint16Value
         let width = CTFontGetAdvancesForGlyphs(styleFont.ctFont, .horizontal, &first, nil, 1);
         let display = MTGlyphConstructionDisplay(withGlyphs: glyphs, offsets: offsets, font: styleFont)
@@ -1033,9 +1043,35 @@ class MTTypesetter {
         return display;
     }
     
+    /// The tallest assembly constructGlyphWithParts can make with this many extenders.
+    private func maxAssemblyHeight(_ parts:[GlyphPart], numExtenders:Int) -> CGFloat {
+        let minDistance = styleFont.mathTable!.minConnectorOverlap
+        var prev:GlyphPart? = nil
+        var minOffset = CGFloat(0), maxDelta = CGFloat.greatestFiniteMagnitude, count = 0
+        for part in parts {
+            for _ in 0 ..< (part.isExtender ? numExtenders : 1) {
+                if let prev {
+                    let minOffsetDelta = prev.fullAdvance - min(prev.endConnectorLength, part.startConnectorLength)
+                    maxDelta = min(maxDelta, prev.fullAdvance - minDistance - minOffsetDelta)
+                    minOffset += minOffsetDelta
+                }
+                prev = part
+                count += 1
+            }
+        }
+        guard let prev else { return 0 }
+        return minOffset + prev.fullAdvance + maxDelta * CGFloat(count - 1)
+    }
+
     func constructGlyphWithParts(_ parts:[GlyphPart], glyphHeight:CGFloat, glyphs:inout [NSNumber], offsets:inout [NSNumber], height:inout CGFloat) {
+        // From two extenders on, the reachable height grows linearly: skip ahead rather than rebuild every count.
+        var fewest = 0
+        let reachable = (0...3).map { maxAssemblyHeight(parts, numExtenders: $0) }
+        if reachable[3] > reachable[2], glyphHeight > reachable.max()! {
+            fewest = 3 + Int((glyphHeight - reachable[3]) / (reachable[3] - reachable[2]))
+        }
         // Loop forever until the glyph height is valid
-        for numExtenders in 0..<Int.max {
+        for numExtenders in fewest..<Int.max {
             var glyphsRv = [NSNumber]()
             var offsetsRv = [NSNumber]()
             

@@ -294,6 +294,9 @@ extension MTMathListBuilder {
         }
         if let arrow = Self.extensibleArrows[command] {
             // \xrightarrow[below]{above}
+            // Labels are typeset twice, doubling the cost per nested arrow, so one counts as many levels.
+            depth += 12
+            defer { depth -= 12 }
             skipSpaces()
             var below: MTMathList?
             if hasCharacters, string[currentCharIndex] == "[" {
