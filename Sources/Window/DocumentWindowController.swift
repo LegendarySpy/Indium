@@ -12,9 +12,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     private let titleBar = TitleBarView()
     private let emptyState = EmptyStateView()
     private let root = RootView()
-    private let topFade = CAGradientLayer()
-    private let fadeMask = CALayer()
-    private let scrollerStrip = CALayer()
+    private let edgeBlur = ScrollEdgeBlurView()
     private let findHost = FindBarHost()
     private var sidebar: SidebarView?
     private var sidebarGlass: NSView?
@@ -118,8 +116,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             emptyState.trailingAnchor.constraint(equalTo: root.trailingAnchor),
         ]
         NSLayoutConstraint.activate(pageLeading + pageTrailing + [
-            // The page begins below the title bar, so nothing of it sits under the controls.
-            scroll.topAnchor.constraint(equalTo: root.topAnchor, constant: TitleBarView.height),
+            // The page runs under the title bar, where it blurs away.
+            scroll.topAnchor.constraint(equalTo: root.topAnchor),
             scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             emptyState.topAnchor.constraint(equalTo: root.topAnchor),
             emptyState.bottomAnchor.constraint(equalTo: root.bottomAnchor),
@@ -129,29 +127,23 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
             findHost.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 16),
         ])
         editor.attachFindBar(findHost)
-        // The controls live in the window's own title bar, above the system's soft scroll
-        // edge, so the page scrolls under them the way it does in Apple's apps.
+        // The controls live in the window's own title bar, so the page scrolls under them
+        // the way it does in Apple's apps.
         hostTitleBar(inFullScreen: false)
-        editor.textView.topPadding = 44
+        editor.textView.topPadding = TitleBarView.height + 44
         emptyState.isHidden = true
 
-        // The page fades into the paper under the title bar. It's an alpha mask on the
-        // scroll view itself, so there is no separate surface whose color could differ.
-        // The scroller's strip stays fully opaque so it never fades at the top.
+        // The page blurs progressively under the title bar. The scroller's strip stays clear.
+        root.wantsLayer = true
         scroll.wantsLayer = true
-        topFade.colors = [NSColor.clear.cgColor, NSColor.black.withAlphaComponent(0.25).cgColor, NSColor.black.cgColor]
-        topFade.startPoint = CGPoint(x: 0.5, y: 0)
-        topFade.endPoint = CGPoint(x: 0.5, y: 1)
-        fadeMask.addSublayer(topFade)
-        scrollerStrip.backgroundColor = NSColor.black.cgColor
-        fadeMask.addSublayer(scrollerStrip)
-        scroll.layer?.mask = fadeMask
-        for view in [scroll, scroll.contentView] as [NSView] {
-            view.postsFrameChangedNotifications = true
-            observers.append(NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: view, queue: .main) { [weak self] _ in
-                self?.layoutTopFade()
-            })
-        }
+        edgeBlur.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(edgeBlur, positioned: .above, relativeTo: scroll)
+        NSLayoutConstraint.activate([
+            edgeBlur.topAnchor.constraint(equalTo: scroll.topAnchor),
+            edgeBlur.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
+            edgeBlur.trailingAnchor.constraint(equalTo: scroll.trailingAnchor, constant: -16),
+            edgeBlur.heightAnchor.constraint(equalToConstant: ScrollEdgeBlurView.height),
+        ])
 
         titleBar.onIconClick = { [weak self] anchor in self?.showIconPicker(from: anchor) }
         titleBar.headingLevel = { [weak self] in self?.editor.currentHeadingLevel() ?? 0 }
@@ -258,7 +250,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     override func showWindow(_ sender: Any?) {
         super.showWindow(sender)
         titleBar.alignWithTrafficLights()
-        layoutTopFade()
         if sidebarVisible || inspectorVisible { applyPageInsets(pageInsets()) }
     }
 
@@ -281,38 +272,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
         titleBar.alignWithTrafficLights()
     }
 
-    private func layoutTopFade() {
-        let scroll = editor.scrollView
-        let h = max(scroll.bounds.height, 1)
-        let strip: CGFloat = 16
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        fadeMask.frame = scroll.bounds
-        topFade.frame = CGRect(x: 0, y: 0, width: max(0, scroll.bounds.width - strip), height: scroll.bounds.height)
-        scrollerStrip.frame = CGRect(x: scroll.bounds.width - strip, y: 0, width: strip, height: scroll.bounds.height)
-        // An eased ramp over a longer reach: nearly clear at the edge, then picking up
-        // gradually, so text softens away under the title bar instead of reading as a
-        // straight fade line (most visible over selections and tinted blocks).
-        let reach: CGFloat = 46
-        let steps = 10
-        var colors: [CGColor] = []
-        var locations: [NSNumber] = []
-        for i in 0...steps {
-            let t = CGFloat(i) / CGFloat(steps)
-            let eased = pow(t * t * (3 - 2 * t), 1.6)
-            colors.append(NSColor.black.withAlphaComponent(eased).cgColor)
-            locations.append(NSNumber(value: Double(t * reach / h)))
-        }
-        colors.append(NSColor.black.cgColor)
-        locations.append(1)
-        topFade.colors = colors
-        topFade.locations = locations
-        CATransaction.commit()
-    }
-
     func windowDidResize(_ notification: Notification) {
         titleBar.alignWithTrafficLights()
-        layoutTopFade()
         let insets = pageInsets()
         if pageLeading.first?.constant != insets.leading || pageTrailing.first?.constant != -insets.trailing { applyPageInsets(insets) }
     }
