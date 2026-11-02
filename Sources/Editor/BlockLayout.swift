@@ -5,9 +5,11 @@ import AppKit
 final class LayoutGroup {
     let range: NSRange
     let text: String
-    init(range: NSRange, text: String) {
+    let isFrontmatter: Bool
+    init(range: NSRange, text: String, isFrontmatter: Bool = false) {
         self.range = range
         self.text = text
+        self.isFrontmatter = isFrontmatter
     }
 }
 
@@ -73,11 +75,11 @@ struct LayoutModel {
             return end
         }
 
-        func flush() {
+        func flush(frontmatter: Bool = false) {
             guard let first = pending.first, let last = pending.last else { return }
             let start = blocks[first].range.location
             let range = NSRange(location: start, length: contentEnd(blocks[last]) - start)
-            let group = LayoutGroup(range: range, text: text.substring(with: range))
+            let group = LayoutGroup(range: range, text: text.substring(with: range), isFrontmatter: frontmatter)
             if let region { region.columns[region.columns.count - 1].groups.append(group) }
             else { items.append(.group(group)) }
             pending = []
@@ -90,7 +92,7 @@ struct LayoutModel {
             case .frontmatter:
                 flush()
                 pending.append(i)
-                flush()
+                flush(frontmatter: true)
             case let .columnMarker(.start(ratios)) where region == nil && validRegionStarts.contains(i):
                 flush()
                 region = LayoutRegion(ratios: ratios, columns: [LayoutColumn()])
@@ -288,14 +290,14 @@ struct LayoutModel {
         let indices = selected.compactMap { g in items.firstIndex { if case let .group(x) = $0 { return x === g }; return false } }
         guard let a = indices.min(), let b = indices.max(), indices.count == b - a + 1 else { return nil }
         let chosen = items[a...b].compactMap { if case let .group(g) = $0 { return g }; return nil }
-        guard chosen.count == b - a + 1 else { return nil }
+        guard chosen.count == b - a + 1, !chosen.contains(where: \.isFrontmatter) else { return nil }
         let target = chosen.reduce(0) { $0 + height($1) }
 
         func collect(_ range: [Int]) -> [LayoutGroup] {
             var out: [LayoutGroup] = []
             var total: CGFloat = 0
             for k in range {
-                guard case let .group(g) = items[k] else { break }
+                guard case let .group(g) = items[k], !g.isFrontmatter else { break }
                 out.append(g)
                 total += height(g)
                 if total >= target * 0.9 { break }
