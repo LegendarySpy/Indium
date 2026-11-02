@@ -62,15 +62,10 @@ final class BacklinkIndex {
 
     private func resolve(_ notes: [URL], files: [String: [URL]], root: URL) -> [String: [URL]] {
         var found: [String: Set<URL>] = [:]
-        let keys = notes.map(Self.key)
-        let known = Set(keys)
-        // A link can differ from the file in case on a disk that ignores case.
-        let folded = Dictionary(keys.map { ($0.lowercased(), $0) }, uniquingKeysWith: { first, _ in first })
         for url in notes {
             for target in sources[url]?.targets ?? [] {
                 guard let linked = Workspace.resolveWiki(target, from: url, root: root, files: files) else { continue }
-                var key = Self.key(linked)
-                if !known.contains(key) { key = folded[key.lowercased()] ?? key }
+                let key = Self.key(linked)
                 if key != Self.key(url) { found[key, default: []].insert(url) }
             }
         }
