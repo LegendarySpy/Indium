@@ -309,6 +309,8 @@ final class TitleBarView: NSView, NSTextFieldDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem(title: "New Temporary Note", action: #selector(AppDelegate.newTemporaryNote(_:)), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Export as PDF…", action: #selector(DocumentWindowController.exportPDF(_:)), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Export as HTML…", action: #selector(DocumentWindowController.exportHTML(_:)), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Export as Word…", action: #selector(DocumentWindowController.exportWord(_:)), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Print…", action: #selector(DocumentWindowController.printNote(_:)), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Rename…", action: #selector(DocumentWindowController.renameNote(_:)), keyEquivalent: ""))

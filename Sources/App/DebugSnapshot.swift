@@ -5,7 +5,8 @@ import SwiftMath
 
 /// Development aid: `-IndiumSnapshot /tmp/out.png` renders the main window to a PNG
 /// and quits. Optional: `-IndiumSize 1000x1100`, `-IndiumSelect 120`,
-/// `-IndiumScroll 400`, `-IndiumPDF /tmp/out.pdf`, `-IndiumTemp YES`.
+/// `-IndiumScroll 400`, `-IndiumPDF /tmp/out.pdf`, `-IndiumHTML /tmp/out.html`,
+/// `-IndiumDocx /tmp/out.docx`, `-IndiumTemp YES`.
 enum DebugSnapshot {
     /// `-IndiumHidden YES`: every window stays invisible and out of the Dock and app switcher,
     /// so snapshots can run while someone is using the Mac. Snapshots draw the views, not the screen.
@@ -1501,7 +1502,9 @@ enum DebugSnapshot {
             exit(0)
         }
         let pdfPath = d.string(forKey: "IndiumPDF")
-        guard let out = d.string(forKey: "IndiumSnapshot") ?? pdfPath.map({ _ in "" }) else { return }
+        let htmlPath = d.string(forKey: "IndiumHTML")
+        let docxPath = d.string(forKey: "IndiumDocx")
+        guard let out = d.string(forKey: "IndiumSnapshot") ?? (pdfPath ?? htmlPath ?? docxPath).map({ _ in "" }) else { return }
         var target = controller
         if d.bool(forKey: "IndiumTemp") {
             AppDelegate.shared.newTemporaryNote(nil)
@@ -2076,6 +2079,14 @@ enum DebugSnapshot {
                 if let pdfPath {
                     let data = PDFExporter.makePDF(text: target.editor.text, title: "Snapshot", resolver: target.editor)
                     try? data.write(to: URL(fileURLWithPath: pdfPath))
+                }
+                if let htmlPath {
+                    let data = HTMLExporter.makeHTML(text: target.editor.text, title: "Snapshot", resolver: target.editor)
+                    try? data.write(to: URL(fileURLWithPath: htmlPath))
+                }
+                if let docxPath {
+                    let data = WordExporter.makeDocx(text: target.editor.text, title: "Snapshot", resolver: target.editor)
+                    try? data.write(to: URL(fileURLWithPath: docxPath))
                 }
                 if !out.isEmpty, let view = window.contentView?.superview {
                     view.layoutSubtreeIfNeeded()
