@@ -49,7 +49,7 @@ Indium's math shortcuts follow Obsidian's [LaTeX Suite](https://github.com/artis
 - No visual snippets of your own (`v` option). Only the built-in wrappers work on a selection.
 - Tab leaves an equation from anywhere in the line. LaTeX Suite only does this at the end of a line.
 - No conceal mode. Equations are typeset in place instead when the caret leaves them.
-- mhchem's `\ce{…}` and `\pu{…}` typeset formulas, charges, states, coefficients, hydrate dots, isotopes (`^{14}C`), radical dots (`OH^.`), `\bond`, `$…$` inside `\ce`, mhchem's arrows and their Unicode forms with text over and under them, and numbers with units. An empty `\ce{}` draws nothing, as in mhchem. Primes (`\'`), `\ca`, and up or down arrows in parentheses (`(^)`, `(v)`) don't: that math shows its source as written, and Obsidian still renders it.
+- mhchem's `\ce{…}` and `\pu{…}` typeset formulas, charges, states, coefficients, hydrate dots, isotopes (`^{14}C`), radical dots (`OH^.`), `\bond`, `$…$` inside `\ce`, mhchem's arrows and their Unicode forms with text over and under them, and numbers with units. An empty `\ce{}` draws nothing, as in mhchem. `\ca` and up or down arrows in parentheses (`(^)`, `(v)`) don't, nor do `\pu` forms like `23.4782(32) m`, `\pm`, `.25` and `l//100km`: that math shows its source as written, and Obsidian still renders it.
 
 ## Table formulas
 

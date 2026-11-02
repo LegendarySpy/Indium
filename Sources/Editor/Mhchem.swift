@@ -134,6 +134,9 @@ enum Mhchem {
                     out += scripts
                     finish(.start)
                 }
+            } else if ch == "'", attached {
+                let primes = run(c, &i, while: { $0 == "'" })
+                out += "^{\(primes.map { _ in "\\prime " }.joined())}"
             } else if ch == "v", standalone {
                 i += 1
                 out += "\\downarrow "
@@ -258,6 +261,9 @@ enum Mhchem {
                 let end = min(i + 2, c.count)
                 out += String(c[i..<end])
                 i = end
+            } else if c[i] == "'" {
+                out += "\\prime "
+                i += 1
             } else if c[i] == ".", i + 1 == c.count || !isDigit(c[i + 1]) {
                 out += "\\mathord{\\bullet}"
                 i += 1
