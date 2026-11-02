@@ -291,6 +291,24 @@ extension EditorController {
         return first.range
     }
 
+    /// Where the note's text starts when its frontmatter is hidden (syntax shown While Editing).
+    var hiddenFrontmatterEnd: Int? {
+        guard AppSettings.shared.syntax != .always, let range = frontmatterRange else { return nil }
+        return NSMaxRange(range)
+    }
+
+    /// Hidden frontmatter can't be selected, typed in or deleted by hand.
+    func outsideHiddenFrontmatter(_ range: NSRange) -> NSRange {
+        guard let end = hiddenFrontmatterEnd, range.location < end else { return range }
+        return NSRange(location: end, length: max(NSMaxRange(range) - end, 0))
+    }
+
+    /// The caret at the start of the text under hidden frontmatter, where deleting backward stops.
+    var caretAtFrontmatterEnd: Bool {
+        let sel = textView.selectedRange()
+        return sel.length == 0 && sel.location > 0 && sel.location == hiddenFrontmatterEnd
+    }
+
     var caretInFrontmatter: Bool {
         guard let range = frontmatterRange else { return false }
         return textView.selectedRanges.allSatisfy { NSLocationInRange($0.rangeValue.location, range) }

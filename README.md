@@ -47,14 +47,11 @@ So Indium shows one note at a time. There are no tabs or split views, just the n
 - **Quick Look.** Press Space on a note in Finder to see it rendered.
 - **Instructions for AI agents.** Help › Copy Instructions for AI Agents copies [everything Indium's notes can do](skills/indium/SKILL.md), so an agent can write columns, charts, graphs and formulas correctly. It's also a skill you can install.
 - **PDF export.** Clean pages in light or dark. Turn on page lines to see where pages break, or type `/page break` to start a new one.
+- **HTML and Word export.** One self-contained HTML file, or a `.docx` with real headings, lists and tables. Equations and charts come along as sharp images.
 
 For what carries over from Obsidian and what doesn't, see [Compatibility](COMPATIBILITY.md).
 
 ## Roadmap
-
-A soft list of what I'd like to add, in no particular order:
-
-- More export options, like HTML and Word
 
 What it won't have: a graph view of linked notes, or a plugin store. Indium is meant to stay small.
 

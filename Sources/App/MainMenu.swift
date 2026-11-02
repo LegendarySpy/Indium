@@ -84,6 +84,8 @@ enum MainMenu {
         add(m, "Move to Trash", #selector(W.trashNote(_:)), "\u{8}", .command)
         m.addItem(.separator())
         add(m, "Export as PDF…", #selector(W.exportPDF(_:)), "e", [.command, .shift])
+        add(m, "Export as HTML…", #selector(W.exportHTML(_:)))
+        add(m, "Export as Word…", #selector(W.exportWord(_:)))
         add(m, "Print…", #selector(W.printNote(_:)), "p")
         return m
     }

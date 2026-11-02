@@ -3,7 +3,7 @@ import Combine
 import UniformTypeIdentifiers
 
 /// Owns one text system and whichever note is currently shown in it.
-final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegate, ImageResolving {
+final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegate, NSLayoutManagerDelegate, ImageResolving {
     let scrollView = NSScrollView()
     let textView: EditorTextView
     let storage = NSTextStorage()
@@ -184,6 +184,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         tv.setAccessibilityLabel("Note")
         tv.registerForDraggedTypes([.fileURL, .png, .tiff])
         storage.delegate = self
+        layoutManager.delegate = self
 
         scrollView.documentView = tv
         scrollView.hasVerticalScroller = true
@@ -235,6 +236,13 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
+        // Text after a closing fence with no line break would reopen the frontmatter.
+        if !isLoading, !textView.hasMarkedText(), let replacementString, !replacementString.isEmpty, !replacementString.hasPrefix("\n"),
+           range.location == hiddenFrontmatterEnd, range.location > 0, ns.character(at: range.location - 1) != 0x0A {
+            let text = "\n" + replacementString
+            replace(range, with: text, select: NSRange(location: range.location + (text as NSString).length, length: 0))
+            return false
+        }
         frontmatterWillChange(range)
         finder.noteClientStringWillChange()
         math.pendingEdit = replacementString.map { (range, ($0 as NSString).length) }
@@ -258,7 +266,11 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             textView.isContinuousSpellCheckingEnabled = s.spellcheck
         }
         textView.typingAttributes = styler.baseAttributes()
-        if restyle { restyleAll() }
+        if restyle {
+            restyleAll()
+            let sel = textView.selectedRange(), allowed = outsideHiddenFrontmatter(sel)
+            if allowed != sel { textView.setSelectedRange(allowed) }
+        }
         updateBacklinks()
     }
 
@@ -406,7 +418,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         // Before scrolling: the saved offset may reach past the end of the text.
         updateBacklinks()
         let length = storage.length
-        let sel = newNote.map { NSRange(location: min($0.selection.location, length), length: 0) } ?? NSRange(location: 0, length: 0)
+        let sel = outsideHiddenFrontmatter(newNote.map { NSRange(location: min($0.selection.location, length), length: 0) } ?? NSRange(location: 0, length: 0))
         isLoading = true
         textView.setSelectedRange(sel)
         isLoading = false
@@ -446,12 +458,17 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         url.deletingPathExtension().lastPathComponent
     }
 
+    func layoutManager(_ layoutManager: NSLayoutManager, didCompleteLayoutFor textContainer: NSTextContainer?, atEnd layoutFinishedFlag: Bool) {
+        textView.placeBacklinks()
+    }
+
     private func setText(_ text: String) {
         isLoading = true
         finder.noteClientStringWillChange()
         storage.beginEditing()
         storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: text)
         storage.endEditing()
+        styler.rescan(storage)
         isLoading = false
     }
 
@@ -673,7 +690,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             textView.didChangeText()
             textView.undoManager?.setActionName("Change from Another App")
         }
-        let caret = NSRange(location: min(map(selection.location), storage.length), length: 0)
+        styler.rescan(storage)
+        let caret = outsideHiddenFrontmatter(NSRange(location: min(map(selection.location), storage.length), length: 0))
         textView.setSelectedRange(caret)
         isLoading = false
         lastSelection = [caret]
@@ -695,7 +713,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let offset = scrollView.contentView.bounds.origin.y
         note.adopt(diskText: disk)
         setText(disk)
-        let clamped = NSRange(location: min(sel.location, storage.length), length: 0)
+        let clamped = outsideHiddenFrontmatter(NSRange(location: min(sel.location, storage.length), length: 0))
         isLoading = true
         textView.setSelectedRange(clamped)
         isLoading = false
@@ -845,7 +863,9 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// The caret never rests where nothing can be typed: on a hidden column marker, where it
     /// would be a speck, or inside a rendered table's source, where Return would split it.
     func textView(_ textView: NSTextView, willChangeSelectionFromCharacterRanges old: [NSValue], toCharacterRanges new: [NSValue]) -> [NSValue] {
-        guard !isLoading, new.count == 1, new[0].rangeValue.length == 0, AppSettings.shared.syntax != .always else { return new }
+        guard !isLoading else { return new }
+        let new = new.map { NSValue(range: outsideHiddenFrontmatter($0.rangeValue)) }
+        guard new.count == 1, new[0].rangeValue.length == 0, AppSettings.shared.syntax != .always else { return new }
         let to = new[0].rangeValue.location
         let from = old.first?.rangeValue.location ?? to
         let snapped = caretPlace(for: to, forward: to > from && !self.textView.isTrackingMouse)
@@ -876,6 +896,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func textViewDidChangeSelection(_ notification: Notification) {
         guard !isLoading else { return }
         if !textView.isWritingToolsActive { writingToolsSpan = nil }
+        if textView.selectedRange().location == hiddenFrontmatterEnd { textView.typingAttributes = styler.baseAttributes() }
         // On the next turn of the run loop, outside the event that moved the caret.
         if frontmatterSession != nil, !caretInFrontmatter { RunLoop.main.perform { [weak self] in MainActor.assumeIsolated { self?.endFrontmatterSession() } } }
         if selectedImageLine != nil, !changingImageSelection { clearImageSelection() }

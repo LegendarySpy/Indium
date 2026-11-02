@@ -49,7 +49,7 @@ Indium's math shortcuts follow Obsidian's [LaTeX Suite](https://github.com/artis
 - No visual snippets of your own (`v` option). Only the built-in wrappers work on a selection.
 - Tab leaves an equation from anywhere in the line. LaTeX Suite only does this at the end of a line.
 - No conceal mode. Equations are typeset in place instead when the caret leaves them.
-- mhchem's `\ce{…}` and `\pu{…}` don't typeset. The source is kept as written, so Obsidian still renders it. In Indium, write formulas with subscripts: `CuSO_{4}\cdot 5H_{2}O`.
+- mhchem's `\ce{…}` and `\pu{…}` typeset formulas, charges, states, coefficients, hydrate dots, the arrows `->`, `<-`, `<->` and `<=>` with text over and under them, and numbers with units. Isotopes (`^{14}C`), `\bond`, `$…$` inside `\ce`, and other arrows like `<-->` don't: that math shows its source as written, and Obsidian still renders it.
 
 ## Table formulas
 
@@ -96,6 +96,25 @@ Indium draws two kinds of fenced blocks, in the formats of the Obsidian plugins 
 - Flags after `|`: colors, `dashed` and `dotted`, `point`, `open` and `cross`, `hidden`, `label:…`, and restrictions such as `x>0`.
 - Indium only: the note's frontmatter variables by name. In Obsidian, define them in the graph (`k=2`) instead.
 - Not drawn: implicit curves (`x^2+y^2=1`), inequalities, derivatives, lists, and sliders. The graph lists those lines under it.
+
+## HTML and Word export
+
+Headings, emphasis, lists, tasks, quotes, callouts, code, footnotes, embedded notes and images carry over, and tables show their calculated values. Frontmatter and comments never do. The file takes the note's name as its title and holds nothing else about you or your Mac, and pictures lose any location or camera details.
+
+**What changes**
+
+- Equations and charts are images, not editable. An equation's LaTeX stays as its alt text.
+- Animated images keep their first frame.
+- Links to other notes and files become plain text. Only web and email links stay links.
+- Folded callouts export open, and tables fill the page width.
+- Footnotes stay where they're written, as small text, rather than becoming Word footnotes.
+- Text that wraps beside a floated table or image sits below it instead.
+- A web image that hasn't loaded yet stays a web address in HTML, and a link in Word.
+- HTML always exports light.
+
+**Word only**
+
+- Side-by-side columns become a borderless table.
 
 ## Quick Look
 

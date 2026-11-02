@@ -58,11 +58,14 @@ final class EditorTextView: NSTextView {
         placeBacklinks()
     }
 
-    /// Just past the end of the text, in page the text view keeps free for it.
-    private func placeBacklinks() {
+    /// Just past the end of the text and any float, in page the text view keeps free for
+    /// it. A short note's page is taller than its text, so the frame alone won't do.
+    func placeBacklinks() {
+        guard !backlinks.isHidden, let manager = layoutManager, let container = textContainer else { return }
         let height = backlinks.frame.height
         let inset = BacklinksView.hoverInset
-        backlinks.frame = NSRect(x: insetX + gutter - inset, y: bounds.height - overscroll - height,
+        let end = max(manager.usedRect(for: container).maxY, (manager as? MarkdownLayoutManager)?.floatFrames.values.map(\.maxY).max() ?? 0)
+        backlinks.frame = NSRect(x: insetX + gutter - inset, y: min(textContainerOrigin.y + end, bounds.height - overscroll - height),
                                  width: effectiveColumn + inset * 2, height: height)
     }
 
@@ -135,7 +138,24 @@ final class EditorTextView: NSTextView {
         super.cursorUpdate(with: event)
     }
 
+    /// The band under the title bar's controls acts like the title bar: drag to move, double-click to zoom.
+    private func handleTitleBandClick(_ event: NSEvent) -> Bool {
+        guard let window, !window.styleMask.contains(.fullScreen),
+              window.frame.height - event.locationInWindow.y <= ScrollEdgeBlurView.height else { return false }
+        if event.clickCount == 1 {
+            window.performDrag(with: event)
+        } else if event.clickCount == 2 {
+            switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+            case "None": break
+            case "Minimize": window.performMiniaturize(nil)
+            default: window.performZoom(nil)
+            }
+        }
+        return true
+    }
+
     override func mouseDown(with event: NSEvent) {
+        if handleTitleBandClick(event) { return }
         let point = convert(event.locationInWindow, from: nil)
         if let editor, editor.handleClick(at: point, clickCount: event.clickCount, event: event) { return }
         var event = event
@@ -474,11 +494,24 @@ final class EditorTextView: NSTextView {
     }
 
     override func deleteBackward(_ sender: Any?) {
+        if editor?.caretAtFrontmatterEnd == true { return }
         if editor?.deleteSelectedImage() == true { return }
         if editor?.deleteSelectedChart() == true { return }
         if editor?.deleteTableIfTouched(backward: true) == true { return }
         if editor?.math.handleBackspace() == true { return }
         super.deleteBackward(sender)
+    }
+
+    override func deleteWordBackward(_ sender: Any?) {
+        if editor?.caretAtFrontmatterEnd != true { super.deleteWordBackward(sender) }
+    }
+
+    override func deleteToBeginningOfLine(_ sender: Any?) {
+        if editor?.caretAtFrontmatterEnd != true { super.deleteToBeginningOfLine(sender) }
+    }
+
+    override func deleteToBeginningOfParagraph(_ sender: Any?) {
+        if editor?.caretAtFrontmatterEnd != true { super.deleteToBeginningOfParagraph(sender) }
     }
 
     override func deleteForward(_ sender: Any?) {

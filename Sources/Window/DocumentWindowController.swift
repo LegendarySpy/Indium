@@ -847,21 +847,37 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSMe
     // MARK: Export
 
     @objc func exportPDF(_ sender: Any?) {
-        guard let note, let window else { return }
+        guard note != nil else { return }
         editor.saveNow()
+        let accessory = PDFOptionsView(options: .saved)
+        export(as: .pdf, fileExtension: "pdf", accessory: accessory) { text, title, resolver in
+            let options = accessory.options
+            options.save()
+            return PDFExporter.makePDF(text: text, title: title, resolver: resolver, options: options)
+        }
+    }
+
+    @objc func exportHTML(_ sender: Any?) {
+        export(as: .html, fileExtension: "html", make: HTMLExporter.makeHTML)
+    }
+
+    @objc func exportWord(_ sender: Any?) {
+        export(as: UTType(filenameExtension: "docx") ?? .data, fileExtension: "docx", make: WordExporter.makeDocx)
+    }
+
+    private func export(as type: UTType, fileExtension: String, accessory: NSView? = nil,
+                        make: @escaping (String, String, ImageResolving?) -> Data) {
+        guard let note, let window else { return }
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.pdf]
-        panel.nameFieldStringValue = note.title + ".pdf"
+        panel.allowedContentTypes = [type]
+        panel.nameFieldStringValue = note.title + "." + fileExtension
         panel.directoryURL = note.url?.deletingLastPathComponent()
         panel.canSelectHiddenExtension = true
-        let accessory = PDFOptionsView(options: .saved)
         panel.accessoryView = accessory
         let text = editor.text
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
-            let options = accessory.options
-            options.save()
-            let data = PDFExporter.makePDF(text: text, title: note.title, resolver: self.editor, options: options)
+            let data = make(text, note.title, self.editor)
             do { try data.write(to: url, options: .atomic) } catch {
                 NSAlert(error: error).beginSheetModal(for: window)
             }

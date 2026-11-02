@@ -175,11 +175,12 @@ final class MathEditor {
     private func argument(in span: MathSpan, at location: Int) -> (words: Bool, superscript: Bool) {
         let text = source
         let wordy: Set<String> = ["text", "textbf", "textit", "textrm", "texttt", "textsf", "textnormal", "mathrm", "operatorname",
-                                  "mbox", "hbox", "begin", "end", "label", "tag", "color", "textcolor"]
+                                  "mbox", "hbox", "begin", "end", "label", "tag", "color", "textcolor", "ce", "pu"]
         enum Group { case words, script, plain }
         var stack: [Group] = []
         var command: String?
         var previous: unichar = 0
+        func isSpace(_ c: unichar) -> Bool { c == 0x20 || c == 0x09 || c == 0x0A || c == 0x0D }
         var i = span.content.location
         while i < location {
             let c = text.character(at: i)
@@ -200,10 +201,10 @@ final class MathEditor {
             } else if c == 0x7D {
                 if !stack.isEmpty { stack.removeLast() }
                 command = nil
-            } else if c != 0x20 {
+            } else if !isSpace(c) {
                 command = nil
             }
-            if c != 0x20 { previous = c }
+            if !isSpace(c) { previous = c }
             i += 1
         }
         return (stack.contains(.words), stack.contains(.script))

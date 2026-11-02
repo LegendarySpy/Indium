@@ -103,7 +103,7 @@ enum MathRenderer {
     /// without touching the source stored in the file.
     static func normalize(_ latex: String) -> String {
         // A bare % is a TeX comment, which the typesetter drops; in a note it means percent.
-        var s = latex.replacingOccurrences(of: #"(?<!\\)((?:\\\\)*)%"#, with: "$1\\\\%", options: .regularExpression)
+        var s = Mhchem.expand(latex).replacingOccurrences(of: #"(?<!\\)((?:\\\\)*)%"#, with: "$1\\\\%", options: .regularExpression)
         let envMap = [
             "align*": "aligned", "align": "aligned", "alignat*": "aligned", "alignat": "aligned",
             "eqnarray*": "aligned", "eqnarray": "aligned", "flalign*": "aligned", "flalign": "aligned",
