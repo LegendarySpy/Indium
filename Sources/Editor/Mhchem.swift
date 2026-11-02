@@ -38,7 +38,7 @@ enum Mhchem {
         return out
     }
 
-    private static func ce(_ c: [Character]) -> String? {
+    private static func ce(_ c: [Character], depth: Int = 0) -> String? {
         var out = ""
         var i = 0
         var previous = Previous.start
@@ -65,7 +65,8 @@ enum Mhchem {
                 if i < c.count, "<>-=".contains(c[i]) { return nil }
                 var labels: [String] = []
                 while labels.count < 2, i < c.count, c[i] == "[" {
-                    guard let close = matching(c, i), let label = ce(Array(c[(i + 1)..<close])) else { return nil }
+                    guard depth < maxNesting, let close = matching(c, i),
+                          let label = ce(Array(c[(i + 1)..<close]), depth: depth + 1) else { return nil }
                     labels.append(label)
                     i = close + 1
                 }
@@ -82,10 +83,14 @@ enum Mhchem {
                 finish(.start)
             } else if ch == "+" || ch == "-" {
                 i += 1
-                if !attached {
+                let hyphen = ch == "-" && i < c.count && (isLetter(c[i]) || c[i].isNumber)
+                if previous == .coefficient, !spaced, hyphen {
+                    out += "\\mathord{-}"
+                    finish(.start)
+                } else if !attached {
                     out.append(ch)
                     finish(.start)
-                } else if ch == "-", i < c.count, isLetter(c[i]) || c[i].isNumber {
+                } else if hyphen || bondsToGroup(c, i) {
                     out += "\\mathord{-}"
                     finish(.start)
                 } else {
@@ -110,7 +115,7 @@ enum Mhchem {
                     finish(.formula)
                 } else {
                     i += 1
-                    guard attached, let argument = script(c, &i) else { return nil }
+                    guard attached, let argument = script(c, &i, charge: ch == "^") else { return nil }
                     out += "\(ch){\(argument)}"
                 }
             } else if ch == "v", standalone {
@@ -216,6 +221,7 @@ enum Mhchem {
             } else if i < c.count, c[i] == "-" {
                 i += 1
                 out += "-"
+                skipSpaces()
                 guard number() else { return nil }
                 skipSpaces()
             }
@@ -234,13 +240,20 @@ enum Mhchem {
                 skipSpaces()
                 if c[i...].starts(with: "10^") {
                     i += 3
-                    guard let power = script(c, &i) else { return nil }
+                    guard let power = exponent() ?? script(c, &i) else { return nil }
                     out += "\(times) 10^{\(power)}"
                 } else {
                     i = start
                 }
             }
             skipSpaces()
+            if i < c.count, c[i] == "^" {
+                i += 1
+                let power = i < c.count && c[i] == "\\" ? command(c, &i) : exponent() ?? script(c, &i)
+                guard let power else { return nil }
+                out += "^{\(power)}"
+                skipSpaces()
+            }
             if i < c.count { out += "\\ " }
         }
 
@@ -258,7 +271,7 @@ enum Mhchem {
                 afterUnit = false
             } else if ch == "^" {
                 i += 1
-                guard afterUnit, let argument = script(c, &i) else { return nil }
+                guard afterUnit, let argument = exponent() ?? script(c, &i) else { return nil }
                 out += "^{\(argument)}"
             } else if afterUnit, isDigit(ch) || (ch == "-" && i + 1 < c.count && isDigit(c[i + 1])) {
                 i += ch == "-" ? 1 : 0
@@ -293,16 +306,27 @@ enum Mhchem {
         "\u{B0}": "\\degree", "\u{B5}": "\\mu", "\u{3BC}": "\\mu", "\u{3A9}": "\\Omega",
     ]
 
+    private static func bondsToGroup(_ c: [Character], _ i: Int) -> Bool {
+        guard i < c.count, c[i] == "(" || c[i] == "[" else { return false }
+        return !states.contains { c[i...].starts(with: $0) }
+    }
+
     private static func nesting(_ c: [Character]) -> Int {
         var depth = 0
         var deepest = 0
-        for ch in c {
-            if ch == "{" || ch == "[" {
+        var i = 0
+        while i < c.count {
+            if c[i] == "\\" {
+                i += 2
+                continue
+            }
+            if c[i] == "{" || c[i] == "[" {
                 depth += 1
                 deepest = max(deepest, depth)
-            } else if ch == "}" || ch == "]" {
-                depth -= 1
+            } else if c[i] == "}" || c[i] == "]" {
+                depth = max(0, depth - 1)
             }
+            i += 1
         }
         return deepest
     }
@@ -346,7 +370,7 @@ enum Mhchem {
         return String(c[start..<i])
     }
 
-    private static func script(_ c: [Character], _ i: inout Int) -> String? {
+    private static func script(_ c: [Character], _ i: inout Int, charge: Bool = true) -> String? {
         guard i < c.count else { return nil }
         if c[i] == "{" {
             guard let close = matching(c, i) else { return nil }
@@ -356,7 +380,7 @@ enum Mhchem {
         let start = i
         _ = run(c, &i, while: isDigit)
         if i == start, isLetter(c[i]) || c[i] == "*" { i += 1 }
-        if i < c.count, c[i] == "+" || c[i] == "-" { i += 1 }
+        if charge, i < c.count, c[i] == "+" || c[i] == "-" { i += 1 }
         return i > start ? String(c[start..<i]) : nil
     }
 
