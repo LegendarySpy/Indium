@@ -479,15 +479,20 @@ enum MarkdownScanner {
             default: break
             }
             guard text.range(of: "[[", range: block.range).location != NSNotFound else { continue }
-            var body = text, range = block.range
-            // A table writes `[[Note\|alias]]`, escaping the bar from its columns.
-            if case .table = block.kind {
-                body = text.substring(with: range).replacingOccurrences(of: "\\|", with: "|") as NSString
-                range = NSRange(location: 0, length: body.length)
-            }
-            body.enumerateSubstrings(in: range, options: [.byLines, .substringNotRequired]) { _, line, _, _ in
-                for span in inlineSpans(in: body, range: line) {
+            func collect(_ body: NSString, _ range: NSRange) {
+                for span in inlineSpans(in: body, range: range) {
                     if case let .wiki(target) = span.kind { targets.append(target) }
+                }
+            }
+            if case let .table(spec) = block.kind {
+                // Cell by cell, as tables draw them, where `[[Note\|alias]]` escapes its bar.
+                for cell in spec.rows.joined() {
+                    let body = cell.text.replacingOccurrences(of: "\\|", with: "|") as NSString
+                    collect(body, NSRange(location: 0, length: body.length))
+                }
+            } else {
+                text.enumerateSubstrings(in: block.range, options: [.byLines, .substringNotRequired]) { _, line, _, _ in
+                    collect(text, line)
                 }
             }
         }
