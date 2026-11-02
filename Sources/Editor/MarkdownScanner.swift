@@ -473,6 +473,37 @@ enum MarkdownScanner {
         return EmbedRef(note: note, subpath: sub.isEmpty ? nil : sub)
     }
 
+    /// What a note's `[[links]]` and `![[embeds]]` point at, as written, without aliases.
+    /// Code, math, comments and frontmatter don't link to anything.
+    static func wikiTargets(in text: NSString) -> [String] {
+        guard text.range(of: "[[").location != NSNotFound else { return [] }
+        var targets: [String] = []
+        for block in scan(text) {
+            switch block.kind {
+            case .code, .math, .comment, .frontmatter, .tableFormulas: continue
+            default: break
+            }
+            guard text.range(of: "[[", range: block.range).location != NSNotFound else { continue }
+            func collect(_ body: NSString, _ range: NSRange) {
+                for span in inlineSpans(in: body, range: range) {
+                    if case let .wiki(target) = span.kind { targets.append(target) }
+                }
+            }
+            if case let .table(spec) = block.kind {
+                // Cell by cell, as tables draw them, where `[[Note\|alias]]` escapes its bar.
+                for cell in spec.rows.joined() {
+                    let body = cell.text.replacingOccurrences(of: "\\|", with: "|") as NSString
+                    collect(body, NSRange(location: 0, length: body.length))
+                }
+            } else {
+                text.enumerateSubstrings(in: block.range, options: [.byLines, .substringNotRequired]) { _, line, _, _ in
+                    collect(text, line)
+                }
+            }
+        }
+        return targets
+    }
+
     // MARK: Inline
 
     struct Span {

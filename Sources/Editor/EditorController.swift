@@ -3,7 +3,7 @@ import Combine
 import UniformTypeIdentifiers
 
 /// Owns one text system and whichever note is currently shown in it.
-final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegate, ImageResolving {
+final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegate, NSLayoutManagerDelegate, ImageResolving {
     let scrollView = NSScrollView()
     let textView: EditorTextView
     let storage = NSTextStorage()
@@ -130,6 +130,9 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         observers.append(NotificationCenter.default.addObserver(forName: Workspace.filesTouched, object: nil, queue: .main) { [weak self] _ in
             self?.checkForExternalChanges()
         })
+        observers.append(NotificationCenter.default.addObserver(forName: Workspace.backlinksDidChange, object: nil, queue: .main) { [weak self] n in
+            if n.object as? Workspace === self?.workspace { self?.updateBacklinks() }
+        })
         observers.append(NotificationCenter.default.addObserver(forName: ImageCache.remoteImageLoaded, object: nil, queue: .main) { [weak self] _ in
             self?.restyleAll()
         })
@@ -181,6 +184,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         tv.setAccessibilityLabel("Note")
         tv.registerForDraggedTypes([.fileURL, .png, .tiff])
         storage.delegate = self
+        layoutManager.delegate = self
 
         scrollView.documentView = tv
         scrollView.hasVerticalScroller = true
@@ -202,6 +206,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         selectionBar.isHidden = true
         selectionBar.onAction = { [weak self] action in self?.performSelectionAction(action) }
         tv.addSubview(selectionBar)
+        tv.backlinks.onOpen = { [weak self] url in self?.onOpenNote?(url) }
+        tv.addSubview(tv.backlinks)
     }
 
     // MARK: Find
@@ -265,6 +271,7 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             let sel = textView.selectedRange(), allowed = outsideHiddenFrontmatter(sel)
             if allowed != sel { textView.setSelectedRange(allowed) }
         }
+        updateBacklinks()
     }
 
     private var pageLinesWork: DispatchWorkItem?
@@ -408,6 +415,8 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         writingToolsSpan = nil
         setText(newNote?.savedText ?? "")
         hasUnsavedEdits = false
+        // Before scrolling: the saved offset may reach past the end of the text.
+        updateBacklinks()
         let length = storage.length
         let sel = outsideHiddenFrontmatter(newNote.map { NSRange(location: min($0.selection.location, length), length: 0) } ?? NSRange(location: 0, length: 0))
         isLoading = true
@@ -427,6 +436,30 @@ final class EditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         updatePageLines(delay: 0.1)
         onContextChange?()
         return true
+    }
+
+    /// The notes linking here, listed below the text. They aren't part of the text, so
+    /// they can't reach the file, a PDF or a print.
+    private func updateBacklinks() {
+        let sources = note?.url.flatMap { workspace?.backlinks.links(to: $0) } ?? []
+        var sharedNames: [String: Int] = [:]
+        for source in sources { sharedNames[Self.noteName(source).lowercased(), default: 0] += 1 }
+        let rows = sources.map { source in
+            let name = Self.noteName(source)
+            let path = (workspace?.relativePath(source) ?? name) as NSString
+            // Same-named notes in different folders are told apart by their paths.
+            return BacklinksView.Row(url: source, title: sharedNames[name.lowercased()] ?? 0 > 1 ? path.deletingPathExtension : name,
+                                     path: path.deletingPathExtension)
+        }
+        textView.showBacklinks(rows, typography: styler.config.typography)
+    }
+
+    private static func noteName(_ url: URL) -> String {
+        url.deletingPathExtension().lastPathComponent
+    }
+
+    func layoutManager(_ layoutManager: NSLayoutManager, didCompleteLayoutFor textContainer: NSTextContainer?, atEnd layoutFinishedFlag: Bool) {
+        textView.placeBacklinks()
     }
 
     private func setText(_ text: String) {

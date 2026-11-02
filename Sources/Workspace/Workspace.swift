@@ -31,6 +31,7 @@ final class Workspace {
     /// Posted as soon as files change, before the (debounced) rescan: open notes use
     /// it to show another app's edits live.
     static let filesTouched = Notification.Name("IndiumWorkspaceFilesTouched")
+    static let backlinksDidChange = Notification.Name("IndiumWorkspaceBacklinksDidChange")
 
     static let markdownExtensions: Set<String> = ["md", "markdown", "mdown"]
 
@@ -48,6 +49,7 @@ final class Workspace {
     /// New notes nobody has named or written in yet.
     private var untouchedNotes: Set<URL> = []
     let search = NoteSearch()
+    let backlinks = BacklinkIndex()
 
     var name: String { root.lastPathComponent }
 
@@ -238,6 +240,9 @@ final class Workspace {
         tree = scan.tree
         notes = scan.notes
         filesByName = scan.byName
+        backlinks.update(notes: scan.notes, files: scan.byName, root: root, access: access) { [weak self] in
+            NotificationCenter.default.post(name: Workspace.backlinksDidChange, object: self)
+        }
     }
 
     func rescanNow() {
@@ -259,6 +264,10 @@ final class Workspace {
 
     /// Obsidian-style `[[Target]]`, `[[folder/Target#Heading|Alias]]`.
     func resolveWiki(_ target: String, from note: URL?) -> URL? {
+        Workspace.resolveWiki(target, from: note, root: root, files: filesByName)
+    }
+
+    static func resolveWiki(_ target: String, from note: URL?, root: URL, files: [String: [URL]]) -> URL? {
         var t = target.components(separatedBy: "#")[0].trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty else { return nil }
         if t.contains("/") {
@@ -267,16 +276,25 @@ final class Workspace {
                 t += ".md"
             }
             let u = root.appendingPathComponent(t)
-            if FileManager.default.fileExists(atPath: u.path) { return u }
+            if FileManager.default.fileExists(atPath: u.path) { return scanned(u, in: files) }
             t = (t as NSString).lastPathComponent
         }
-        let candidates = filesByName[t.lowercased()] ?? filesByName[(t as NSString).deletingPathExtension.lowercased()] ?? []
+        let candidates = files[t.lowercased()] ?? files[(t as NSString).deletingPathExtension.lowercased()] ?? []
         guard !candidates.isEmpty else { return nil }
         if let dir = note?.deletingLastPathComponent().standardizedFileURL,
            let near = candidates.first(where: { $0.deletingLastPathComponent().standardizedFileURL == dir }) {
             return near
         }
         return candidates.sorted { $0.pathComponents.count < $1.pathComponents.count }.first
+    }
+
+    /// The file as the scan spelled it: a link's path can differ in case on a disk that ignores case.
+    private static func scanned(_ url: URL, in files: [String: [URL]]) -> URL {
+        let path = url.standardizedFileURL.path
+        let named = files[url.lastPathComponent.lowercased()] ?? []
+        return named.first { $0.standardizedFileURL.path == path }
+            ?? named.first { $0.standardizedFileURL.path.caseInsensitiveCompare(path) == .orderedSame }
+            ?? url
     }
 
     /// A path written in a standard Markdown link or image.
@@ -292,7 +310,7 @@ final class Workspace {
         if let note { bases.insert(note.deletingLastPathComponent(), at: 0) }
         for base in bases {
             let u = base.appendingPathComponent(clean).standardizedFileURL
-            if FileManager.default.fileExists(atPath: u.path) { return u }
+            if FileManager.default.fileExists(atPath: u.path) { return Workspace.scanned(u, in: filesByName) }
         }
         return filesByName[(clean as NSString).lastPathComponent.lowercased()]?.first
     }
