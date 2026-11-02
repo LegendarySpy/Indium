@@ -618,7 +618,7 @@ final class MarkdownStyler {
         case .tableFormulas:
             styleTableFormulas(block, lines: lineRanges, in: s)
 
-        case .frontmatter where config.printing:
+        case .frontmatter where config.printing || config.syntax != .always:
             for line in lineRanges { collapse(lineWithTerminator(line), in: s) }
 
         case .frontmatter:
