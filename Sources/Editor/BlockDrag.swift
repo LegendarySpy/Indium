@@ -580,6 +580,7 @@ extension EditorController {
         let charsOnScreen = layoutManager.characterRange(forGlyphRange: glyphsOnScreen, actualGlyphRange: nil)
         var frames: [GroupFrame] = []
         for (group, region) in layoutModel.groups where NSIntersectionRange(group.range, charsOnScreen).length > 0 {
+            if let end = hiddenFrontmatterEnd, group.range.location < end { continue }
             let glyphs = layoutManager.glyphRange(forCharacterRange: group.range, actualCharacterRange: nil)
             guard glyphs.length > 0 else { continue }
             var rect = NSRect.null

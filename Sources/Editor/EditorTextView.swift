@@ -116,7 +116,24 @@ final class EditorTextView: NSTextView {
         super.cursorUpdate(with: event)
     }
 
+    /// The band under the title bar's controls acts like the title bar: drag to move, double-click to zoom.
+    private func handleTitleBandClick(_ event: NSEvent) -> Bool {
+        guard let window, !window.styleMask.contains(.fullScreen),
+              window.frame.height - event.locationInWindow.y <= ScrollEdgeBlurView.height else { return false }
+        if event.clickCount == 1 {
+            window.performDrag(with: event)
+        } else if event.clickCount == 2 {
+            switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+            case "None": break
+            case "Minimize": window.performMiniaturize(nil)
+            default: window.performZoom(nil)
+            }
+        }
+        return true
+    }
+
     override func mouseDown(with event: NSEvent) {
+        if handleTitleBandClick(event) { return }
         let point = convert(event.locationInWindow, from: nil)
         if let editor, editor.handleClick(at: point, clickCount: event.clickCount, event: event) { return }
         var event = event
@@ -455,11 +472,24 @@ final class EditorTextView: NSTextView {
     }
 
     override func deleteBackward(_ sender: Any?) {
+        if editor?.caretAtFrontmatterEnd == true { return }
         if editor?.deleteSelectedImage() == true { return }
         if editor?.deleteSelectedChart() == true { return }
         if editor?.deleteTableIfTouched(backward: true) == true { return }
         if editor?.math.handleBackspace() == true { return }
         super.deleteBackward(sender)
+    }
+
+    override func deleteWordBackward(_ sender: Any?) {
+        if editor?.caretAtFrontmatterEnd != true { super.deleteWordBackward(sender) }
+    }
+
+    override func deleteToBeginningOfLine(_ sender: Any?) {
+        if editor?.caretAtFrontmatterEnd != true { super.deleteToBeginningOfLine(sender) }
+    }
+
+    override func deleteToBeginningOfParagraph(_ sender: Any?) {
+        if editor?.caretAtFrontmatterEnd != true { super.deleteToBeginningOfParagraph(sender) }
     }
 
     override func deleteForward(_ sender: Any?) {
