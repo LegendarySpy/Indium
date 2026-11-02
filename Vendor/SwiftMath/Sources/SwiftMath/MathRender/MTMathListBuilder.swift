@@ -432,6 +432,9 @@ public struct MTMathListBuilder {
                 }
                 // this is a superscript for the previous atom
                 // note: if the next char is the stopChar it will be consumed by the ^ and so it doesn't count as stop
+                let cost = labelCost(prevAtom)
+                depth += cost
+                defer { depth -= cost }
                 prevAtom!.superScript = self.scriptArgument()
                 continue
             } else if char == "_" {
@@ -444,6 +447,9 @@ public struct MTMathListBuilder {
                 }
                 // this is a subscript for the previous atom
                 // note: if the next char is the stopChar it will be consumed by the _ and so it doesn't count as stop
+                let cost = labelCost(prevAtom)
+                depth += cost
+                defer { depth -= cost }
                 prevAtom!.subScript = self.scriptArgument()
                 continue
             } else if char == "{" {
