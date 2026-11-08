@@ -325,7 +325,8 @@ extension EditorController {
         for (i, view) in resizers.enumerated() {
             let middle = (boxes[i].maxX + boxes[i + 1].minX) / 2
             view.frame = NSRect(x: round(middle - 13), y: box.minY, width: 26, height: box.height)
-            view.gripY = box.intersection(textView.visibleRect).midY - box.minY
+            let visible = box.intersection(textView.visibleRect)
+            view.gripY = visible.isNull ? nil : visible.midY - box.minY
             view.onDrag = { [weak self] event in self?.resizeBoxes(regionAt: location, divider: i, from: event) }
         }
     }
