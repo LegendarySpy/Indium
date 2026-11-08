@@ -1,7 +1,7 @@
 <div align="center">
   <img src="./assets/readme/icon.png" width="128" alt="Indium icon" />
   <h1>Indium</h1>
-  <p>A lean, open source Markdown editor for the Mac.<br />One note at a time, just for writing.</p>
+  <p>A lean, open source Markdown editor for the Mac.</p>
   <p>
     <a href="https://github.com/LegendarySpy/Indium/releases/latest">Download</a> ·
     <a href="#building">Build it yourself</a> ·
